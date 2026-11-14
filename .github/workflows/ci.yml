@@ -48,7 +48,7 @@ jobs:
         shard: [0, 1, 2, 3]
     services:
       postgres:
-        image: mirror.gcr.io/library/postgres:17-alpine
+        image: mirror.gcr.io/library/postgres:17-alpine@sha256:d3244e8ce3f165ee3c93d9c4a4b1d0fe48b3a89e2287b717fdcbbde92d405065
         env:
           POSTGRES_USER: gateway
           POSTGRES_PASSWORD: gateway
@@ -79,7 +79,7 @@ jobs:
     runs-on: ubuntu-24.04
     services:
       postgres:
-        image: mirror.gcr.io/library/postgres:17-alpine
+        image: mirror.gcr.io/library/postgres:17-alpine@sha256:d3244e8ce3f165ee3c93d9c4a4b1d0fe48b3a89e2287b717fdcbbde92d405065
         env:
           POSTGRES_USER: gateway
           POSTGRES_PASSWORD: gateway
@@ -277,7 +277,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: mirror.gcr.io/library/postgres:17-alpine
+        image: mirror.gcr.io/library/postgres:17-alpine@sha256:d3244e8ce3f165ee3c93d9c4a4b1d0fe48b3a89e2287b717fdcbbde92d405065
         env:
           POSTGRES_USER: gateway
           POSTGRES_PASSWORD: gateway
@@ -372,17 +372,17 @@ jobs:
           "${RUNNER_TEMP}/trivy-bin/trivy" image --image-src remote --platform linux/arm64 --severity CRITICAL,HIGH --exit-code 1 --ignore-unfixed "${APPROVED_RUNTIME}"
       - name: Migrate and verify isolated runtime authority over HTTPS
         run: |
-          python3 scripts/staging.py init
-          python3 scripts/staging.py db
-          python3 scripts/staging.py migrate
-          python3 scripts/staging.py up
-          python3 scripts/staging.py verify
-          python3 scripts/staging.py local-ca
+          python3 -I scripts/staging.py init
+          python3 -I scripts/staging.py db
+          python3 -I scripts/staging.py migrate
+          python3 -I scripts/staging.py up
+          python3 -I scripts/staging.py verify
+          python3 -I scripts/staging.py local-ca
           curl --fail --silent --show-error --cacert .local/staging/local-ca.crt https://localhost:18443/health/ready
-          python3 scripts/staging.py restore-check
+          python3 -I scripts/staging.py restore-check
       - name: Stop isolated staging (retain volumes; runner is disposable)
         if: always()
-        run: python3 scripts/staging.py down
+        run: python3 -I scripts/staging.py down
       # Distroless runtime contract on the same image: no shell/package manager,
       # UID 10001, read-only rootfs, _FILE secrets, serve never migrates,
       # exec-form healthcheck.

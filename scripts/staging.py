@@ -63,15 +63,28 @@ def create_state(state):
     print("Created private staging state. No credentials were printed.")
 
 
+# Control characters other than tab and LF, NEL and the Unicode line/paragraph separators:
+# splitlines() breaks lines at several of them, so a comment could hide a setting, and a diff
+# does not show them (#488).
+INVISIBLE = re.compile("[\x00-\x08\x0b-\x1f\x7f\x85\u2028\u2029]")
+
+
 def settings(state):
     result = {}
-    for raw in (state / "staging.env").read_text().splitlines():
+    with (state / "staging.env").open(newline="") as file:
+        text = file.read()
+    if INVISIBLE.search(text):
+        raise ValueError("staging.env contains a control character or line separator; only tab and LF are allowed")
+    for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
         name, separator, value = line.partition("=")
         if not separator or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
             raise ValueError("Invalid staging.env entry")
+        if name in result:
+            # The last value would win: a second GATEWAY_IMAGE could replace the candidate.
+            raise ValueError(f"staging.env sets {name} more than once")
         result[name] = value.strip().strip('"').strip("'")
     return result
 

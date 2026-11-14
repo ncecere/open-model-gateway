@@ -17,19 +17,17 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
 import { isMap, isScalar, parseDocument, visit } from "yaml";
 import { bashPath, runBash } from "./bash-preflight.mjs";
+import { APPROVED_RUNTIME, OTHER_BASE, hasWrite, jobCanWrite, jobPermissions, APPROVED_RUST, KNOWN_DOCKERFILES, RUNTIME_DOCKERFILES, SHA, actionName, containerImagesIn, findDockerfiles, jobsOf, parseStrict, readLocalFromRepo, repoFiles, root, stepsOf, toData, unknownDockerfileViolations, walk, wf, workflowsDir } from "./supply-chain/lib.mjs";
 
 // An unsupported shell fails this file here, before any test or fixture runs (#380).
 bashPath();
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const workflowsDir = join(root, ".github/workflows");
-const actionsDir = join(root, ".github/actions");
 const FETCH_SCRIPT = ".github/scripts/fetch-verified.sh";
 
 // Actions allowed in a job that has any `write` permission, explicit or inherited
@@ -62,35 +60,6 @@ const UNVERIFIED_INSTALLERS = new Map([
   ["sigstore/cosign-installer", "fetch the pinned cosign release with .github/scripts/fetch-verified.sh"],
 ]);
 
-// ---- strict YAML ----
-
-export function parseStrict(text, file) {
-  const doc = parseDocument(text, { version: "1.2", uniqueKeys: true, merge: true, prettyErrors: true });
-  const problems = [...doc.errors, ...doc.warnings].map(e => e.message.split("\n")[0]);
-  if (problems.length) throw new Error(`${file}: ${problems.join("; ")}`);
-  if (!isMap(doc.contents)) throw new Error(`${file}: the top level is not a mapping`);
-  return doc;
-}
-
-// Aliases and merge keys resolved; an alias bomb throws.
-export const toData = doc => doc.toJS({ maxAliasCount: 100 });
-
-// ---- repository files ----
-
-const walk = dir => readdirSync(dir, { withFileTypes: true }).flatMap(e => (e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)]));
-
-function repoFiles() {
-  const rel = p => p.slice(root.length);
-  const workflows = readdirSync(workflowsDir).filter(f => /\.ya?ml$/.test(f)).map(f => join(workflowsDir, f));
-  const actions = existsSync(actionsDir) ? walk(actionsDir).filter(f => /(^|\/)action\.ya?ml$/.test(f)) : [];
-  return [...workflows, ...actions].map(path => ({ file: rel(path), text: readFileSync(path, "utf8") }));
-}
-
-export function readLocalFromRepo(path) {
-  const full = join(root, path);
-  return existsSync(full) ? readFileSync(full, "utf8") : null;
-}
-
 // ---- pinning ----
 
 // Every `uses:` anywhere in the file, read from the syntax tree so comments and
@@ -122,34 +91,6 @@ export function pinViolations(text, file) {
 
 // With no `permissions` anywhere the job gets the repository's default token,
 // which can be read/write.
-const DEFAULT_PERMISSIONS = "write-all";
-
-export function hasWrite(perms) {
-  if (typeof perms === "string") return perms !== "read-all";
-  if (perms && typeof perms === "object" && !Array.isArray(perms)) {
-    return Object.values(perms).some(v => !["read", "none"].includes(v));
-  }
-  return true; // null, a list or a number: cannot be shown read-only
-}
-
-// A job's own block replaces the workflow's. Without either, a called workflow
-// inherits the caller's permissions and a top-level one the repository default.
-export function jobPermissions(data, job, callerPerms) {
-  if (job.permissions !== undefined) return job.permissions;
-  if (data.permissions !== undefined) return data.permissions;
-  return callerPerms !== undefined ? callerPerms : DEFAULT_PERMISSIONS;
-}
-
-// A caller's permissions cap the called workflow's jobs.
-export function jobCanWrite(data, job, callerPerms) {
-  if (callerPerms !== undefined && !hasWrite(callerPerms)) return false;
-  return hasWrite(jobPermissions(data, job, callerPerms));
-}
-
-const stepsOf = job => (Array.isArray(job?.steps) ? job.steps.filter(s => s && typeof s === "object") : []);
-const jobsOf = data => Object.entries(data?.jobs && typeof data.jobs === "object" ? data.jobs : {});
-export const actionName = ref => String(ref).split("@")[0].toLowerCase();
-
 const isLocal = ref => ref.startsWith("./") || ref.startsWith("../");
 const normalizeLocal = ref => ref.replace(/^\.\//, "").replace(/\/+$/, "");
 
@@ -469,8 +410,6 @@ function isEarlierStage(ref, stages) {
   return stages.slice(0, -1).some(stage => stage.name?.toLowerCase() === ref.toLowerCase());
 }
 
-const RUNTIME_DOCKERFILES = ["Dockerfile", "deploy/loadtest/Dockerfile"];
-const APPROVED_RUNTIME = "gcr.io/distroless/cc-debian13:nonroot@sha256:cc66d222f0a7ec996b78a99fe76a969bc80b539a5016ad866c14d1949bc6d0ab";
 
 export function runtimeBaseViolations(sources) {
   const out = [];
@@ -617,7 +556,6 @@ export function parseToolchainToml(text) {
 // heredoc, continuation, lone-backslash, `# escape=`, split-keyword, U+0085 and U+2028
 // forms and built from the other base (verified by hand with Docker 29.1.3). All three readers must
 // refuse each fixture, for the stated reason.
-const OTHER_BASE = `mirror.gcr.io/library/debian:13-slim@sha256:${"b".repeat(64)}`;
 const WRONG_RUST = `mirror.gcr.io/library/rust:1.98.0-bookworm@sha256:${"c".repeat(64)}`;
 // The decoy: the stage that is really built last uses another base, and the approved
 // line follows it as something that is not an instruction.
@@ -968,22 +906,12 @@ function readRustToolchainChannel() {
   return parseToolchainToml(text).channel;
 }
 
-// Every `Dockerfile` anywhere in the repository (not a fixed list), skipping directories
-// that are never source: VCS internals, dependency/build output.
-const DOCKERFILE_SKIP_DIRS = /^(\.git|node_modules|target.*|dist|\.turbo)$/;
-export function findDockerfiles(dir = root) {
-  const out = [];
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (e.isDirectory()) {
-      if (DOCKERFILE_SKIP_DIRS.test(e.name)) continue;
-      out.push(...findDockerfiles(join(dir, e.name)));
-    } else if (e.name === "Dockerfile") {
-      out.push(join(dir, e.name));
-    }
-  }
-  return out;
-}
-const allDockerfiles = () => findDockerfiles().map(p => ({ file: p.slice(root.length), text: readFileSync(p, "utf8") }));
+const allDockerfiles = () => {
+  const files = findDockerfiles().map(p => p.slice(root.length));
+  const unknown = unknownDockerfileViolations(files);
+  if (unknown.length) throw new Error(unknown.join("\n"));
+  return files.map(file => ({ file, text: readFileSync(join(root, file), "utf8") }));
+};
 
 // Recognizes any reference whose repository is exactly `rust` (the final path segment, up to
 // but not including any `:tag` or `@digest`), case-insensitively, with any registry/path prefix
@@ -1024,26 +952,6 @@ export function parseDockerfileRustStages(file, text) {
     const parsed = extractRustImageRef(stage.ref);
     return parsed ? [{ file, line: stage.line, ref: stage.ref, ...parsed }] : [];
   });
-}
-
-// Every job `container:` (string or `{image:...}`) and `services.<name>` (string or
-// `{image:...}`) image reference in one workflow document, regardless of which job declares it.
-export function containerImagesIn(data) {
-  const out = [];
-  for (const [name, job] of jobsOf(data)) {
-    if (typeof job?.container === "string") out.push({ where: `job '${name}' container`, image: job.container });
-    else if (job?.container && typeof job.container === "object" && typeof job.container.image === "string") {
-      out.push({ where: `job '${name}' container.image`, image: job.container.image });
-    }
-    const services = job?.services && typeof job.services === "object" ? job.services : {};
-    for (const [svcName, svc] of Object.entries(services)) {
-      if (typeof svc === "string") out.push({ where: `job '${name}' services.${svcName}`, image: svc });
-      else if (svc && typeof svc === "object" && typeof svc.image === "string") {
-        out.push({ where: `job '${name}' services.${svcName}.image`, image: svc.image });
-      }
-    }
-  }
-  return out;
 }
 
 export function rustStagesFromWorkflowContainers(file, data) {
@@ -1122,6 +1030,19 @@ export function rustVersionViolations(stages, channel) {
   return out;
 }
 
+// The approved Rust build image (#488). `rustVersionViolations` checks the version and that every
+// reference agrees, whatever the registry and repository path of an image named `rust`
+// (`ghcr.io/<anyone>/rust:<version>@sha256:...` in every Dockerfile would agree). This pins the
+// whole reference, as APPROVED_RUNTIME pins the runtime base; a Rust or digest bump changes it
+// here in the same pull request.
+export function rustReferenceViolations(stages, channel, approved = APPROVED_RUST) {
+  const out = [];
+  const version = extractRustImageRef(approved)?.version;
+  if (version !== channel) out.push(`APPROVED_RUST names rust ${version}, rust-toolchain.toml pins ${channel}`);
+  for (const s of stages) if (s.ref !== approved) out.push(`${s.file}:${s.line}: ${s.ref} is not the approved Rust image ${approved}`);
+  return out;
+}
+
 // Every `dtolnay/rust-toolchain` step anywhere (workflow jobs and composite action `runs`),
 // with the `toolchain:` input it sets (undefined if absent).
 function dtolnayToolchainSteps() {
@@ -1152,6 +1073,7 @@ test("rust-toolchain.toml, every Dockerfile's Rust build stage and every dtolnay
   const stages = allRustImageStages();
   assert.ok(stages.length >= 2, "expected a rust:<version>-bookworm stage in both the root and deploy/loadtest Dockerfiles");
   assert.deepEqual(rustVersionViolations(stages, channel), []);
+  assert.deepEqual(rustReferenceViolations(stages, channel), []);
 
   const steps = dtolnayToolchainSteps();
   assert.ok(steps.length > 0, "expected at least one dtolnay/rust-toolchain step in the workflows");
@@ -1256,6 +1178,27 @@ test("fixtures: mismatched Rust build-stage versions and digests across Dockerfi
   assert.equal(rustVersionViolations([...a, ...wrongVersion], "1.99.1").length, 1, "wrong version must be caught");
   assert.equal(rustVersionViolations([...a], "1.99.1").length, 0, "one matching stage passes");
   assert.equal(rustVersionViolations([...a, ...stageIn("B/Dockerfile", `1.99.1-bookworm@sha256:${"a".repeat(64)}`)], "1.99.1").length, 0, "two Dockerfiles pinning the identical tag and digest pass");
+});
+
+test("fixtures: a Rust image from another registry or repository, or another digest, is refused even when every reference agrees (#488)", () => {
+  const channel = readRustToolchainChannel();
+  const digest = APPROVED_RUST.split("@sha256:")[1];
+  const both = ref => ["Dockerfile", "deploy/loadtest/Dockerfile"].flatMap(file => parseDockerfileRustStages(file, `FROM ${ref} AS build\nFROM ${APPROVED_RUNTIME}\n`));
+  assert.deepEqual(rustReferenceViolations(both(APPROVED_RUST), channel), []);
+  for (const [label, ref] of [
+    ["another registry", `ghcr.io/someone/rust:${channel}-bookworm@sha256:${digest}`],
+    ["Docker Hub instead of the mirror", `docker.io/library/rust:${channel}-bookworm@sha256:${digest}`],
+    ["the bare name", `rust:${channel}-bookworm@sha256:${digest}`],
+    ["another repository path on the mirror", `mirror.gcr.io/someone/rust:${channel}-bookworm@sha256:${digest}`],
+    ["another digest", `mirror.gcr.io/library/rust:${channel}-bookworm@sha256:${"c".repeat(64)}`],
+    ["another variant", `mirror.gcr.io/library/rust:${channel}-slim-bookworm@sha256:${digest}`],
+    ["an upper-case name", `mirror.gcr.io/library/RUST:${channel}-bookworm@sha256:${digest}`],
+  ]) {
+    const stages = both(ref);
+    assert.deepEqual(rustVersionViolations(stages, channel), [], `${label}: the version check alone accepts it`);
+    assert.equal(rustReferenceViolations(stages, channel).length, 2, label);
+  }
+  assert.match(rustReferenceViolations([], "0.0.1").join(), /^APPROVED_RUST names rust \d+\.\d+\.\d+, rust-toolchain\.toml pins 0\.0\.1$/);
 });
 
 test("fixtures: a Rust image reference in any form (bare, floating tag, undigested, --platform) is caught, and an ARG-substituted one is refused", () => {
@@ -2169,8 +2112,8 @@ function assertPublicationGraph(flows) {
     assertRequiredPublication(image.jobs[name], name === "verify" ? ["Stop isolated staging"] : name === "publish" ? ["Job summary", "Remove registry credentials"] : []);
   }
   const architectures = [
-    { platform: "linux/amd64", runner: "ubuntu-24.04" },
-    { platform: "linux/arm64", runner: "ubuntu-24.04-arm" },
+    { platform: "linux/amd64", pair: "linux-amd64", runner: "ubuntu-24.04" },
+    { platform: "linux/arm64", pair: "linux-arm64", runner: "ubuntu-24.04-arm" },
   ];
   assert.deepEqual(image.jobs.build.strategy, { "fail-fast": true, matrix: { include: architectures } });
   assert.equal(image.jobs.build["runs-on"], "${{ matrix.runner }}");
@@ -2186,7 +2129,7 @@ function assertPublicationGraph(flows) {
       platform: `linux/${arch}`, image_repository: "ghcr.io/ncecere/open-model-gateway", source_revision: "${{ github.sha }}",
     });
   }
-  assert.deepEqual(image.jobs.verify.strategy, { "fail-fast": true, matrix: { include: architectures.map(a => ({
+  assert.deepEqual(image.jobs.verify.strategy, { "fail-fast": true, matrix: { include: architectures.map(({ pair, ...a }) => ({
     ...a, import_job: `import-${a.platform.slice(6)}`, digest_output: `digest_linux_${a.platform.slice(6)}`,
   })) } });
   assert.equal(image.jobs.verify["runs-on"], "${{ matrix.runner }}");
@@ -2790,8 +2733,6 @@ test("no workflow can switch the fetch script into a test mode", () => {
 
 // ---- adversarial fixtures: the checks must catch these ----
 
-const SHA = n => String(n).repeat(40);
-const wf = body => `name: fixture\non: push\n${body}\n`;
 const noLocal = () => null;
 const violations = (text, readLocal = noLocal) => allWriteViolations([{ file: ".github/workflows/fixture.yml", text }], readLocal);
 const localFiles = files => path => files[path] ?? null;
@@ -3264,4 +3205,33 @@ test("no workflow or composite action installs operating-system packages at run 
     assert.deepEqual(check(run), [], run);
   }
   assert.deepEqual(packageInstallViolations("f.yml", { jobs: { j: { name: "never apt-get install here", steps: [{ name: "apt-get", uses: "x/y@z", with: { run: 1 } }] } } }), [], "only run scripts are read");
+});
+
+test("fixtures: the Dockerfile walker finds Dockerfile*, *.dockerfile and Containerfile* in any case, outside the skipped directories (#488)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "omg-walker-"));
+  try {
+    const unpinned = "FROM alpine:3\n";
+    // No two names differ only in case, so the fixture also holds on a case-insensitive file system.
+    const files = ["Dockerfile", "Dockerfile.release", "DOCKERFILE.dev", "app.dockerfile", "Containerfile", "containerfile.prod", "deploy/dockerfile", "deploy/x.Dockerfile", "deploy/sub/CONTAINERFILE",
+      ".git/Dockerfile", "node_modules/p/Dockerfile", "target/Dockerfile", "target-wt/Containerfile", "apps/web/dist/Dockerfile", ".turbo/Dockerfile", "notes.txt", "Dockerfile-notes/README"];
+    for (const file of files) { mkdirSync(join(dir, posix.dirname(file)), { recursive: true }); writeFileSync(join(dir, file), unpinned); }
+    const found = findDockerfiles(dir).map(p => p.slice(dir.length + 1)).sort();
+    assert.deepEqual(found, files.slice(0, 9).sort());
+    // Each one found is checked: its unpinned base is reported.
+    for (const file of found) assert.equal(unpinnedDockerfileBases(file, unpinned).length, 1, file);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("fixtures: a .dockerignore is not a Dockerfile, and an unknown Dockerfile name fails clearly (#488)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "omg-walker-"));
+  try {
+    for (const file of ["Dockerfile", "Dockerfile.dockerignore", "app.Dockerfile.dockerignore"]) writeFileSync(join(dir, file), "x\n");
+    assert.deepEqual(findDockerfiles(dir).map(p => p.slice(dir.length + 1)), ["Dockerfile"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  assert.match(unknownDockerfileViolations(["Dockerfile", "docs/Dockerfile.md"]).join(), /^docs\/Dockerfile\.md is named like a Dockerfile but is not one of the known Dockerfiles .*rename it/);
+  assert.deepEqual(unknownDockerfileViolations([...KNOWN_DOCKERFILES]), []);
 });

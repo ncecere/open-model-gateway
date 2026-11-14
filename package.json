@@ -20,7 +20,7 @@
     "test:sdk-bases": "node --experimental-strip-types --test tests/inference-sdk-bases.test.mjs",
     "test:demo": "node --test tests/demo-oidc.test.mjs && python3 tests/demo-runtime.test.py",
     "test:container": "node --test tests/container-image.test.mjs",
-    "test:supply-chain": "node --test tests/bash-preflight.test.mjs tests/supply-chain.test.mjs tests/release-metadata.test.mjs",
+    "test:supply-chain": "node --test tests/bash-preflight.test.mjs tests/supply-chain.test.mjs tests/supply-chain/*.test.mjs tests/release-metadata.test.mjs",
     "test:ci": "node --test tests/ci.test.mjs",
     "test:conflict-markers": "node --test tests/conflict-markers.test.mjs",
     "test:structure": "node --test tests/structure.test.mjs",
