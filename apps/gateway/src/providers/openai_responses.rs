@@ -239,228 +239,249 @@ struct State {
     closed_parts: std::collections::BTreeSet<u64>,
 }
 impl State {
-    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     fn push(&mut self, value: Value) -> Result<Vec<ChatEvent>> {
         let kind = string(&value["type"])?;
-        let mut events = vec![];
         match kind {
-            "response.created" => {
-                if self.started {
-                    return Err(InferenceError::InvalidUpstream);
-                }
-                self.started = true;
-            }
-            "response.in_progress" if self.started => {}
-            "response.output_item.added" if self.started => {
-                let index = value["output_index"]
-                    .as_u64()
-                    .ok_or(InferenceError::InvalidUpstream)?;
-                if index != self.items.len() as u64 || index >= 129 {
-                    return Err(InferenceError::InvalidUpstream);
-                }
-                let item = &value["item"];
-                nonempty(&item["id"])?;
-                self.bytes = self
-                    .bytes
-                    .checked_add(item.to_string().len())
-                    .ok_or(InferenceError::InvalidUpstream)?;
-                if self.bytes > BODY_LIMIT {
-                    return Err(InferenceError::InvalidUpstream);
-                }
-                match item["type"].as_str() {
-                    Some("message") if item["role"] == "assistant" => {
-                        message_fields(item)?;
-                        if item["content"].as_array().is_none_or(|v| !v.is_empty()) {
-                            return Err(InferenceError::InvalidUpstream);
-                        }
-                    }
-                    Some("function_call") => {
-                        fields(
-                            item,
-                            &["type", "id", "status", "call_id", "name", "arguments"],
-                        )?;
-                        if !string(&item["arguments"])?.is_empty() || self.calls.len() >= 128 {
-                            return Err(InferenceError::InvalidUpstream);
-                        }
-                        let call = ToolCall {
-                            id: nonempty(&item["call_id"])?,
-                            name: nonempty(&item["name"])?,
-                            arguments: String::new(),
-                        };
-                        events.push(ChatEvent::Delta {
-                            text: None,
-                            tool_calls: vec![ToolCallDelta {
-                                index: self.calls.len() as u32,
-                                id: Some(call.id.clone()),
-                                name: Some(call.name.clone()),
-                                arguments: None,
-                            }],
-                        });
-                        self.calls.insert(index, call);
-                    }
-                    Some("reasoning") => reasoning_fields(item)?,
-                    _ => return Err(InferenceError::InvalidUpstream),
-                }
-                self.items.insert(index, item.clone());
-            }
+            "response.created" => self.created(),
+            "response.in_progress" if self.started => Ok(vec![]),
+            "response.output_item.added" if self.started => self.output_item_added(&value),
             "response.output_text.delta" | "response.function_call_arguments.delta"
                 if self.started =>
             {
-                let index = value["output_index"]
-                    .as_u64()
-                    .ok_or(InferenceError::InvalidUpstream)?;
-                if self.stopped.contains(&index) {
-                    return Err(InferenceError::InvalidUpstream);
-                }
-                let item = self
-                    .items
-                    .get_mut(&index)
-                    .ok_or(InferenceError::InvalidUpstream)?;
-                if value["item_id"] != item["id"] {
-                    return Err(InferenceError::InvalidUpstream);
-                }
-                let delta = string(&value["delta"])?;
-                self.bytes = self
-                    .bytes
-                    .checked_add(delta.len())
-                    .ok_or(InferenceError::InvalidUpstream)?;
-                if self.bytes > BODY_LIMIT {
-                    return Err(InferenceError::InvalidUpstream);
-                }
-                if kind == "response.output_text.delta" {
-                    if item["type"] != "message"
-                        || value["content_index"].as_u64() != Some(0)
-                        || !self.parts.contains(&index)
-                        || self.closed_parts.contains(&index)
-                    {
-                        return Err(InferenceError::InvalidUpstream);
-                    }
-                    self.text.push_str(delta);
-                    events.push(ChatEvent::Delta {
-                        text: Some(delta.into()),
-                        tool_calls: vec![],
-                    });
-                } else {
-                    if item["type"] != "function_call" {
-                        return Err(InferenceError::InvalidUpstream);
-                    }
-                    let tool_index =
-                        self.calls
-                            .keys()
-                            .position(|key| *key == index)
-                            .ok_or(InferenceError::InvalidUpstream)? as u32;
-                    self.calls
-                        .get_mut(&index)
-                        .ok_or(InferenceError::InvalidUpstream)?
-                        .arguments
-                        .push_str(delta);
-                    events.push(ChatEvent::Delta {
-                        text: None,
-                        tool_calls: vec![ToolCallDelta {
-                            index: tool_index,
-                            id: None,
-                            name: None,
-                            arguments: Some(delta.into()),
-                        }],
-                    });
-                }
+                self.delta(kind, &value)
             }
             "response.content_part.added" | "response.content_part.done" if self.started => {
-                let index = value["output_index"]
-                    .as_u64()
-                    .ok_or(InferenceError::InvalidUpstream)?;
-                if value["content_index"].as_u64() != Some(0)
-                    || self
-                        .items
-                        .get(&index)
-                        .is_none_or(|item| item["type"] != "message")
-                    || self.stopped.contains(&index)
-                    || value["part"]["type"] != "output_text"
-                {
-                    return Err(InferenceError::InvalidUpstream);
-                }
-                fields(&value["part"], &["type", "text", "annotations", "logprobs"])?;
-                string(&value["part"]["text"])?;
-                for key in ["annotations", "logprobs"] {
-                    if !value["part"][key].is_null()
-                        && value["part"][key].as_array().is_none_or(|v| !v.is_empty())
-                    {
-                        return Err(InferenceError::InvalidUpstream);
-                    }
-                }
-                if kind == "response.content_part.added" {
-                    if !self.parts.insert(index) || value["part"]["text"] != "" {
-                        return Err(InferenceError::InvalidUpstream);
-                    }
-                } else if !self.parts.contains(&index) || !self.closed_parts.insert(index) {
-                    return Err(InferenceError::InvalidUpstream);
-                }
+                self.content_part(kind, &value)
             }
             "response.output_text.done" | "response.function_call_arguments.done"
                 if self.started =>
             {
-                let index = value["output_index"]
-                    .as_u64()
-                    .ok_or(InferenceError::InvalidUpstream)?;
-                if !self.items.contains_key(&index) {
-                    return Err(InferenceError::InvalidUpstream);
-                }
+                self.output_done(&value)
             }
-            "response.output_item.done" if self.started => {
-                let index = value["output_index"]
-                    .as_u64()
-                    .ok_or(InferenceError::InvalidUpstream)?;
-                let item = self
-                    .items
-                    .get(&index)
-                    .ok_or(InferenceError::InvalidUpstream)?;
-                decode(&json!({"status":"completed","output":[value["item"]]}))?;
-                if value["item"]["id"] != item["id"]
-                    || value["item"]["type"] != item["type"]
-                    // A phase announced at item start must not change at done.
-                    || (!item["phase"].is_null() && value["item"]["phase"] != item["phase"])
-                    || (item["type"] == "message"
-                        && self.parts.contains(&index)
-                        && !self.closed_parts.contains(&index))
-                    || !self.stopped.insert(index)
-                {
-                    return Err(InferenceError::InvalidUpstream);
-                }
-            }
+            "response.output_item.done" if self.started => self.output_item_done(&value),
             "response.completed" | "response.incomplete" if self.started => {
-                if (kind == "response.completed" && value["response"]["status"] != "completed")
-                    || (kind == "response.incomplete"
-                        && value["response"]["status"] != "incomplete")
-                {
+                self.terminal(kind, &value)
+            }
+            _ => Err(InferenceError::InvalidUpstream),
+        }
+    }
+    fn created(&mut self) -> Result<Vec<ChatEvent>> {
+        if self.started {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        self.started = true;
+        Ok(vec![])
+    }
+    fn output_item_added(&mut self, value: &Value) -> Result<Vec<ChatEvent>> {
+        let mut events = vec![];
+        let index = value["output_index"]
+            .as_u64()
+            .ok_or(InferenceError::InvalidUpstream)?;
+        if index != self.items.len() as u64 || index >= 129 {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        let item = &value["item"];
+        nonempty(&item["id"])?;
+        self.bytes = self
+            .bytes
+            .checked_add(item.to_string().len())
+            .ok_or(InferenceError::InvalidUpstream)?;
+        if self.bytes > BODY_LIMIT {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        match item["type"].as_str() {
+            Some("message") if item["role"] == "assistant" => {
+                message_fields(item)?;
+                if item["content"].as_array().is_none_or(|v| !v.is_empty()) {
                     return Err(InferenceError::InvalidUpstream);
                 }
-                let response = decode(&value["response"])?;
-                if self.stopped.len() != self.items.len()
-                    || value["response"]["output"].as_array().map(Vec::len)
-                        != Some(self.items.len())
-                    || response.content.as_deref().unwrap_or("") != self.text
-                    || response.tool_calls.len() != self.calls.len()
-                    || response
-                        .tool_calls
-                        .iter()
-                        .zip(self.calls.values())
-                        .any(|(a, b)| {
-                            a.id != b.id || a.name != b.name || a.arguments != b.arguments
-                        })
-                {
-                    // The terminal snapshot's validated usage is still evidence.
-                    return crate::inference::evidence::preserve(
-                        Err(InferenceError::InvalidUpstream),
-                        || Some(Ok(response.usage)),
-                    );
-                }
-                events.push(ChatEvent::Finish(response.finish_reason));
-                events.push(ChatEvent::Usage(response.usage));
-                events.push(ChatEvent::Done);
             }
+            Some("function_call") => events.push(self.function_call_added(index, item)?),
+            Some("reasoning") => reasoning_fields(item)?,
             _ => return Err(InferenceError::InvalidUpstream),
         }
+        self.items.insert(index, item.clone());
         Ok(events)
+    }
+    fn function_call_added(&mut self, index: u64, item: &Value) -> Result<ChatEvent> {
+        fields(
+            item,
+            &["type", "id", "status", "call_id", "name", "arguments"],
+        )?;
+        if !string(&item["arguments"])?.is_empty() || self.calls.len() >= 128 {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        let call = ToolCall {
+            id: nonempty(&item["call_id"])?,
+            name: nonempty(&item["name"])?,
+            arguments: String::new(),
+        };
+        let event = ChatEvent::Delta {
+            text: None,
+            tool_calls: vec![ToolCallDelta {
+                index: self.calls.len() as u32,
+                id: Some(call.id.clone()),
+                name: Some(call.name.clone()),
+                arguments: None,
+            }],
+        };
+        self.calls.insert(index, call);
+        Ok(event)
+    }
+    fn delta(&mut self, kind: &str, value: &Value) -> Result<Vec<ChatEvent>> {
+        let index = value["output_index"]
+            .as_u64()
+            .ok_or(InferenceError::InvalidUpstream)?;
+        if self.stopped.contains(&index) {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        let item = self
+            .items
+            .get_mut(&index)
+            .ok_or(InferenceError::InvalidUpstream)?;
+        if value["item_id"] != item["id"] {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        let delta = string(&value["delta"])?;
+        self.bytes = self
+            .bytes
+            .checked_add(delta.len())
+            .ok_or(InferenceError::InvalidUpstream)?;
+        if self.bytes > BODY_LIMIT {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        if kind == "response.output_text.delta" {
+            if item["type"] != "message"
+                || value["content_index"].as_u64() != Some(0)
+                || !self.parts.contains(&index)
+                || self.closed_parts.contains(&index)
+            {
+                return Err(InferenceError::InvalidUpstream);
+            }
+            self.text.push_str(delta);
+            Ok(vec![ChatEvent::Delta {
+                text: Some(delta.into()),
+                tool_calls: vec![],
+            }])
+        } else {
+            if item["type"] != "function_call" {
+                return Err(InferenceError::InvalidUpstream);
+            }
+            self.arguments_delta(index, delta)
+        }
+    }
+    fn arguments_delta(&mut self, index: u64, delta: &str) -> Result<Vec<ChatEvent>> {
+        let tool_index = self
+            .calls
+            .keys()
+            .position(|key| *key == index)
+            .ok_or(InferenceError::InvalidUpstream)? as u32;
+        self.calls
+            .get_mut(&index)
+            .ok_or(InferenceError::InvalidUpstream)?
+            .arguments
+            .push_str(delta);
+        Ok(vec![ChatEvent::Delta {
+            text: None,
+            tool_calls: vec![ToolCallDelta {
+                index: tool_index,
+                id: None,
+                name: None,
+                arguments: Some(delta.into()),
+            }],
+        }])
+    }
+    fn content_part(&mut self, kind: &str, value: &Value) -> Result<Vec<ChatEvent>> {
+        let index = value["output_index"]
+            .as_u64()
+            .ok_or(InferenceError::InvalidUpstream)?;
+        if value["content_index"].as_u64() != Some(0)
+            || self
+                .items
+                .get(&index)
+                .is_none_or(|item| item["type"] != "message")
+            || self.stopped.contains(&index)
+            || value["part"]["type"] != "output_text"
+        {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        fields(&value["part"], &["type", "text", "annotations", "logprobs"])?;
+        string(&value["part"]["text"])?;
+        for key in ["annotations", "logprobs"] {
+            if !value["part"][key].is_null()
+                && value["part"][key].as_array().is_none_or(|v| !v.is_empty())
+            {
+                return Err(InferenceError::InvalidUpstream);
+            }
+        }
+        if kind == "response.content_part.added" {
+            if !self.parts.insert(index) || value["part"]["text"] != "" {
+                return Err(InferenceError::InvalidUpstream);
+            }
+        } else if !self.parts.contains(&index) || !self.closed_parts.insert(index) {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        Ok(vec![])
+    }
+    fn output_done(&self, value: &Value) -> Result<Vec<ChatEvent>> {
+        let index = value["output_index"]
+            .as_u64()
+            .ok_or(InferenceError::InvalidUpstream)?;
+        if !self.items.contains_key(&index) {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        Ok(vec![])
+    }
+    fn output_item_done(&mut self, value: &Value) -> Result<Vec<ChatEvent>> {
+        let index = value["output_index"]
+            .as_u64()
+            .ok_or(InferenceError::InvalidUpstream)?;
+        let item = self
+            .items
+            .get(&index)
+            .ok_or(InferenceError::InvalidUpstream)?;
+        decode(&json!({"status":"completed","output":[value["item"]]}))?;
+        if value["item"]["id"] != item["id"]
+            || value["item"]["type"] != item["type"]
+            // A phase announced at item start must not change at done.
+            || (!item["phase"].is_null() && value["item"]["phase"] != item["phase"])
+            || (item["type"] == "message"
+                && self.parts.contains(&index)
+                && !self.closed_parts.contains(&index))
+            || !self.stopped.insert(index)
+        {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        Ok(vec![])
+    }
+    fn terminal(&self, kind: &str, value: &Value) -> Result<Vec<ChatEvent>> {
+        if (kind == "response.completed" && value["response"]["status"] != "completed")
+            || (kind == "response.incomplete" && value["response"]["status"] != "incomplete")
+        {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        let response = decode(&value["response"])?;
+        if self.stopped.len() != self.items.len()
+            || value["response"]["output"].as_array().map(Vec::len) != Some(self.items.len())
+            || response.content.as_deref().unwrap_or("") != self.text
+            || response.tool_calls.len() != self.calls.len()
+            || response
+                .tool_calls
+                .iter()
+                .zip(self.calls.values())
+                .any(|(a, b)| a.id != b.id || a.name != b.name || a.arguments != b.arguments)
+        {
+            // The terminal snapshot's validated usage is still evidence.
+            return crate::inference::evidence::preserve(
+                Err(InferenceError::InvalidUpstream),
+                || Some(Ok(response.usage)),
+            );
+        }
+        Ok(vec![
+            ChatEvent::Finish(response.finish_reason),
+            ChatEvent::Usage(response.usage),
+            ChatEvent::Done,
+        ])
     }
 }
 #[cfg(test)]
