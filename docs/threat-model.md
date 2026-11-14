@@ -69,7 +69,7 @@ flowchart LR
   S --> DB
   B[Browser] -- "OIDC code + PKCE" --> O["identity/login.rs login / callback"]
   O --> IdP[(IdP)]
-  B -- "session cookie + Origin + X-CSRF-Token" --> M["/api/v1/* require_session"]
+  B -- "session cookie + Origin + X-CSRF-Token" --> M["/api/v1/* authenticate_management"]
   M --> DB
   P[IdP SCIM client] -- "SCIM bearer" --> SC["scim.rs authenticate"]
   SC --> DB
@@ -79,7 +79,7 @@ flowchart LR
 ```
 
 - **Inference request.** `http.rs` `credential` reads exactly one `Authorization: Bearer` (or `x-api-key` on `/v1/messages`). Engine routes authenticate through the per-replica key cache (`Store::authenticate_inference`); file, batch, video and realtime routes authenticate live (`Store::authenticate`). The engine picks a deployment. `governance::admit_unobserved` takes the catalog lock and the scope locks (shared), re-checks key, user, membership or service account, model eligibility and key restrictions live (`auth::revalidate_admission_with`), checks every limit, and writes the execution, the reservation and the ledger hold in one statement. The adapter builds a new upstream request with the server's credential. `governance::finish_unobserved` settles the reservation or marks it unknown.
-- **Dashboard session.** `GET /api/v1/auth/login` stores the hashed state with the nonce and PKCE verifier, bound to the hash of an `omg_oidc` browser cookie. `callback` consumes the attempt, exchanges the code, verifies the ID token, synchronizes groups (`resolve_identity_with`) and issues a hashed session (12-hour lifetime and 2-hour idle timeout by default, #80). `require_session` checks the session and current platform role on every request and, for every method other than GET and HEAD, the exact Origin and the CSRF token.
+- **Dashboard session.** `GET /api/v1/auth/login` stores the hashed state with the nonce and PKCE verifier, bound to the hash of an `omg_oidc` browser cookie. `callback` consumes the attempt, exchanges the code, verifies the ID token, synchronizes groups (`resolve_identity_with`) and issues a hashed session (12-hour lifetime and 2-hour idle timeout by default, #80). `identity::authenticate_management` (`identity/session.rs`) checks the session and current platform role on every request and, for every method other than GET and HEAD, the exact Origin and the CSRF token.
 - **SCIM.** The IdP pushes users and groups to `/scim/v2` with the bearer token. Deactivation revokes sessions and keys. Pushed groups feed group mappings with group provenance.
 - **Background jobs.** Singleton jobs (cleanup, compaction, counter pruning, alert evaluation, the file sweeper, partition creation) run under fenced leases (`leases.rs`). Queues (lease reconciliation, async-job polling, batch lines, alert deliveries) use `FOR UPDATE SKIP LOCKED` on every replica.
 
@@ -170,8 +170,8 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 ### Inference keys, management sessions and service accounts
 
 **KEY-1. An inference key authorizes management.** E · Asset: configuration, other users' data · Attacker: inference key holder.
-- Mitigation: `management::router` is wrapped in `identity.rs` `require_session`, which reads only the `omg_session` cookie and never `Authorization`.
-- Tests: `management/session_tests.rs` `management_router_requires_browser_session_not_inference_key`; `identity/tests.rs` `disabled_login_and_bearer_rejection_do_not_need_database`.
+- Mitigation: `management::router` and `management::upload_router` are wrapped in `identity::authenticate_management` (`identity/session.rs`), which selects exactly one credential family per request, with no fallback either way: a browser session (`omg_session` cookie, checked live against a non-revoked, unexpired session of an enabled user with a current platform role, plus the exact Origin and the CSRF token for every method other than GET and HEAD), or an admin token as `Authorization: Bearer`, whose owner must currently hold the Platform Admin role. A request with both, or with more than one `Authorization` header, is refused before either is examined. A bearer credential shaped like an inference key is refused before the rate limiters and any database access; any other bearer is refused unless it parses as an admin token and `Store::authenticate_admin_token` (`admin_tokens.rs`) finds it live in the primary database (malformed values are refused earlier, without a query, and the limiters can answer 429 first). Inference keys are never accepted as management credentials.
+- Tests: `management/authz_middleware_tests.rs` `every_route_middleware_has_exact_positive_and_negative_outcomes` (a real inference key on every management route); `management/authz_admin_token_tests.rs` `credential_selection_refuses_ambiguity_with_no_fallback`; `management/session_tests.rs` `management_router_requires_browser_session_not_inference_key` (a malformed bearer, refused by the admin-token parser).
 - Residual: none found.
 - Follow-up: none.
 

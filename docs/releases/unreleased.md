@@ -14,6 +14,10 @@ Notes for changes on `main` after [v0.16.0](v0.16.0.md). They become the next re
 - **An allowed shell line in a test file is excused only as often as it is listed** (#498). `tests/bash-preflight.test.mjs` lists, per file, the exact lines that name a shell without starting one; a listed line used to be excused any number of times in its file, so a second copy could feed a real spawn. The list is now a multiset: each listing excuses one occurrence, and a line that appears more often than it is listed, or fewer times (but at least once), fails, naming the file, the line and both counts; a listed line that no longer appears fails as gone. No file needed a duplicate entry. A shell name put together at run time is still not seen.
 - **CI lints the build that ships** (#502). Clippy ran only with `--all-features`, so code compiled only without the `integration-tests` feature was never linted. The `gateway-lint` job now also runs `cargo clippy -p open-model-gateway --bins --lib --locked -- -D warnings` on the default-feature library and binary, and `tests/ci.test.mjs` requires the step. The one error it found, the local-endpoint approval parser `ApprovedEndpoints::parse` being unused in the shipped build, is fixed by compiling it only for its test and integration-test callers (production loads approvals through `from_env`, which needs the detailed refusal). Test code built without the feature is not linted yet. No gateway behaviour changes.
 
+## Documentation
+
+- **The threat model describes today's management authentication** (#514). `docs/threat-model.md` named `require_session`, a function that no longer exists, and said management reads only the session cookie. It now describes `identity::authenticate_management`: one credential family per request (a browser session with Origin and CSRF checks, or an admin token as a bearer credential), refusal of both together, and refusal of inference keys. It also cites the test that sends a real inference key to every management route.
+
 ## Internal restructuring
 
 For contributors; no gateway behaviour changes.
