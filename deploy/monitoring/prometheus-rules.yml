@@ -50,20 +50,23 @@ groups:
       # real failure. Missing data yields nothing, so neither rule can fire
       # before the first failure. A scrape gap longer than 10 minutes makes every
       # existing series look new and can fire them once.
-      # Settlement stages are critical with no pending period: the reservation
-      # stays held until reconciliation and can block budgeted admission, so the
-      # first failure pages (GatewaySettlementHeld, a warning, sees the same
-      # events through gateway_settlements_total{outcome="held"}). The other
-      # stages refuse requests but hold no money: a warning after 5 minutes
-      # pending. A failure stays in the 10-minute window for 10 minutes, so any
+      # The settlement stages and realtime_deadline (#497: a realtime window,
+      # response or session finish that missed its deadline) are critical with no
+      # pending period: the reservation stays held until reconciliation and can
+      # block budgeted admission, so the first failure pages
+      # (GatewaySettlementHeld, a warning, sees the HTTP settlement events
+      # through gateway_settlements_total{outcome="held"}). The other stages
+      # (route lookup, pool, governance storage, key authentication, job storage,
+      # maintenance) refuse or delay work but hold no money: a warning after 5
+      # minutes pending. A failure stays in the 10-minute window for 10 minutes, so any
       # failure, the first on a new series included, fires it 5 minutes later
       # and it clears 10 minutes after the last failure.
       - alert: GatewayAccountingFailures
         expr: |
           sum by (stage, cause) (
-              increase(gateway_accounting_failures_total{stage!~"explicit_settlement|cancellation_settlement"}[10m])
+              increase(gateway_accounting_failures_total{stage!~"explicit_settlement|cancellation_settlement|realtime_deadline"}[10m])
             or
-              (gateway_accounting_failures_total{stage!~"explicit_settlement|cancellation_settlement"} unless gateway_accounting_failures_total{stage!~"explicit_settlement|cancellation_settlement"} offset 10m)
+              (gateway_accounting_failures_total{stage!~"explicit_settlement|cancellation_settlement|realtime_deadline"} unless gateway_accounting_failures_total{stage!~"explicit_settlement|cancellation_settlement|realtime_deadline"} offset 10m)
           ) > 0
         for: 5m
         labels: {severity: warning}
@@ -74,9 +77,9 @@ groups:
       - alert: GatewaySettlementAccountingFailures
         expr: |
           sum by (stage, cause) (
-              increase(gateway_accounting_failures_total{stage=~"explicit_settlement|cancellation_settlement"}[10m])
+              increase(gateway_accounting_failures_total{stage=~"explicit_settlement|cancellation_settlement|realtime_deadline"}[10m])
             or
-              (gateway_accounting_failures_total{stage=~"explicit_settlement|cancellation_settlement"} unless gateway_accounting_failures_total{stage=~"explicit_settlement|cancellation_settlement"} offset 10m)
+              (gateway_accounting_failures_total{stage=~"explicit_settlement|cancellation_settlement|realtime_deadline"} unless gateway_accounting_failures_total{stage=~"explicit_settlement|cancellation_settlement|realtime_deadline"} offset 10m)
           ) > 0
         labels: {severity: critical}
         annotations:
