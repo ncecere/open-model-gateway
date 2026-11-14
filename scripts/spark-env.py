@@ -132,8 +132,8 @@ def run(command, input=None, capture=False):
 
 
 def image_tag(ref, sha, is_tag):
-    """Release tags are published under their own name; every other ref as dev-<sha12>."""
-    return ref if is_tag and RELEASE.fullmatch(ref) else f"dev-{sha[:12]}"
+    """Release images are multi-arch under their own tag; branch-images.yml publishes the arm64 dev image as dev-<sha12>-arm64."""
+    return ref if is_tag and RELEASE.fullmatch(ref) else f"dev-{sha[:12]}-arm64"
 
 
 def resolve_ref(ref, runner=run):

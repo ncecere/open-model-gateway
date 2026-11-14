@@ -2088,11 +2088,12 @@ function assertPublicationGraph(flows) {
     assert.equal(upload.with.overwrite, undefined);
     assert.match(executable(build), /\^sha256:\[0-9a-f\]\{64\}\$/);
     const calls = Object.values(data.jobs).filter(j => j.uses === "./.github/workflows/oci-import.yml");
-    assert.equal(calls.length, name === "image" ? 2 : 1);
+    assert.equal(calls.length, name === "image" || name === "branch-images" ? 2 : 1);
     for (const call of calls) {
       assert.deepEqual(call.permissions, { contents: "read", packages: "write" });
       assert.deepEqual(call.needs, ["build"]);
-      assert.equal(call.with.source_revision, name === "image" ? "${{ github.sha }}" : "${{ needs.build.outputs.source_revision }}");
+      const arch = call.with.platform.slice(6);
+      assert.equal(call.with.source_revision, { image: "${{ github.sha }}", "branch-images": `\${{ needs.build.outputs.source_revision_linux_${arch} }}` }[name] ?? "${{ needs.build.outputs.source_revision }}");
       assert.match(call.with.artifact_id, /^\$\{\{ needs\.build\.outputs\.artifact_id(?:_linux_(?:amd64|arm64))? \}\}$/);
       assert.match(call.with.root_digest, /^\$\{\{ needs\.build\.outputs\.digest(?:_linux_(?:amd64|arm64))? \}\}$/);
       assert.equal(call.with.image_repository, `ghcr.io/ncecere/open-model-gateway${name === "loadtest-image" ? "-loadtest" : ""}`);
@@ -2110,6 +2111,9 @@ function assertPublicationGraph(flows) {
   const image = flows.image;
   for (const name of ["build", "import-amd64", "import-arm64", "verify", "publish"]) {
     assertRequiredPublication(image.jobs[name], name === "verify" ? ["Stop isolated staging"] : name === "publish" ? ["Job summary", "Remove registry credentials"] : []);
+  }
+  for (const name of ["build", "import-amd64", "import-arm64", "publish"]) {
+    assertRequiredPublication(flows["branch-images"].jobs[name], name === "publish" ? ["Remove registry credentials"] : []);
   }
   const architectures = [
     { platform: "linux/amd64", pair: "linux-amd64", runner: "ubuntu-24.04" },
@@ -2154,13 +2158,48 @@ function assertPublicationGraph(flows) {
   assert.match(executable(image.jobs.verify), /trivy image/);
   assertCosignPublishPolicy(image);
   assert.equal(flows["loadtest-image"].jobs.build.steps.find(s => actionName(s.uses) === "docker/build-push-action").with["build-args"], "CARGO_BUILD_JOBS=4");
-  for (const name of ["branch-images", "loadtest-image"]) {
-    const publish = flows[name].jobs.publish;
+  {
+    const publish = flows["loadtest-image"].jobs.publish;
     assert.deepEqual(publish.needs, ["build", "import"]);
     assert.match(executable(publish), /\^\[0-9a-f\]\{40\}\$/);
     assert.match(executable(publish), /dev-\$\{SOURCE_REVISION:0:12\}/);
     assert.doesNotMatch(executable(publish), /latest|cosign|trivy/);
   }
+  // branch-images: one native build and one import per architecture, two tags, no index.
+  const branch = flows["branch-images"];
+  assert.deepEqual(branch.jobs.build.strategy, { "fail-fast": true, matrix: { include: architectures } });
+  assert.equal(branch.jobs.build["runs-on"], "${{ matrix.runner }}");
+  assert.deepEqual(branch.jobs.build.outputs, Object.fromEntries(["amd64", "arm64"].flatMap(arch =>
+    ["digest", "artifact_id", "source_revision"].map(key => [`${key}_linux_${arch}`, `\${{ steps.record.outputs.${key}_linux_${arch} }}`]))));
+  const branchBuild = stepsOf(branch.jobs.build).find(s => actionName(s.uses) === "docker/build-push-action");
+  assert.equal(branchBuild.with.platforms, "${{ matrix.platform }}");
+  assert.equal(branchBuild.with["cache-from"], "type=gha,scope=image-${{ matrix.pair }}");
+  assert.equal(branchBuild.with["cache-to"], "type=gha,mode=max,scope=image-${{ matrix.pair }}");
+  assert.deepEqual(branch.jobs.build.steps.find(s => s.id === "record").env, {
+    DIGEST: "${{ steps.build.outputs.digest }}", ARTIFACT_ID: "${{ steps.upload.outputs.artifact-id }}", SOURCE_REVISION: "${{ steps.name.outputs.sha }}",
+  });
+  for (const arch of ["amd64", "arm64"]) {
+    assert.deepEqual(branch.jobs[`import-${arch}`].with, {
+      artifact_id: `\${{ needs.build.outputs.artifact_id_linux_${arch} }}`,
+      root_digest: `\${{ needs.build.outputs.digest_linux_${arch} }}`,
+      platform: `linux/${arch}`, image_repository: "ghcr.io/ncecere/open-model-gateway",
+      source_revision: `\${{ needs.build.outputs.source_revision_linux_${arch} }}`,
+    });
+  }
+  const branchPublish = branch.jobs.publish;
+  assert.deepEqual(branchPublish.needs, ["build", "import-amd64", "import-arm64"]);
+  assert.deepEqual(branchPublish.env, {
+    IMAGE: "ghcr.io/ncecere/open-model-gateway",
+    DIGEST_AMD64: "${{ needs.import-amd64.outputs.digest }}", DIGEST_ARM64: "${{ needs.import-arm64.outputs.digest }}",
+    SOURCE_REVISION: "${{ needs.build.outputs.source_revision_linux_amd64 }}", SOURCE_REVISION_ARM64: "${{ needs.build.outputs.source_revision_linux_arm64 }}",
+  });
+  const tagging = executable(branchPublish);
+  assert.match(tagging, /\^\[0-9a-f\]\{40\}\$/);
+  assert.ok(tagging.includes('[ "${SOURCE_REVISION_ARM64}" = "${SOURCE_REVISION}" ]'), "both architectures are the same commit");
+  assert.ok(tagging.includes('tag="${IMAGE}:dev-${SOURCE_REVISION:0:12}"\ndocker buildx imagetools create --prefer-index=false --tag "${tag}" "${IMAGE}@${DIGEST_AMD64}"'));
+  assert.ok(tagging.includes('tag="${IMAGE}:dev-${SOURCE_REVISION:0:12}-arm64"\ndocker buildx imagetools create --prefer-index=false --tag "${tag}" "${IMAGE}@${DIGEST_ARM64}"'));
+  assert.equal(tagging.match(/imagetools create/g).length, 2);
+  assert.doesNotMatch(tagging, /latest|cosign|trivy/);
   const importer = flows["oci-import"];
   assert.deepEqual(Object.keys(importer.on.workflow_call.inputs).sort(), ["artifact_id", "image_repository", "platform", "root_digest", "source_revision"]);
   for (const input of Object.values(importer.on.workflow_call.inputs)) assert.deepEqual(input, { required: true, type: "string" });
@@ -2486,6 +2525,16 @@ const imageVerificationMutants = [
   ["optional ARM import", f => { f.image.jobs["import-arm64"].if = "false"; }],
   ["optional publisher", f => { f.image.jobs.publish["continue-on-error"] = true; }],
   ["always-run native publication", f => { f.image.jobs.publish.steps.find(s => s.id === "index").if = "always()"; }],
+  ["branch ARM publisher tags the AMD digest", f => { f["branch-images"].jobs.publish.env.DIGEST_ARM64 = "${{ needs.import-amd64.outputs.digest }}"; }],
+  ["branch ARM import uses the AMD artifact", f => { Object.assign(f["branch-images"].jobs["import-arm64"].with, {
+    artifact_id: "${{ needs.build.outputs.artifact_id_linux_amd64 }}", root_digest: "${{ needs.build.outputs.digest_linux_amd64 }}",
+  }); }],
+  ["branch ARM import trusts the AMD revision", f => { f["branch-images"].jobs["import-arm64"].with.source_revision = "${{ needs.build.outputs.source_revision_linux_amd64 }}"; }],
+  ["branch builds share one cache scope", f => { stepsOf(f["branch-images"].jobs.build).find(s => actionName(s.uses) === "docker/build-push-action").with["cache-from"] = "type=gha,scope=image-linux-amd64"; }],
+  ["branch builds only amd64", f => { f["branch-images"].jobs.build.strategy.matrix.include.pop(); }],
+  ["branch publish drops the same-commit check", f => { const s = f["branch-images"].jobs.publish.steps.find(s => s.name?.startsWith("Authenticate")); s.run = s.run.replace('[ "${SOURCE_REVISION_ARM64}" = "${SOURCE_REVISION}" ]', "true"); }],
+  ["branch publish tags the arm64 image without its suffix", f => { const s = f["branch-images"].jobs.publish.steps.find(s => s.name?.includes("arm64")); s.run = s.run.replace("-arm64\"", '"'); }],
+  ["branch publish waits for the AMD import only", f => { f["branch-images"].jobs.publish.needs.pop(); }],
 ];
 for (const [name, mutate] of imageVerificationMutants) {
   test(`publication graph refuses ${name}`, () => {

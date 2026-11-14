@@ -847,15 +847,28 @@ jobs:
   - file: .github/workflows/branch-images.yml
     job: build
     definition:
-      name: Build open-model-gateway (read-only)
-      runs-on: ubuntu-24.04
-      timeout-minutes: 60
+      name: build (${{ matrix.platform }})
+      strategy:
+        fail-fast: true
+        matrix:
+          include:
+            - platform: linux/amd64
+              pair: linux-amd64
+              runner: ubuntu-24.04
+            - platform: linux/arm64
+              pair: linux-arm64
+              runner: ubuntu-24.04-arm
+      runs-on: ${{ matrix.runner }}
+      timeout-minutes: 75
       permissions:
         contents: read
       outputs:
-        artifact_id: ${{ steps.record.outputs.artifact_id }}
-        digest: ${{ steps.record.outputs.digest }}
-        source_revision: ${{ steps.name.outputs.sha }}
+        digest_linux_amd64: ${{ steps.record.outputs.digest_linux_amd64 }}
+        digest_linux_arm64: ${{ steps.record.outputs.digest_linux_arm64 }}
+        artifact_id_linux_amd64: ${{ steps.record.outputs.artifact_id_linux_amd64 }}
+        artifact_id_linux_arm64: ${{ steps.record.outputs.artifact_id_linux_arm64 }}
+        source_revision_linux_amd64: ${{ steps.record.outputs.source_revision_linux_amd64 }}
+        source_revision_linux_arm64: ${{ steps.record.outputs.source_revision_linux_arm64 }}
       steps:
         - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
           with:
@@ -868,17 +881,21 @@ jobs:
             sha="$(git rev-parse HEAD)"
             [[ "${sha}" =~ ^[0-9a-f]{40}$ ]]
             echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+        - name: Platform name
+          env:
+            PLATFORM: ${{ matrix.platform }}
+          run: echo "PLATFORM_PAIR=${PLATFORM//\//-}" >> "$GITHUB_ENV"
         - name: Require the runner's own Buildx
           run: docker buildx version
         - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
           with:
             driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
-        - name: Build a complete OCI archive without registry credentials
+        - name: Build a complete OCI archive without registry credentials (${{ matrix.platform }})
           id: build
           uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
           with:
             context: .
-            platforms: linux/amd64
+            platforms: ${{ matrix.platform }}
             outputs: type=oci,dest=${{ runner.temp }}/image.tar,oci-mediatypes=true
             attests: type=sbom,generator=mirror.gcr.io/docker/buildkit-syft-scanner:stable-1@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9
             provenance: mode=max
@@ -887,29 +904,32 @@ jobs:
               org.opencontainers.image.source=https://github.com/${{ github.repository }}
               org.opencontainers.image.revision=${{ steps.name.outputs.sha }}
               org.opencontainers.image.licenses=MIT
-            cache-from: type=gha,scope=image-linux-amd64
-            cache-to: type=gha,mode=max,scope=image-linux-amd64
+            cache-from: type=gha,scope=image-${{ matrix.pair }}
+            cache-to: type=gha,mode=max,scope=image-${{ matrix.pair }}
         - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
           id: upload
           with:
-            name: branch-image-${{ github.run_attempt }}
+            name: branch-image-${{ env.PLATFORM_PAIR }}-${{ github.run_attempt }}
             path: ${{ runner.temp }}/image.tar
             if-no-files-found: error
             retention-days: 1
             compression-level: 0
-        - name: Record immutable image handoff
+        - name: Record immutable per-platform handoff
           id: record
           env:
             DIGEST: ${{ steps.build.outputs.digest }}
             ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+            SOURCE_REVISION: ${{ steps.name.outputs.sha }}
           run: |
             set -euo pipefail
             [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
             [[ "${ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]]
-            echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
-            echo "artifact_id=${ARTIFACT_ID}" >> "$GITHUB_OUTPUT"
+            [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+            echo "digest_${PLATFORM_PAIR//-/_}=${DIGEST}" >> "$GITHUB_OUTPUT"
+            echo "artifact_id_${PLATFORM_PAIR//-/_}=${ARTIFACT_ID}" >> "$GITHUB_OUTPUT"
+            echo "source_revision_${PLATFORM_PAIR//-/_}=${SOURCE_REVISION}" >> "$GITHUB_OUTPUT"
   - file: .github/workflows/branch-images.yml
-    job: import
+    job: import-amd64
     definition:
       needs:
         - build
@@ -918,17 +938,33 @@ jobs:
         packages: write
       uses: ./.github/workflows/oci-import.yml
       with:
-        artifact_id: ${{ needs.build.outputs.artifact_id }}
-        root_digest: ${{ needs.build.outputs.digest }}
+        artifact_id: ${{ needs.build.outputs.artifact_id_linux_amd64 }}
+        root_digest: ${{ needs.build.outputs.digest_linux_amd64 }}
         platform: linux/amd64
         image_repository: ghcr.io/ncecere/open-model-gateway
-        source_revision: ${{ needs.build.outputs.source_revision }}
+        source_revision: ${{ needs.build.outputs.source_revision_linux_amd64 }}
+  - file: .github/workflows/branch-images.yml
+    job: import-arm64
+    definition:
+      needs:
+        - build
+      permissions:
+        contents: read
+        packages: write
+      uses: ./.github/workflows/oci-import.yml
+      with:
+        artifact_id: ${{ needs.build.outputs.artifact_id_linux_arm64 }}
+        root_digest: ${{ needs.build.outputs.digest_linux_arm64 }}
+        platform: linux/arm64
+        image_repository: ghcr.io/ncecere/open-model-gateway
+        source_revision: ${{ needs.build.outputs.source_revision_linux_arm64 }}
   - file: .github/workflows/branch-images.yml
     job: publish
     definition:
       needs:
         - build
-        - import
+        - import-amd64
+        - import-arm64
       runs-on: ubuntu-24.04
       timeout-minutes: 10
       permissions:
@@ -936,8 +972,10 @@ jobs:
         packages: write
       env:
         IMAGE: ghcr.io/ncecere/open-model-gateway
-        DIGEST: ${{ needs.import.outputs.digest }}
-        SOURCE_REVISION: ${{ needs.build.outputs.source_revision }}
+        DIGEST_AMD64: ${{ needs.import-amd64.outputs.digest }}
+        DIGEST_ARM64: ${{ needs.import-arm64.outputs.digest }}
+        SOURCE_REVISION: ${{ needs.build.outputs.source_revision_linux_amd64 }}
+        SOURCE_REVISION_ARM64: ${{ needs.build.outputs.source_revision_linux_arm64 }}
       steps:
         - name: Require the runner's own Buildx
           run: docker buildx version
@@ -946,23 +984,36 @@ jobs:
             GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           run: |
             set -euo pipefail
-            [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            [[ "${DIGEST_AMD64}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            [[ "${DIGEST_ARM64}" =~ ^sha256:[0-9a-f]{64}$ ]]
             [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+            # Both architectures must be the same commit, or neither is tagged.
+            [ "${SOURCE_REVISION_ARM64}" = "${SOURCE_REVISION}" ]
             umask 077
             export DOCKER_CONFIG
             DOCKER_CONFIG=$(mktemp -d "${RUNNER_TEMP}/docker-auth.XXXXXXXX")
             echo "DOCKER_CONFIG=${DOCKER_CONFIG}" >> "$GITHUB_ENV"
             printf '%s' "${GITHUB_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
-        - name: Tag only the imported root as dev-SHA12
+        - name: Tag only the imported amd64 root as dev-SHA12
           run: |
             set -euo pipefail
-            [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            [[ "${DIGEST_AMD64}" =~ ^sha256:[0-9a-f]{64}$ ]]
             [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
             tag="${IMAGE}:dev-${SOURCE_REVISION:0:12}"
-            docker buildx imagetools create --prefer-index=false --tag "${tag}" "${IMAGE}@${DIGEST}"
+            docker buildx imagetools create --prefer-index=false --tag "${tag}" "${IMAGE}@${DIGEST_AMD64}"
             got=$(docker buildx imagetools inspect "${tag}" --format '{{json .Manifest}}' | jq -er .digest)
-            [ "${got}" = "${DIGEST}" ]
-            printf '`%s`\n\ndigest `%s`\n' "${tag}" "${DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+            [ "${got}" = "${DIGEST_AMD64}" ]
+            printf '`%s`\n\ndigest `%s`\n' "${tag}" "${DIGEST_AMD64}" >> "$GITHUB_STEP_SUMMARY"
+        - name: Tag only the imported arm64 root as dev-SHA12-arm64
+          run: |
+            set -euo pipefail
+            [[ "${DIGEST_ARM64}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+            tag="${IMAGE}:dev-${SOURCE_REVISION:0:12}-arm64"
+            docker buildx imagetools create --prefer-index=false --tag "${tag}" "${IMAGE}@${DIGEST_ARM64}"
+            got=$(docker buildx imagetools inspect "${tag}" --format '{{json .Manifest}}' | jq -er .digest)
+            [ "${got}" = "${DIGEST_ARM64}" ]
+            printf '`%s`\n\ndigest `%s`\n' "${tag}" "${DIGEST_ARM64}" >> "$GITHUB_STEP_SUMMARY"
         - name: Remove registry credentials
           if: always()
           run: |
@@ -1340,10 +1391,10 @@ jobs:
               [ -n "$package" ] || continue
               echo "## $package"
               versions="$(gh api --paginate "/users/$OWNER/packages/container/$package/versions?per_page=100" | jq -s 'add // []')"
-              # candidates: tagged, every tag is dev-<12 hex>, older than the cutoff
+              # candidates: tagged, every tag is dev-<12 hex>[-arm64], older than the cutoff
               ids="$(jq -r --arg cutoff "$cutoff" '
                 .[] | select((.metadata.container.tags | length) > 0)
-                    | select(all(.metadata.container.tags[]; test("^dev-[0-9a-f]{12}$")))
+                    | select(all(.metadata.container.tags[]; test("^dev-[0-9a-f]{12}(-arm64)?$")))
                     | select(.created_at < $cutoff)
                     | "\(.id) \(.metadata.container.tags | join(","))"' <<<"$versions")"
               total="$(jq 'length' <<<"$versions")"

@@ -137,9 +137,9 @@ class Images(unittest.TestCase):
         sha = "0123456789abcdef" * 2 + "01234567"
         self.assertEqual(spark.image_tag("v0.16.0", sha, is_tag=True), "v0.16.0")
         self.assertEqual(spark.image_tag("v1.2.3-rc.1", sha, is_tag=True), "v1.2.3-rc.1")
-        self.assertEqual(spark.image_tag("issue/599-spark-env", sha, is_tag=False), "dev-0123456789ab")
-        self.assertEqual(spark.image_tag("v0.16.0", sha, is_tag=False), "dev-0123456789ab", "a branch named like a release is not a release")
-        self.assertEqual(spark.image_tag("nightly", sha, is_tag=True), "dev-0123456789ab", "only release-shaped tags are published as tags")
+        self.assertEqual(spark.image_tag("issue/599-spark-env", sha, is_tag=False), "dev-0123456789ab-arm64")
+        self.assertEqual(spark.image_tag("v0.16.0", sha, is_tag=False), "dev-0123456789ab-arm64", "a branch named like a release is not a release")
+        self.assertEqual(spark.image_tag("nightly", sha, is_tag=True), "dev-0123456789ab-arm64", "only release-shaped tags are published as tags")
 
     def test_arm64_must_be_present(self):
         self.assertEqual(spark.arm64_manifest(index(("linux", "amd64"), ("linux", "arm64"))), ARM_DIGEST)
@@ -167,7 +167,7 @@ class Images(unittest.TestCase):
             return (200, {}, json.dumps({"token": "t"})) if "token" in url else (404, {}, "{}")
 
         with self.assertRaisesRegex(spark.SparkError, "branch-images"):
-            spark.lookup_image("dev-0123456789ab", fetch)
+            spark.lookup_image("dev-0123456789ab-arm64", fetch)
 
     def test_a_malformed_digest_header_is_refused(self):
         def fetch(url, headers):
