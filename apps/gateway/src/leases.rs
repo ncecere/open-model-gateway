@@ -162,6 +162,9 @@ impl Default for Leases {
     }
 }
 
+/// Upper bound on one lease release in [`Leases::release_all`].
+const RELEASE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 impl Leases {
     pub fn new() -> Self {
         Self::with_ttl(TTL)
@@ -257,6 +260,8 @@ impl Leases {
     }
 
     /// End every term this replica holds (shutdown, or a failed start-up).
+    /// Release every term this process holds. Each release is bounded by
+    /// [`RELEASE_TIMEOUT`]; a term not released in time ends at its expiry.
     pub async fn release_all(&self, pool: &PgPool) {
         for lease in Lease::ALL {
             let term = self.terms[lease.index()]
@@ -264,14 +269,15 @@ impl Leases {
                 .unwrap_or_else(|e| e.into_inner())
                 .take();
             if let Some(term) = term {
-                if sqlx::query("SELECT omg_lease_release($1,$2,$3)")
+                let release = sqlx::query("SELECT omg_lease_release($1,$2,$3)")
                     .bind(lease.as_str())
                     .bind(self.holder)
                     .bind(term.epoch)
-                    .execute(pool)
-                    .await
-                    .is_err()
-                {
+                    .execute(pool);
+                if !matches!(
+                    tokio::time::timeout(RELEASE_TIMEOUT, release).await,
+                    Ok(Ok(_))
+                ) {
                     // The term still ends at its expiry.
                     tracing::warn!(
                         lease = lease.as_str(),

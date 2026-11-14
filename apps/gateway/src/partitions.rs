@@ -22,7 +22,7 @@ use serde::Serialize;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
-/// Future months `serve` keeps (`GATEWAY_PARTITIONS_AHEAD_MONTHS`, 1..12).
+/// Future months `serve` keeps (`GATEWAY_PARTITIONS_AHEAD_MONTHS`, 2..12).
 pub const DEFAULT_AHEAD: i32 = 3;
 /// The alert fires while any table covers fewer future months.
 pub const ALERT_BELOW_MONTHS: i64 = 2;

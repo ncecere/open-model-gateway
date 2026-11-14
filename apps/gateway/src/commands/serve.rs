@@ -155,6 +155,7 @@ struct Settings {
     files: FileStoreRuntime,
     alert_interval: Option<std::time::Duration>,
     audit_setting: open_model_gateway::audit_export::Setting,
+    partitions_ahead: i32,
 }
 
 /// Identity, retention, the file store, job and upload limits and the audit
@@ -187,6 +188,8 @@ async fn prepare(store: Store) -> Result<Prepared> {
     // turns it off; a replica without the setting leaves it alone and
     // never takes the export lease.
     let audit_setting = open_model_gateway::audit_export::Setting::from_env()?;
+    // Parsed before any lease is taken, so a refused value never holds one.
+    let partitions_ahead = open_model_gateway::partitions::ahead_from_env()?;
     Ok(Prepared {
         identity,
         files: files.clone(),
@@ -195,6 +198,7 @@ async fn prepare(store: Store) -> Result<Prepared> {
             files,
             alert_interval,
             audit_setting,
+            partitions_ahead,
         },
     })
 }
@@ -241,6 +245,7 @@ async fn start(
         files,
         alert_interval,
         audit_setting,
+        partitions_ahead,
     } = settings;
     let store = store.with_leases(leases.clone());
     open_model_gateway::audit_export::sync_state(&store, &audit_setting).await?;
@@ -259,7 +264,7 @@ async fn start(
         alert_interval,
         audit_exporter,
     )?;
-    let history = spawn_history(&store, leases)?;
+    let history = spawn_history(&store, leases, partitions_ahead);
     let (history_verify, lifecycle) = spawn_history_verify_and_lifecycle(&store, leases);
     // Independent of the Prometheus listener and traces; the Store
     // already carries leases and all configured listeners are bound.
@@ -383,13 +388,12 @@ fn start_background(
 }
 
 /// History partitions and usage rollups (see the comment inside).
-fn spawn_history(store: &Store, leases: &Arc<Leases>) -> Result<JoinHandle<()>> {
+fn spawn_history(store: &Store, leases: &Arc<Leases>, partitions_ahead: i32) -> JoinHandle<()> {
     // History partitions (hourly) and usage rollups (every minute):
     // the `partitions` and `rollups` lease holders only.
-    let partitions_ahead = open_model_gateway::partitions::ahead_from_env()?;
     let history_leases = leases.clone();
     let history_store = store.clone();
-    let history = tokio::spawn(async move {
+    tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut minute = 0u64;
@@ -435,8 +439,7 @@ fn spawn_history(store: &Store, leases: &Arc<Leases>) -> Result<JoinHandle<()>> 
             .await;
             minute = minute.wrapping_add(1);
         }
-    });
-    Ok(history)
+    })
 }
 
 /// History parent consistency (hourly), then access request expiry and
@@ -610,16 +613,7 @@ async fn shutdown(
 async fn release_leases(lease_task: JoinHandle<()>, leases: &Arc<Leases>, pool: &PgPool) {
     lease_task.abort();
     let _ = lease_task.await;
-    if tokio::time::timeout(RELEASE_TIMEOUT, leases.release_all(pool))
-        .await
-        .is_err()
-    {
-        tracing::warn!(
-            timeout_seconds = RELEASE_TIMEOUT.as_secs(),
-            "work leases not released in time; they end at expiry"
-        );
-    }
+    // Each release is bounded on its own (`Leases::release_all`), so one
+    // release waiting behind a running job cannot cost the others theirs.
+    leases.release_all(pool).await;
 }
-
-/// Upper bound on [`release_leases`]' database work.
-const RELEASE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);

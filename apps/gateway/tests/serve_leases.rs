@@ -67,7 +67,10 @@ fn busy_port() -> (std::net::TcpListener, String) {
 async fn a_busy_public_port_releases_the_leases(pool: PgPool) {
     let (_busy, address) = busy_port();
     let stderr = serve_until_exit(&pool, &address, &[]).await;
-    assert!(stderr.to_lowercase().contains("address"), "{stderr}");
+    assert!(
+        stderr.to_lowercase().contains("address already in use"),
+        "{stderr}"
+    );
     assert_leases_taken_and_released(&pool, &stderr).await;
 }
 
@@ -80,14 +83,16 @@ async fn a_busy_metrics_port_releases_the_leases(pool: PgPool) {
         &[("GATEWAY_METRICS_ADDR", metrics.as_str())],
     )
     .await;
-    assert!(stderr.to_lowercase().contains("address"), "{stderr}");
+    assert!(
+        stderr.to_lowercase().contains("address already in use"),
+        "{stderr}"
+    );
     assert_leases_taken_and_released(&pool, &stderr).await;
 }
 
-/// A configuration check that runs after the listeners and background
-/// tasks have started.
+/// A refused partitions setting stops `serve` before it takes any lease.
 #[sqlx::test(migrations = "./enterprise_migrations")]
-async fn a_late_configuration_refusal_releases_the_leases(pool: PgPool) {
+async fn a_refused_partitions_setting_takes_no_lease(pool: PgPool) {
     let stderr = serve_until_exit(
         &pool,
         "127.0.0.1:0",
@@ -98,5 +103,10 @@ async fn a_late_configuration_refusal_releases_the_leases(pool: PgPool) {
         stderr.contains("GATEWAY_PARTITIONS_AHEAD_MONTHS"),
         "{stderr}"
     );
-    assert_leases_taken_and_released(&pool, &stderr).await;
+    let taken: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM work_leases WHERE holder IS NOT NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(taken, 0, "serve took a lease before refusing: {stderr}");
 }
