@@ -15,19 +15,27 @@
 //! by routing for its seeded, non-secret weighted choice.
 //!
 //! Two guards keep secrets here. The source scan in this module's tests
-//! refuses generators by name (`rand`, `OsRng`, `RandomState`,
-//! `/dev/urandom`, ...) outside this file. Library calls that draw randomness
-//! without such a name (tungstenite's `generate_key`, `aead::Generate`,
-//! openidconnect's `new_random` constructors, rustls's `SecureRandom::fill`,
+//! refuses generators by name (`rand`, `OsRng`, `RandomState`, `HasherRng`,
+//! `/dev/urandom`, SQL `gen_random_bytes`, ...) outside this file. Library
+//! calls that draw randomness without such a name (tungstenite's
+//! `generate_key` and `IntoClientRequest`, `aead::Generate`, oauth2's
+//! `CsrfToken::new_random*` and `PkceCodeChallenge::new_random*` (re-exported
+//! by openidconnect), openidconnect's `Nonce::new_random*`, rustls's
+//! `SecureRandom::fill`, key exchange and ticketers, tower's `HasherRng`,
 //! `RandomState::new`) are `disallowed-methods` in `clippy.toml`, resolved by
 //! path (#511). OAuth state, the OIDC nonce and the PKCE verifier are drawn
-//! here and passed to the `new` constructors (`identity/login.rs`).
+//! here and passed to the `new` constructors (`identity/login.rs`). The one
+//! sanctioned call is the upstream realtime handshake request
+//! (`providers/openai/realtime.rs` `handshake_request`), whose
+//! `Sec-WebSocket-Key` is a protocol nonce, not a secret.
 //!
-//! `Uuid::new_v4()` and `Uuid::now_v7()` are allowed for identifiers only:
-//! row ids, the public id half of a key token, lease and claim fencing
-//! tokens compared in SQL, multipart boundaries and event ids. A value that
-//! must be unguessable to protect anything (a credential, a token that
-//! authorizes on its own, a key or a nonce) is drawn here, never from a UUID.
+//! UUIDs are identifiers, never secrets: `Uuid::new_v4()`, `Uuid::now_v7()`
+//! and `Uuid::new_v7()` (with any `ContextV7`), and SQL `gen_random_uuid()`,
+//! are allowed for row ids, the public id half of a key token, lease and
+//! claim fencing tokens compared in SQL, multipart boundaries and event ids.
+//! A value that must be unguessable to protect anything (a credential, a
+//! token that authorizes on its own, a key or a nonce) is drawn here, never
+//! from a UUID. This is policy, reviewed by hand; nothing enforces it.
 use std::fmt;
 
 use rand::{TryRng, rngs::SysRng};
@@ -159,13 +167,16 @@ mod tests {
     /// crates under and beside it, other generator crates, and generators by
     /// name (`thread_rng_n` is tokio's, public as
     /// `tokio::macros::support::thread_rng_n`). A name is matched whole, so
-    /// each one is listed. The last three name what Clippy cannot refuse by
+    /// each one is listed. The last five name what Clippy cannot refuse by
     /// path (#511): rustls's `CryptoProvider::secure_random` field, any
-    /// `RandomState` (std's through `Default`, `ahash`, `foldhash`) and
-    /// `/dev/urandom` (`/dev/random` is matched in [`names`]). Library calls
-    /// that draw without any of these names are on the `clippy.toml` list
-    /// ([`CLIPPY_LIST`]); `Uuid::new_v4()` is allowed for identifiers only.
-    const NEEDLES: [&str; 20] = [
+    /// `RandomState` (std's through `Default`, `ahash`, `foldhash`),
+    /// `/dev/urandom`, tower's `HasherRng` (through `Default`) and
+    /// pgcrypto's `gen_random_bytes` in SQL strings. `/dev/random` and
+    /// `/proc/sys/kernel/random` are matched as paths ([`DEVICES`]). Library
+    /// calls that draw without any of these names are on the `clippy.toml`
+    /// list ([`CLIPPY_LIST`]). `Uuid::new_v4()`/`now_v7()`/`new_v7()` and SQL
+    /// `gen_random_uuid()` are allowed for identifiers only (module docs).
+    const NEEDLES: [&str; 22] = [
         "rand",
         "rand_core",
         "rand_chacha",
@@ -186,6 +197,8 @@ mod tests {
         "secure_random",
         "RandomState",
         "urandom",
+        "HasherRng",
+        "gen_random_bytes",
     ];
 
     /// The length in tokens of the test module that starts at `trees[0]`:
@@ -263,15 +276,73 @@ mod tests {
         for word in text.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
             found.extend(NEEDLES.iter().filter(|needle| **needle == word));
         }
-        // `random` alone is an ordinary word; only the device path counts.
-        let device = text.split("/dev/").skip(1).any(|rest| {
-            rest.split(|c: char| !(c.is_alphanumeric() || c == '_'))
-                .next()
-                .is_some_and(|word| word == "random")
-        });
-        if device {
-            found.insert("/dev/random");
+        devices(text, found);
+    }
+
+    /// Device and kernel paths that hand out randomness, as path segments.
+    /// `random` alone is an ordinary word; only these paths count.
+    const DEVICES: [(&[&str], &str); 3] = [
+        (&["dev", "random"], "/dev/random"),
+        (&["dev", "urandom"], "urandom"),
+        (
+            &["proc", "sys", "kernel", "random"],
+            "/proc/sys/kernel/random",
+        ),
+    ];
+
+    /// The [`DEVICES`] in `text`, after normalising each path: empty and
+    /// `.` segments are dropped and `..` removes the segment before it, so
+    /// `/dev//random`, `/dev/./random` and `/tmp/../dev/random` all count.
+    fn devices(text: &str, found: &mut BTreeSet<&'static str>) {
+        let separator =
+            |c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '(' | ')' | ',' | ';');
+        for run in text.split(separator).filter(|run| run.contains('/')) {
+            let mut segments: Vec<&str> = Vec::new();
+            for segment in run.split('/') {
+                match segment {
+                    "" | "." => {}
+                    ".." => {
+                        segments.pop();
+                    }
+                    other => segments.push(other.trim_end_matches(['.', ':'])),
+                }
+            }
+            for (path, name) in DEVICES {
+                if segments.windows(path.len()).any(|window| window == path) {
+                    found.insert(name);
+                }
+            }
         }
+    }
+
+    /// The text `concat!` would produce from `stream`: its literals joined,
+    /// nested `concat!` calls included, so a path split across literals is
+    /// read whole (#511). Other tokens (the commas) add nothing.
+    fn concat_text(stream: TokenStream) -> String {
+        let trees: Vec<TokenTree> = stream.into_iter().collect();
+        let mut out = String::new();
+        let mut at = 0;
+        while at < trees.len() {
+            match &trees[at..] {
+                [
+                    TokenTree::Ident(word),
+                    TokenTree::Punct(bang),
+                    TokenTree::Group(group),
+                    ..,
+                ] if word == "concat" && bang.as_char() == '!' => {
+                    out.push_str(&concat_text(group.stream()));
+                    at += 3;
+                    continue;
+                }
+                [TokenTree::Literal(literal), ..] => out.push_str(&literal_text(literal)),
+                [TokenTree::Group(group), ..] if group.delimiter() == Delimiter::None => {
+                    out.push_str(&concat_text(group.stream()));
+                }
+                _ => {}
+            }
+            at += 1;
+        }
+        out
     }
 
     /// `module`: the tokens are the items of a module, that is the top of a
@@ -300,7 +371,15 @@ mod tests {
                     scan(group.stream(), items, found);
                 }
                 TokenTree::Punct(_) => {}
-                TokenTree::Ident(word) => names(&word.to_string(), found),
+                TokenTree::Ident(word) => {
+                    names(&word.to_string(), found);
+                    if let [TokenTree::Punct(bang), TokenTree::Group(group), ..] = &trees[at + 1..]
+                        && word == "concat"
+                        && bang.as_char() == '!'
+                    {
+                        names(&concat_text(group.stream()), found);
+                    }
+                }
                 // A name inside a literal: a path in an attribute string
                 // such as `#[serde(default = "...")]`.
                 TokenTree::Literal(literal) => names(&literal_text(literal), found),

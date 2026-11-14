@@ -14,8 +14,12 @@
 # `crate::entropy` (the OS CSPRNG, failing closed). The entropy source scan
 # (`entropy.rs` tests) finds generators by name (`rand`, `OsRng`, ...); the
 # library calls below draw randomness without such a name, so they are
-# refused here by path. `Uuid::new_v4`/`now_v7` stay allowed: identifiers and
-# fencing values only, never a secret (docs/threat-model.md KEY-10).
+# refused here by path. `apps/gateway/src/entropy.rs` keeps this list in
+# step with its CLIPPY_LIST and pins the named crates' versions in
+# Cargo.lock, so a bump forces a review (`allow-invalid` is silent).
+# `Uuid::new_v4`/`now_v7`/`new_v7` and SQL `gen_random_uuid()` stay
+# allowed: identifiers and fencing values only, never a secret
+# (docs/threat-model.md KEY-10).
 disallowed-methods = [
   { path = "sqlx::Pool::begin", reason = "use crate::db::begin (cancellation-safe)" },
   { path = "sqlx::Pool::begin_with", reason = "use crate::db::begin_with_setup (cancellation-safe)" },
@@ -60,6 +64,16 @@ disallowed-methods = [
   { path = "openidconnect::Nonce::new_random", reason = "build the OIDC nonce with Nonce::new from crate::entropy (#511)" },
   { path = "openidconnect::Nonce::new_random_len", reason = "build the OIDC nonce with Nonce::new from crate::entropy (#511)" },
   { path = "std::hash::RandomState::new", reason = "randomly keyed hashes are not secrets; draw them with crate::entropy (#511)" },
-  { path = "std::collections::HashMap::hasher", reason = "a map's RandomState is randomly keyed; draw randomness with crate::entropy (#511)" },
-  { path = "std::collections::HashSet::hasher", reason = "a set's RandomState is randomly keyed; draw randomness with crate::entropy (#511)" },
+  { path = "std::collections::HashMap::hasher", reason = "a map's RandomState is randomly keyed: use a fixed BuildHasher (BuildHasherDefault) for sharding or caches; secrets come from crate::entropy (#511)" },
+  { path = "std::collections::HashSet::hasher", reason = "a set's RandomState is randomly keyed: use a fixed BuildHasher (BuildHasherDefault) for sharding or caches; secrets come from crate::entropy (#511)" },
+  { path = "tower::util::rng::HasherRng::new", reason = "tower's HasherRng is RandomState-keyed: draw randomness with crate::entropy (#511)" },
+  { path = "tower::util::rng::Rng::next_u64", reason = "tower's HasherRng is RandomState-keyed: draw randomness with crate::entropy (#511)" },
+  { path = "tower::util::rng::Rng::next_f64", reason = "tower's HasherRng is RandomState-keyed: draw randomness with crate::entropy (#511)" },
+  { path = "tower::util::rng::Rng::next_range", reason = "tower's HasherRng is RandomState-keyed: draw randomness with crate::entropy (#511)" },
+  { path = "tungstenite::client::IntoClientRequest::into_client_request", reason = "it draws Sec-WebSocket-Key from tungstenite's ThreadRng: draw secrets with crate::entropy; the one handshake use is sanctioned (#511)" },
+  { path = "rustls::crypto::SupportedKxGroup::start", reason = "key exchange draws from the TLS provider's generator: leave it to rustls; secrets come from crate::entropy (#511)" },
+  { path = "rustls::crypto::SupportedKxGroup::start_and_complete", reason = "key exchange draws from the TLS provider's generator: leave it to rustls; secrets come from crate::entropy (#511)" },
+  { path = "rustls::crypto::ring::Ticketer::new", reason = "ticket keys come from the TLS provider's generator: secrets come from crate::entropy (#511)" },
+  { path = "rustls::crypto::aws_lc_rs::Ticketer::new", reason = "ticket keys come from the TLS provider's generator: secrets come from crate::entropy (#511)", allow-invalid = true },
+  { path = "rustls::server::ProducesTickets::encrypt", reason = "ticket encryption draws a nonce from the TLS provider: secrets come from crate::entropy (#511)" },
 ]
