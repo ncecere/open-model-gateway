@@ -678,28 +678,30 @@ pub(crate) fn client_builder(resolver: Arc<Resolver>) -> reqwest::ClientBuilder 
         .retry(reqwest::retry::never())
 }
 
-/// [`client_builder`]'s counterpart for an approved local endpoint
-/// (`providers/local/endpoints.rs`): `host` connects only to the pinned,
-/// already-approved `destinations`, with the same redirect, retry and proxy
-/// safeguards. No DNS lookup happens for `host`.
+/// [`client_builder`]'s counterpart for an approved local endpoint: the
+/// approval's host connects only to its pinned addresses, with the same
+/// redirect, retry and proxy safeguards. No DNS lookup happens for that host.
+/// Only `providers::local::endpoints` can construct
+/// [`ApprovedDestinations`](crate::providers::local::endpoints::ApprovedDestinations),
+/// after its approval checks, so nothing else can pin an address here.
 #[expect(
     clippy::disallowed_methods,
     reason = "the egress-guarded constructor (#509)"
 )]
 pub(crate) fn pinned_client_builder(
-    host: &str,
-    destinations: &[SocketAddr],
+    approved: &crate::providers::local::endpoints::ApprovedDestinations,
 ) -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
-        .resolve_to_addrs(host, destinations)
+        .resolve_to_addrs(approved.host(), approved.addresses())
 }
 
 /// Adds operator-configured trust anchors (`GATEWAY_S3_CA_FILE`) to a builder
-/// from [`client_builder`]. Kept here so that every change to what TLS
-/// trusts is in this module (#509).
+/// from [`client_builder`]. The caller chooses the certificates; keeping the
+/// call here means a new trust-anchor site has to use this named helper, not
+/// `add_root_certificate` directly (#509).
 #[expect(
     clippy::disallowed_methods,
     reason = "the egress-guarded constructor (#509)"

@@ -117,17 +117,53 @@ async fn guarded_client_resolves_through_the_egress_policy() {
     assert_eq!(requests.load(Ordering::SeqCst), 1);
 }
 
+/// The pinned client of an approved local endpoint (`upstream.invalid` pinned
+/// to loopback, development), built through the production approval loader.
+fn approved(port: u16) -> crate::providers::local::endpoints::ApprovedEndpoints {
+    crate::providers::local::endpoints::ApprovedEndpoints::for_test(&format!(
+        "http://upstream.invalid:{port}/v1"
+    ))
+}
+
 #[tokio::test]
 async fn pinned_client_connects_only_to_its_approved_destination() {
     let (port, requests) = server(|_, _| Some(NO_CONTENT.to_owned())).await;
-    let pinned = [SocketAddr::from(([127, 0, 0, 1], port))];
-    // `upstream.invalid` never resolves; the pin is the only way to reach it.
-    let client = pinned_client_builder("upstream.invalid", &pinned)
-        .build()
-        .unwrap();
-    let url = format!("http://upstream.invalid:{port}/");
-    assert_eq!(client.get(&url).send().await.unwrap().status(), 204);
+    let metrics = format!("http://upstream.invalid:{port}/metrics");
+    // Control: without the pin, `upstream.invalid` never resolves.
+    let unpinned = client_builder(loopback()).build().unwrap();
+    let error = unpinned.get(&metrics).send().await.unwrap_err();
+    assert!(error.is_connect(), "{error:?}");
+    assert_eq!(requests.load(Ordering::SeqCst), 0);
+
+    let endpoints = approved(port);
+    let (client, url) = endpoints.metrics_endpoint(&metrics).unwrap();
+    assert_eq!(client.get(url).send().await.unwrap().status(), 204);
     assert_eq!(requests.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn pinned_client_does_not_follow_redirects() {
+    let (port, requests) = server(|head, port| {
+        Some(if head.starts_with("GET /metrics ") {
+            format!(
+                "HTTP/1.1 302 Found\r\nlocation: http://upstream.invalid:{port}/landing\r\n\
+                 content-length: 0\r\nconnection: close\r\n\r\n"
+            )
+        } else {
+            NO_CONTENT.to_owned()
+        })
+    })
+    .await;
+    let endpoints = approved(port);
+    let (client, url) = endpoints
+        .metrics_endpoint(&format!("http://upstream.invalid:{port}/metrics"))
+        .unwrap();
+    assert_eq!(client.get(url).send().await.unwrap().status(), 302);
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        1,
+        "the redirect target was not requested"
+    );
 }
 
 /// Set by `guarded_client_ignores_ambient_proxy_variables` for its child.
@@ -212,4 +248,12 @@ async fn proxy_child() {
     let guarded = client_builder(loopback()).build().unwrap();
     assert_eq!(guarded.get(&url).send().await.unwrap().status(), 204);
     assert_eq!(requests.load(Ordering::SeqCst), 1);
+
+    // The pinned client of an approved local endpoint goes direct as well.
+    let endpoints = approved(port);
+    let (pinned, metrics) = endpoints
+        .metrics_endpoint(&format!("http://upstream.invalid:{port}/metrics"))
+        .unwrap();
+    assert_eq!(pinned.get(metrics).send().await.unwrap().status(), 204);
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
 }
