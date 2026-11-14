@@ -48,7 +48,7 @@ jobs:
         shard: [0, 1, 2, 3]
     services:
       postgres:
-        image: mirror.gcr.io/library/postgres:17-alpine
+        image: mirror.gcr.io/library/postgres:17-alpine@sha256:d3244e8ce3f165ee3c93d9c4a4b1d0fe48b3a89e2287b717fdcbbde92d405065
         env:
           POSTGRES_USER: gateway
           POSTGRES_PASSWORD: gateway
@@ -79,7 +79,7 @@ jobs:
     runs-on: ubuntu-24.04
     services:
       postgres:
-        image: mirror.gcr.io/library/postgres:17-alpine
+        image: mirror.gcr.io/library/postgres:17-alpine@sha256:d3244e8ce3f165ee3c93d9c4a4b1d0fe48b3a89e2287b717fdcbbde92d405065
         env:
           POSTGRES_USER: gateway
           POSTGRES_PASSWORD: gateway
@@ -277,7 +277,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: mirror.gcr.io/library/postgres:17-alpine
+        image: mirror.gcr.io/library/postgres:17-alpine@sha256:d3244e8ce3f165ee3c93d9c4a4b1d0fe48b3a89e2287b717fdcbbde92d405065
         env:
           POSTGRES_USER: gateway
           POSTGRES_PASSWORD: gateway

@@ -6,6 +6,10 @@ Notes for changes on `main` after [v0.16.0](v0.16.0.md). They become the next re
 
 - **`serve` releases its job leases when start-up fails after taking them** (#527). A start-up failure after the background-job leases were taken (a busy public or metrics port, or the audit export state check) used to exit with every lease still held, so another replica could not run those jobs until the terms expired (up to 30 seconds). Every such failure now stops renewing and releases the leases this process holds, as graceful shutdown does, then returns the original error. `GATEWAY_PARTITIONS_AHEAD_MONTHS` is now checked before any lease is taken, so a refused value never holds one. Each release is bounded to 2 seconds, on both paths; a release that fails or times out is logged and its term still ends at its expiry.
 
+## Security and verification
+
+- **CI's PostgreSQL service containers are pinned by digest** (#493): the `gateway-tests`, `gateway-special` and `browser` jobs in `ci.yml` ran `mirror.gcr.io/library/postgres:17-alpine` by tag; they now run `postgres:17-alpine@sha256:d3244e8c…`, the multi-architecture index the tag named on 2026-11-14 (the same digest as on Docker Hub). The supply-chain test now requires a digest on every job `container:` (string or `image:` mapping), every `services.<name>` image and every Docker action image, and refuses an expression there unless it is allowlisted with a reason (none is).
+
 ## Internal restructuring
 
 For contributors; no gateway behaviour changes.
