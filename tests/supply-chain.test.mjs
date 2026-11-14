@@ -978,20 +978,33 @@ function readRustToolchainChannel() {
 // context or Dockerfile is in one of them is refused (#488, below), because the checks
 // here never read what is there.
 const DOCKERFILE_SKIP_DIRS = /^(\.git|node_modules|target.*|dist|\.turbo)$/;
+// A `.dockerignore` named after its Dockerfile (`Dockerfile.dockerignore`) is not one.
 const DOCKERFILE_NAME = /^(dockerfile.*|.*\.dockerfile|containerfile.*)$/i;
+const isDockerfileName = name => DOCKERFILE_NAME.test(name) && !/\.dockerignore$/i.test(name);
 export function findDockerfiles(dir = root) {
   const out = [];
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     if (e.isDirectory()) {
       if (DOCKERFILE_SKIP_DIRS.test(e.name)) continue;
       out.push(...findDockerfiles(join(dir, e.name)));
-    } else if (DOCKERFILE_NAME.test(e.name)) {
+    } else if (isDockerfileName(e.name)) {
       out.push(join(dir, e.name));
     }
   }
   return out;
 }
-const allDockerfiles = () => findDockerfiles().map(p => ({ file: p.slice(root.length), text: readFileSync(p, "utf8") }));
+// Each file the walker finds must be a known Dockerfile; anything else fails here by name,
+// before a reader error about its contents (#488 review).
+export function unknownDockerfileViolations(files) {
+  return files.filter(file => !KNOWN_DOCKERFILES.includes(file)).map(file => `${file} is named like a Dockerfile but is not one of the known Dockerfiles (${KNOWN_DOCKERFILES.join(", ")}): `
+    + "if it is built, add it to KNOWN_DOCKERFILES with its build in IMAGE_BUILDS; otherwise rename it");
+}
+const allDockerfiles = () => {
+  const files = findDockerfiles().map(p => p.slice(root.length));
+  const unknown = unknownDockerfileViolations(files);
+  if (unknown.length) throw new Error(unknown.join("\n"));
+  return files.map(file => ({ file, text: readFileSync(join(root, file), "utf8") }));
+};
 
 // Recognizes any reference whose repository is exactly `rust` (the final path segment, up to
 // but not including any `:tag` or `@digest`), case-insensitively, with any registry/path prefix
@@ -3430,23 +3443,56 @@ test("fixtures: floating, computed and malformed container and service images ar
 // - no `build-contexts` (`<name>=docker-image://<image>` replaces a stage or a FROM image,
 //   pinned or not, without a change to the Dockerfile);
 // - no `BUILDKIT_*` build argument (`BUILDKIT_SYNTAX` loads another Dockerfile frontend);
-// and IMAGE_BUILDS holds every build step with the exact set of its `with:` keys and the
-// values of `context`, `file`, `target` and `build-args`. A new step, a step moved to
-// another job, or a new key is a reviewed change to this list.
+// and IMAGE_BUILDS holds every build step with every one of its `with:` inputs, as written in
+// the workflow (#488 review): the cache sources and targets (only the job's own `type=gha`
+// scope), the outputs (an OCI archive or the local daemon, never a registry), the SBOM
+// generator, the platforms, tags and labels. Values with `${{ }}` are pinned as text: what
+// they expand to comes from the runner, the job matrix or the read-only meta job. A new step,
+// a step moved to another job, or any changed input is a reviewed change to this list.
 const KNOWN_DOCKERFILES = RUNTIME_DOCKERFILES;
+const SBOM_ATTEST = "type=sbom,generator=mirror.gcr.io/docker/buildkit-syft-scanner:stable-1@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9";
+const OCI_ARCHIVE = "type=oci,dest=${{ runner.temp }}/image.tar,oci-mediatypes=true";
 const IMAGE_BUILDS = new Map([
-  [".github/workflows/ci.yml: job 'staging-image'", { keys: ["cache-from", "cache-to", "context", "load", "tags"], context: "." }],
-  [".github/workflows/image.yml: job 'build'", { keys: ["attests", "cache-from", "cache-to", "context", "labels", "outputs", "platforms", "provenance"], context: "." }],
-  [".github/workflows/branch-images.yml: job 'build'", { keys: ["attests", "cache-from", "cache-to", "context", "labels", "outputs", "platforms", "provenance"], context: "." }],
+  [".github/workflows/ci.yml: job 'staging-image'", {
+    context: ".", load: true, tags: "open-model-gateway:staging", "cache-from": "type=gha,scope=staging", "cache-to": "type=gha,mode=max,scope=staging",
+  }],
+  [".github/workflows/image.yml: job 'build'", {
+    context: ".", platforms: "${{ matrix.platform }}", labels: "${{ needs.meta.outputs.build_labels }}", outputs: OCI_ARCHIVE, attests: SBOM_ATTEST, provenance: "mode=max",
+    "cache-from": "type=gha,scope=image-${{ env.PLATFORM_PAIR }}", "cache-to": "type=gha,mode=max,scope=image-${{ env.PLATFORM_PAIR }}",
+  }],
+  [".github/workflows/branch-images.yml: job 'build'", {
+    context: ".", platforms: "linux/amd64", outputs: OCI_ARCHIVE, attests: SBOM_ATTEST, provenance: "mode=max", labels: "org.opencontainers.image.title=open-model-gateway\norg.opencontainers.image.source=https://github.com/${{ github.repository }}\norg.opencontainers.image.revision=${{ steps.name.outputs.sha }}\norg.opencontainers.image.licenses=MIT\n",
+    "cache-from": "type=gha,scope=image-linux-amd64", "cache-to": "type=gha,mode=max,scope=image-linux-amd64",
+  }],
   [".github/workflows/loadtest-image.yml: job 'build'", {
-    keys: ["attests", "build-args", "cache-from", "cache-to", "context", "file", "labels", "outputs", "platforms", "provenance"],
-    context: ".", file: "deploy/loadtest/Dockerfile", "build-args": "CARGO_BUILD_JOBS=4",
+    context: ".", file: "deploy/loadtest/Dockerfile", platforms: "linux/amd64", outputs: OCI_ARCHIVE, "build-args": "CARGO_BUILD_JOBS=4", attests: SBOM_ATTEST, provenance: "mode=max",
+    labels: "org.opencontainers.image.title=open-model-gateway-loadtest\norg.opencontainers.image.source=https://github.com/${{ github.repository }}\norg.opencontainers.image.revision=${{ steps.name.outputs.sha }}\norg.opencontainers.image.licenses=MIT\n", "cache-from": "type=gha,scope=loadtest-linux-amd64", "cache-to": "type=gha,mode=max,scope=loadtest-linux-amd64",
   }],
 ]);
-const PINNED_BUILD_INPUTS = ["context", "file", "target", "build-args"];
-// Other ways to build an image from a workflow step. Not a complete list: a guard against the
-// ordinary ones, like the package-manager check above.
-const OTHER_IMAGE_BUILDERS = new Set(["docker/bake-action", "redhat-actions/buildah-build", "mr-smithers-excellent/docker-build-push", "elgohr/publish-docker-github-action", "docker/build-push-action/subaction"]);
+
+// docker/setup-buildx-action (#488 review): the default docker-container driver running the
+// pinned BuildKit image, and nothing else. `driver`, `endpoint` (a remote builder), `config`
+// and the inline configs (registry mirrors), `use`, `version` (a downloaded Buildx) and other
+// driver options are refused because the inputs must be exactly these.
+const BUILDKIT_IMAGE = "mirror.gcr.io/moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea";
+const BUILDX_INPUTS = { "driver-opts": `image=${BUILDKIT_IMAGE}` };
+
+// Environment that selects another builder or Docker daemon, or changes the Docker client's
+// configuration, the Compose files or BuildKit's behaviour (#488 review). Refused in every
+// `env:` mapping (workflow, job, step) and named in no `run:` script (which could write it to
+// $GITHUB_ENV or export it), except where RUN_DOCKER_ENV lists it.
+const DOCKER_ENV = /^(BUILDX_\w*|BUILDKIT_\w*|DOCKER_HOST|DOCKER_CONTEXT|DOCKER_CONFIG|DOCKER_BUILDKIT|DOCKER_TLS_VERIFY|DOCKER_CERT_PATH|COMPOSE_FILE|COMPOSE_PATH_SEPARATOR|COMPOSE_PROJECT_DIRECTORY)$/;
+// DOCKER_CONFIG only, and only in jobs that run neither setup-buildx-action nor a build (checked):
+// each logs in to the registry with a fresh private configuration and removes it afterwards.
+const RUN_DOCKER_ENV = new Map([
+  [".github/workflows/branch-images.yml: job 'publish'", "a fresh private directory (mktemp) for registry credentials, removed afterwards; the job runs no build"],
+  [".github/workflows/loadtest-image.yml: job 'publish'", "a fresh private directory (mktemp) for registry credentials, removed afterwards; the job runs no build"],
+  [".github/workflows/image.yml: job 'probe-prepare'", "a fresh private directory (mktemp) for registry credentials, removed afterwards; the job runs no build"],
+  [".github/workflows/image.yml: job 'probe-sign'", "a fresh private directory (mktemp) for registry credentials, removed afterwards; the job runs no build"],
+  [".github/workflows/image.yml: job 'probe-verify'", "a fresh private directory (mktemp) for registry credentials, removed afterwards; the job runs no build"],
+  [".github/workflows/image.yml: job 'publish'", "a fresh private directory (mktemp) for registry credentials, removed afterwards; the job runs no build"],
+  [".github/workflows/image.yml: job 'release'", "a fresh private directory (mktemp) for registry credentials, removed afterwards; the job runs no build"],
+]);
 
 const isMapping = v => v !== null && typeof v === "object" && !Array.isArray(v);
 
@@ -3475,22 +3521,58 @@ function buildStepsOf(file, data) {
 // a build or bake subcommand, or Compose with --build, on one line (continuations joined).
 const RUN_BUILDERS = new Set(["docker", "docker-compose", "podman", "nerdctl", "buildah", "buildctl", "kaniko", "staging.py"]);
 const RUN_BUILD_WORDS = new Set(["build", "bake", "bud", "--build"]);
-export function runBuildViolations(where, script) {
+export function runBuildViolations(where, script, composeFiles = checkedComposeFiles()) {
   return script.replace(/\\\n/g, " ").split(/\n|;|&&|\|\|/).flatMap(line => {
     const words = line.split(/[^A-Za-z0-9_.+-]+/).map(word => word.toLowerCase());
     const builder = words.some(word => RUN_BUILDERS.has(word) || word.endsWith("/staging.py"));
     const build = words.some(word => RUN_BUILD_WORDS.has(word)) || (words.includes("buildx") && words.includes("b"));
-    return builder && build ? [`${where}: a run step builds an image (${JSON.stringify(line.trim().slice(0, 60))}); use a docker/build-push-action step listed in IMAGE_BUILDS`] : [];
+    const out = builder && build ? [`${where}: a run step builds an image (${JSON.stringify(line.trim().slice(0, 60))}); use a docker/build-push-action step listed in IMAGE_BUILDS`] : [];
+    const docker = words.includes("docker") || words.includes("buildx");
+    const selects = /\bbuildx\s+(?:-\S+\s+)*(?:create|use)\b/.test(line) || /\bdocker\s+(?:-\S+\s+)*context\s+(?:create|use|update|import)\b/.test(line)
+      || ["--builder", "--context", "-c", "-h", "--host"].some(flag => words.includes(flag));
+    if (docker && selects) out.push(`${where}: a run step selects a builder or Docker endpoint (${JSON.stringify(line.trim().slice(0, 60))}); the runner's default Docker and the setup-buildx-action builder are the only ones`);
+    if (words.includes("docker-compose") || (words.includes("docker") && words.includes("compose"))) out.push(...composeFileViolations(where, line, composeFiles));
+    return out;
   });
 }
 
-export function imageBuildViolations(file, data, approved = IMAGE_BUILDS, seen = new Set()) {
+// A Compose invocation may name only Compose files this file checks (-f/--file, as a literal).
+function composeFileViolations(where, line, composeFiles) {
   const out = [];
+  for (const m of line.matchAll(/(?:^|\s)(?:-f|--file)(?:=|\s+)("[^"]*"|'[^']*'|\S+)/g)) {
+    const path = m[1].replace(/^["']|["']$/g, "");
+    if (path.includes("$") || !composeFiles.has(posix.normalize(path))) out.push(`${where}: Compose file '${path}' is not one of the checked Compose files (repoComposeFiles)`);
+  }
+  if (/(?:^|\s)--project-directory\b/.test(line)) out.push(`${where}: --project-directory moves where the Compose files are read from`);
+  return out;
+}
+
+// The environment names a run script mentions that DOCKER_ENV covers.
+function dockerEnvViolations(where, script) {
+  const allowed = RUN_DOCKER_ENV.has(where) ? "DOCKER_CONFIG" : null;
+  return [...new Set(script.match(/[A-Z][A-Z0-9_]*/g) ?? [])].filter(name => DOCKER_ENV.test(name) && name !== allowed)
+    .map(name => `${where}: ${name} selects a builder or changes the Docker client; it may not be set or written by a workflow`);
+}
+
+function envMappingViolations(where, env) {
+  if (env === undefined) return [];
+  if (!isMapping(env)) return [`${where}: env must be a literal mapping (an expression could set ${DOCKER_ENV.source})`];
+  return Object.keys(env).filter(name => DOCKER_ENV.test(name)).map(name => `${where}: env ${name} selects a builder or changes the Docker client`);
+}
+
+export function imageBuildViolations(file, data, approved = IMAGE_BUILDS, seen = new Set(), { composeFiles = checkedComposeFiles() } = {}) {
+  const out = [...envMappingViolations(`${file}: workflow`, data?.env)];
+  for (const [name, job] of jobsOf(data)) out.push(...envMappingViolations(`${file}: job '${name}'`, job?.env));
   for (const [where, step] of buildStepsOf(file, data)) {
-    if (typeof step.run === "string") out.push(...runBuildViolations(where, step.run));
+    out.push(...envMappingViolations(where, step.env));
+    if (typeof step.run === "string") out.push(...runBuildViolations(where, step.run, composeFiles), ...dockerEnvViolations(where, step.run));
     if (typeof step.uses !== "string") continue;
     const action = actionName(step.uses);
-    if (OTHER_IMAGE_BUILDERS.has(action)) { out.push(`${where}: ${action} builds an image outside the checks; use docker/build-push-action`); continue; }
+    if ((action === "docker/setup-buildx-action" || action === "docker/build-push-action") && RUN_DOCKER_ENV.has(where)) out.push(`${where}: RUN_DOCKER_ENV lets this job set DOCKER_CONFIG, so it may not set up Buildx or build`);
+    if (action === "docker/setup-buildx-action") {
+      if (!isMapping(step.with) || JSON.stringify(Object.entries(step.with).sort()) !== JSON.stringify(Object.entries(BUILDX_INPUTS))) out.push(`${where}: setup-buildx-action: with: must be exactly driver-opts: image=${BUILDKIT_IMAGE}`);
+      continue;
+    }
     if (action !== "docker/build-push-action") continue;
     const inputs = step.with;
     if (!isMapping(inputs)) { out.push(`${where}: a build step needs a literal with: mapping`); continue; }
@@ -3513,9 +3595,9 @@ export function imageBuildViolations(file, data, approved = IMAGE_BUILDS, seen =
     if (!expected) { out.push(`${where}: an image build step that is not listed in IMAGE_BUILDS`); continue; }
     if (seen.has(where)) { out.push(`${where}: more than one image build step`); continue; }
     seen.add(where);
-    const keys = Object.keys(inputs).sort();
-    if (JSON.stringify(keys) !== JSON.stringify(expected.keys)) out.push(`${where}: with: keys ${keys.join(", ")}; IMAGE_BUILDS lists ${expected.keys.join(", ")}`);
-    for (const input of PINNED_BUILD_INPUTS) if (inputs[input] !== expected[input]) out.push(`${where}: ${input} is ${JSON.stringify(inputs[input])}; IMAGE_BUILDS lists ${JSON.stringify(expected[input])}`);
+    const keys = Object.keys(inputs).sort(), listed = Object.keys(expected).sort();
+    if (JSON.stringify(keys) !== JSON.stringify(listed)) out.push(`${where}: with: keys ${keys.join(", ")}; IMAGE_BUILDS lists ${listed.join(", ")}`);
+    for (const input of new Set([...keys, ...listed])) if (inputs[input] !== expected[input]) out.push(`${where}: ${input} is ${JSON.stringify(inputs[input])}; IMAGE_BUILDS lists ${JSON.stringify(expected[input])}`);
   }
   return out;
 }
@@ -3531,8 +3613,10 @@ export const COMPOSE_FILE = /^(docker-)?compose(\.[^/]+)?\.ya?ml$/i;
 
 export function composeBuildViolations(file, data, builds = []) {
   const out = [];
+  if (data?.include !== undefined) out.push(`${file}: top-level 'include' is not allowed (it reads Compose files this check does not)`);
   const services = isMapping(data?.services) ? data.services : {};
   for (const [name, service] of Object.entries(services)) {
+    if (isMapping(service) && service.extends !== undefined) out.push(`${file}: service '${name}': 'extends' is not allowed (it takes a build from another service or file unchecked)`);
     if (!isMapping(service) || service.build === undefined) continue;
     const where = `${file}: service '${name}' build`;
     const build = typeof service.build === "string" ? { context: service.build } : service.build;
@@ -3548,12 +3632,21 @@ export function composeBuildViolations(file, data, builds = []) {
   return out;
 }
 
-function repoComposeFiles(dir = root) {
-  return readdirSync(dir, { withFileTypes: true }).flatMap(e => {
-    if (e.isDirectory()) return dir === root && e.name !== "deploy" ? [] : repoComposeFiles(join(dir, e.name));
-    return COMPOSE_FILE.test(e.name) ? [join(dir, e.name).slice(root.length)] : [];
+// Every Compose file of the repository (#488 review): a YAML file named like one, or any YAML
+// file with a top-level `services:` key, anywhere outside the skipped directories and
+// .github. Only these may be passed to `docker compose -f`.
+export function repoComposeFiles(dir = root) {
+  const base = dir.endsWith("/") ? dir : `${dir}/`;
+  const visit = d => readdirSync(d, { withFileTypes: true }).flatMap(e => {
+    const full = join(d, e.name);
+    if (e.isDirectory()) return DOCKERFILE_SKIP_DIRS.test(e.name) || (d === dir && e.name === ".github") ? [] : visit(full);
+    if (!/\.ya?ml$/i.test(e.name)) return [];
+    return COMPOSE_FILE.test(e.name) || /^services[ \t]*:/m.test(readFileSync(full, "utf8")) ? [full.slice(base.length)] : [];
   });
+  return visit(dir).sort();
 }
+let composeFilesCache;
+const checkedComposeFiles = () => (composeFilesCache ??= new Set(repoComposeFiles()));
 
 test("every workflow image build step builds a known Dockerfile, context and stage, with its listed inputs (#488)", () => {
   const seen = new Set();
@@ -3599,7 +3692,7 @@ test("fixtures: a build step or Compose build that builds something else is refu
   for (const [name, data] of Object.entries(workflows)) assert.deepEqual(check(name, data), [], name);
   const jobOf = { ci: "staging-image", image: "build", "branch-images": "build", "loadtest-image": "build" };
   const OTHER = `mirror.gcr.io/library/debian:13-slim@sha256:${"b".repeat(64)}`;
-  const RUST = "mirror.gcr.io/library/rust:1.99.1-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c";
+  const RUST = APPROVED_RUST;
   const mutations = [
     ["target on the publish build", "image", w => { w.target = "build"; }, /target 'build' builds another stage/],
     ["target on the pull-request scan build", "ci", w => { w.target = "build"; }, /target 'build' builds another stage/],
@@ -3640,7 +3733,7 @@ test("fixtures: a build step or Compose build that builds something else is refu
   const moved = structuredClone(workflows.ci);
   moved.jobs.other = { "runs-on": "ubuntu-24.04", steps: [structuredClone(listed)] };
   assert.match(check("ci", moved).join(), /job 'other': an image build step that is not listed/);
-  assert.match(extra("image", { uses: `docker/bake-action@${"0".repeat(40)}` }).join(), /docker\/bake-action builds an image outside the checks/);
+  assert.match(actionPolicyViolations(".github/workflows/image.yml", { jobs: { j: { steps: [{ uses: `docker/bake-action@${"0".repeat(40)}` }] } } }).join(), /docker\/bake-action looks like an image builder/);
   assert.match(imageBuildViolations("action.yml", { runs: { using: "composite", steps: [{ uses: `docker/build-push-action@${"0".repeat(40)}`, with: { context: "." } }] } }).join(), /action\.yml: runs: an image build step that is not listed/);
   // An image built by a run step.
   for (const run of ["docker build --target build -t x .", "docker buildx build -f Containerfile .", "docker image build .", "docker buildx b .", "docker buildx bake", "docker \\\n  build .", "docker compose -f deploy/staging/compose.yaml build gateway",
@@ -3684,12 +3777,67 @@ test("fixtures: a build step or Compose build that builds something else is refu
 
 // ---- review of #488: bypasses of the build checks ----
 
-// Implemented in the next commit; the fixtures below show what each must refuse.
-export function actionPolicyViolations() { return []; }
-export function unknownDockerfileViolations() { return []; }
+// Every action a workflow or local action uses (#488 review). A new third-party action is a
+// change to this list. Names, not commits: the pin check above requires a full SHA and
+// Dependabot moves it; the two Docker actions, whose inputs the build checks interpret, are
+// also pinned to their commit, so a new version is read before it is approved.
+export const APPROVED_ACTIONS = new Map([
+  ["actions/checkout", "GitHub-owned; checks out the repository"],
+  ["actions/upload-artifact", "GitHub-owned; hands files between jobs"],
+  ["actions/download-artifact", "GitHub-owned; hands files between jobs"],
+  ["docker/setup-buildx-action", "starts the pinned BuildKit image (BUILDX_INPUTS)"],
+  ["docker/build-push-action", "the only image builder (IMAGE_BUILDS)"],
+  ["docker/metadata-action", "computes tags and labels in the read-only meta job"],
+  ["dtolnay/rust-toolchain", "installs the pinned Rust toolchain (#354)"],
+  ["Swatinem/rust-cache", "caches Cargo build output in read-only jobs"],
+  ["taiki-e/install-action", "installs cargo-deny at an exact version with its checksum check"],
+  ["github/codeql-action/init", "CodeQL, in the read-only analyze job"],
+  ["github/codeql-action/analyze", "CodeQL, in the read-only analyze job"],
+  ["github/codeql-action/upload-sarif", "uploads the SARIF file in the upload job"],
+].map(([name, reason]) => [name.toLowerCase(), reason]));
+const PINNED_ACTION_SHAS = new Map([
+  ["docker/build-push-action", "c3c9e263c25d99ce0380d002d59b67737d91b0dc"],
+  ["docker/setup-buildx-action", "f87e5991a6d7451dcb8d9637bfbc97413f497069"],
+]);
+const IMAGE_BUILDER_NAME = /build-?push|buildx|bake|buildah|kaniko|podman|(^|[/-])img([/-]|$)|build-?image/i;
+
+// Local actions are read only under .github/actions, and local reusable workflows only in
+// .github/workflows: a `uses:` of any other path runs code no check here reads.
+export function actionPolicyViolations(file, data, { approved = APPROVED_ACTIONS, used = new Set() } = {}) {
+  const out = [];
+  for (const [name, job] of jobsOf(data)) {
+    if (job?.uses === undefined) continue;
+    const m = typeof job.uses === "string" ? job.uses.match(/^\.\/\.github\/workflows\/([A-Za-z0-9_-][A-Za-z0-9._-]*\.ya?ml)$/) : null;
+    if (!m || !existsSync(join(workflowsDir, m[1]))) out.push(`${file}: job '${name}': '${job.uses}' is not a workflow file of this checkout (./.github/workflows/<file>)`);
+  }
+  for (const [where, step] of buildStepsOf(file, data)) {
+    const uses = step.uses;
+    if (typeof uses !== "string") continue;
+    if (uses.startsWith("./") || uses.startsWith("../")) {
+      const m = uses.match(/^\.\/\.github\/actions\/([A-Za-z0-9_-][A-Za-z0-9._-]*)\/?$/);
+      if (!m || m[1].includes("..")) out.push(`${where}: '${uses}' is outside .github/actions, which this suite reads`);
+      else if (!["action.yml", "action.yaml"].some(f => existsSync(join(actionsDir, m[1], f)))) out.push(`${where}: '${uses}' has no action.yml`);
+      continue;
+    }
+    if (uses.startsWith("docker://")) { out.push(`${where}: a docker:// step runs an image outside the approved actions`); continue; }
+    const name = actionName(uses), sha = uses.split("@")[1];
+    if (!approved.has(name)) out.push(`${where}: ${name} is not an approved action (APPROVED_ACTIONS in tests/supply-chain.test.mjs)`);
+    else used.add(name);
+    if (IMAGE_BUILDER_NAME.test(name) && !PINNED_ACTION_SHAS.has(name)) out.push(`${where}: ${name} looks like an image builder; only docker/build-push-action builds images`);
+    if (PINNED_ACTION_SHAS.has(name) && sha !== PINNED_ACTION_SHAS.get(name)) out.push(`${where}: ${name} must be pinned to ${PINNED_ACTION_SHAS.get(name)}, the commit whose inputs these checks were written for`);
+  }
+  return out;
+}
+
+test("every action is approved, and every local action or reusable workflow is one this suite reads (#488 review)", () => {
+  const used = new Set();
+  assert.deepEqual(repoFiles().flatMap(({ file, text }) => actionPolicyViolations(file, toData(parseStrict(text, file)), { used })), []);
+  assert.deepEqual([...APPROVED_ACTIONS.keys()].filter(name => !used.has(name)), [], "every approved action is used");
+  const scripts = repoFiles().flatMap(({ file, text }) => buildStepsOf(file, toData(parseStrict(text, file))).map(([where, step]) => [where, step.run ?? ""]));
+  assert.deepEqual([...RUN_DOCKER_ENV.keys()].filter(where => !scripts.some(([w, run]) => w === where && run.includes("DOCKER_CONFIG"))), [], "every RUN_DOCKER_ENV job sets DOCKER_CONFIG");
+});
 
 const loadWorkflow = name => toData(parseStrict(readFileSync(join(workflowsDir, `${name}.yml`), "utf8"), `.github/workflows/${name}.yml`));
-const BUILDKIT_IMAGE = "mirror.gcr.io/moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea";
 // The checks of one workflow after adding a job, a step or env to the real parsed file.
 const buildChecks = (name, data) => imageBuildViolations(`.github/workflows/${name}.yml`, data, IMAGE_BUILDS, new Set(), { composeFiles: new Set(repoComposeFiles()) });
 const actionChecks = (name, data, options) => actionPolicyViolations(`.github/workflows/${name}.yml`, data, options);
