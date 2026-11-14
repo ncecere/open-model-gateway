@@ -179,3 +179,11 @@ for (const run of PUBLISHING_RUNS) {
 test("a job that is not pinned may still tag a local image", () => {
   assert.deepEqual(buildChecks("ci", withStep("ci", "web", { run: "docker tag open-model-gateway:staging local/test:1" })), []);
 });
+
+for (const scope of ["checks", "statuses"]) {
+  test(`a job that can write ${scope} must be pinned (it could post under a required check's name)`, () => {
+    const data = structuredClone(loadWorkflow("ci"));
+    data.jobs.web.permissions = { contents: "read", [scope]: "write" };
+    assert.match(unpinnedImageJobViolations(".github/workflows/ci.yml", data).join(), new RegExp(`job 'web' can write ${scope}, so it must be pinned`));
+  });
+}

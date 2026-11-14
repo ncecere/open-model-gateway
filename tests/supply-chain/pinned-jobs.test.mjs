@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SHA, actionName, loadWorkflow, parseStrict, readLocalFromRepo, stepsOf, toData } from "./lib.mjs";
-import { PINNED_JOB_INPUTS, PINNED_JOBS_FILE, currentPins, pinnedJobInputViolations, pinnedJobViolations, readPinnedJobs, stagingCandidateViolations } from "./policy.mjs";
+import { PINNED_JOB_INPUTS, PINNED_JOBS_FILE, currentPins, pinnedJobInputViolations, npmrcViolations, pinnedJobViolations, pinnedNpmViolations, pythonIsolationViolations, readPinnedJobs, stagingCandidateViolations, stagingOverlayFiles } from "./policy.mjs";
 
 const CHECKOUT = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const DOWNLOAD = "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333";
@@ -109,4 +109,91 @@ test("the staging rehearsal runs the candidate image under test", () => {
   migrate.services.migrate.image = "ghcr.io/ncecere/open-model-gateway:v0.4.1";
   assert.match(stagingCandidateViolations(migrate, example, ci).join(), /service 'migrate' image .* is not the candidate/);
   assert.match(stagingCandidateViolations(compose(), example.replace("GATEWAY_IMAGE=open-model-gateway:staging", "GATEWAY_IMAGE=ghcr.io/ncecere/open-model-gateway:v0.4.1"), ci).join(), /staging\.env\.example/);
+});
+
+// ---- what the staging rehearsal and the pinned npm and Python commands read ----
+
+const STAGING_COMPOSE = "deploy/staging/compose.yaml";
+const readYaml = file => toData(parseStrict(readLocalFromRepo(file), file));
+const EXAMPLE = readLocalFromRepo("deploy/staging/staging.env.example");
+const overlays = () => Object.fromEntries(stagingOverlayFiles().map(file => [file, readYaml(file)]));
+const candidate = (example = EXAMPLE, layers = overlays()) => stagingCandidateViolations(readYaml(STAGING_COMPOSE), example, loadWorkflow("ci"), layers);
+
+test("staging.py's Compose overlays are the four staging overlay files", () => {
+  assert.deepEqual(stagingOverlayFiles().sort(), ["deploy/staging/compose.anthropic.yaml", "deploy/staging/compose.oidc-secret.yaml", "deploy/staging/compose.oidc.yaml", "deploy/staging/compose.openai.yaml"]);
+  assert.deepEqual(candidate(), []);
+});
+
+const REFUSED_EXAMPLES = [
+  ["a second GATEWAY_IMAGE with a leading space", `${EXAMPLE}\n GATEWAY_IMAGE=mirror.gcr.io/library/alpine:latest\n`, /GATEWAY_IMAGE/],
+  ["a second GATEWAY_IMAGE with the candidate", `${EXAMPLE}\nGATEWAY_IMAGE=open-model-gateway:staging\n`, /more than once/],
+  ["DOCKER_HOST", `${EXAMPLE}\nDOCKER_HOST=tcp://evil:2375\n`, /DOCKER_HOST selects a builder or changes the Docker client/],
+  ["DOCKER_CONTEXT", `${EXAMPLE}\nDOCKER_CONTEXT=evil\n`, /DOCKER_CONTEXT/],
+  ["DOCKER_CONFIG", `${EXAMPLE}\nDOCKER_CONFIG=/tmp/evil\n`, /DOCKER_CONFIG/],
+  ["BUILDX_BUILDER", `${EXAMPLE}\nBUILDX_BUILDER=evil\n`, /BUILDX_BUILDER/],
+  ["COMPOSE_FILE", `${EXAMPLE}\nCOMPOSE_FILE=/tmp/evil.yml\n`, /COMPOSE_FILE/],
+];
+for (const [label, example, reason] of REFUSED_EXAMPLES) {
+  test(`staging.env.example refuses ${label}`, () => assert.match(candidate(example).join(), reason));
+}
+
+test("staging.env.example is read as staging.py reads it (quotes and spaces stripped)", () => {
+  assert.deepEqual(candidate(EXAMPLE.replace("GATEWAY_IMAGE=open-model-gateway:staging", '  GATEWAY_IMAGE = "open-model-gateway:staging"')), []);
+});
+
+const REFUSED_OVERLAYS = [
+  ["an image on the gateway", "deploy/staging/compose.oidc.yaml", d => { d.services ??= {}; d.services.gateway = { ...d.services.gateway, image: "ghcr.io/ncecere/open-model-gateway:v0.4.1" }; }, /compose\.oidc\.yaml: service 'gateway' may not set image/],
+  ["an image on an ops service", "deploy/staging/compose.openai.yaml", d => { d.services ??= {}; d.services.migrate = { image: "ghcr.io/ncecere/open-model-gateway:v0.4.1" }; }, /service 'migrate' may not set image/],
+  ["a build override", "deploy/staging/compose.anthropic.yaml", d => { d.services ??= {}; d.services.gateway = { ...d.services.gateway, build: { context: "../..", dockerfile: "Dockerfile" } }; }, /service 'gateway' may not set build/],
+  ["a new service with a build", "deploy/staging/compose.oidc-secret.yaml", d => { d.services ??= {}; d.services.extra = { build: { context: "../.." } }; }, /service 'extra' may not set build/],
+];
+for (const [label, file, mutate, reason] of REFUSED_OVERLAYS) {
+  test(`a staging overlay refuses ${label}`, () => {
+    const layers = overlays();
+    layers[file] ??= readYaml(file);
+    mutate(layers[file]);
+    assert.match(candidate(EXAMPLE, layers).join(), reason);
+  });
+}
+
+const PACKAGES = () => ({ "package.json": JSON.parse(readLocalFromRepo("package.json")), "apps/web/package.json": JSON.parse(readLocalFromRepo("apps/web/package.json")) });
+test("the npm scripts the pinned jobs run have no pre or post scripts", () => {
+  assert.deepEqual(pinnedNpmViolations(currentPins(), PACKAGES()), []);
+});
+const REFUSED_NPM = [
+  ["a pre script", p => { p["package.json"].scripts["pretest:container"] = "docker tag busybox open-model-gateway:staging"; }, /pretest:container runs with/],
+  ["a post script", p => { p["package.json"].scripts["posttest:container"] = "true"; }, /posttest:container runs with/],
+];
+for (const [label, mutate, reason] of REFUSED_NPM) {
+  test(`a pinned npm script refuses ${label}`, () => {
+    const packages = PACKAGES();
+    mutate(packages);
+    assert.match(pinnedNpmViolations(currentPins(), packages).join(), reason);
+  });
+}
+const INSTALL_SCRIPTS = [
+  ["prepare in the root package", p => { p["package.json"].scripts.prepare = "node x.cjs"; }],
+  ["postinstall in the root package", p => { p["package.json"].scripts.postinstall = "node x.cjs"; }],
+  ["preinstall in the web workspace", p => { p["apps/web/package.json"].scripts.preinstall = "node x.cjs"; }],
+];
+for (const [label, mutate] of INSTALL_SCRIPTS) {
+  test(`npm ci in a pinned job refuses ${label}`, () => {
+    const packages = PACKAGES();
+    mutate(packages);
+    const pins = currentPins(readMutated("ci", d => afterScan(d, { run: "npm ci" })));
+    assert.match(pinnedNpmViolations(pins, packages).join(), /runs during npm ci/);
+  });
+}
+
+test("no .npmrc is tracked", () => {
+  assert.deepEqual(npmrcViolations(), []);
+  for (const file of [".npmrc", "apps/web/.npmrc"]) assert.match(npmrcViolations([file, "package.json"]).join(), /\.npmrc changes how npm runs scripts/, file);
+});
+
+test("every Python program a pinned job runs is started isolated (-I)", () => {
+  assert.deepEqual(pythonIsolationViolations(currentPins()), []);
+  for (const run of ["python3 scripts/staging.py status", "python3 -B scripts/staging.py status", "python scripts/x.py", "python3 -m json.tool x", "python3 - <<'EOF'\nprint(1)\nEOF"]) {
+    assert.match(pythonIsolationViolations(currentPins(readMutated("ci", d => afterScan(d, { run })))).join(), /runs Python without -I/, run);
+  }
+  assert.deepEqual(pythonIsolationViolations(currentPins(readMutated("ci", d => afterScan(d, { run: "python3 -I scripts/staging.py status" })))), []);
 });

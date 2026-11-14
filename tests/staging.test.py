@@ -37,6 +37,18 @@ class StagingTests(unittest.TestCase):
             self.assertNotIn("GATEWAY_OIDC_ISSUER", config)
             self.assertNotIn("STAGING_OPENAI_ENABLED", config)
 
+    def test_settings_refuse_a_key_set_twice(self):
+        # The last value would win, so a second GATEWAY_IMAGE (even indented) could replace
+        # the candidate under test (#488).
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder)
+            for text in ("GATEWAY_IMAGE=open-model-gateway:staging\n GATEWAY_IMAGE=alpine:latest\n", "A=1\nA=1\n"):
+                (state / "staging.env").write_text(text)
+                with self.assertRaises(ValueError):
+                    staging.settings(state)
+            (state / "staging.env").write_text("GATEWAY_IMAGE=open-model-gateway:staging\nA=1\n")
+            self.assertEqual(staging.settings(state)["GATEWAY_IMAGE"], "open-model-gateway:staging")
+
     def test_overlays_are_explicit_not_enabled_by_placeholder_values(self):
         base = staging.compose(Path("/state"), "omg-staging-ci", {})
         self.assertEqual(base.count("-f"), 1)
