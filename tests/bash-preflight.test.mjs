@@ -13,7 +13,7 @@
 // from the environment but PATH, and they run the very file that was checked.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import test from "node:test";
@@ -363,15 +363,17 @@ const ALLOWED = {
 };
 // Source text as the JavaScript engine reads a string, so that no spelling of a name gets
 // past the patterns (#576):
-// - a backslash before a line break continues the string on the next line, so the physical
-//   lines are joined (the reported line number is the first one);
+// - a backslash before a line break continues a string on the next line, so the physical
+//   lines are joined (reported at the first one). A comment that ends in a backslash does
+//   not continue, so each physical line of a joined one is judged on its own as well, and
+//   the joined text only when none of them is caught (`parts`, startsAShell);
 // - \xHH, \uHHHH, \u{H...} and octal escapes stand for the character they name;
 // - a backslash before any other character that has no escape meaning is dropped ("ba\sh"
 //   is "bash"). Quotes, \b \f \n \r \t \v, digits and \\ itself stay as written.
 // Read this way, nothing is refused for being an escape: a line with escapes is judged on
 // what it says. The names are still found only where they stand as text; one built at run
 // time ("ba" + "sh", a variable) is not seen.
-const ESCAPE = /\\(?:(\\)|x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|u\{([0-9a-fA-F]{1,8})\}|([0-3][0-7]{0,2}|[4-7][0-7]?)|([^bfnrtv'"`0-9xu\\\n]))/g;
+const ESCAPE = /\\(?:(\\)|x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|u\{([0-9a-fA-F]+)\}|([0-3][0-7]{0,2}|[4-7][0-7]?)|([^bfnrtv'"`0-9xu\\\n]))/g;
 function unescapeSource(line) {
   return line.replace(ESCAPE, (escape, backslash, hex, unit, braced, octal, plain) => {
     if (backslash !== undefined) return escape;
@@ -382,34 +384,40 @@ function unescapeSource(line) {
 }
 function logicalLines(text) {
   const lines = [];
-  let joined;
-  text.replace(/\r\n?|[\u2028\u2029]/g, "\n").split("\n").forEach((physical, index) => {
-    const raw = (joined?.raw ?? "") + physical;
-    const start = joined?.start ?? index + 1;
+  let parts = [];
+  const flush = () => {
+    if (parts.length === 0) return;
+    const raw = parts.map((part, index) => (index < parts.length - 1 ? part.source.slice(0, -1) : part.source)).join("");
+    lines.push({ number: parts[0].number, raw: raw.trim(), text: unescapeSource(raw), parts: parts.length > 1 ? parts.map(({ number, source }) => ({ number, raw: source.trim(), text: unescapeSource(source) })) : [] });
+    parts = [];
+  };
+  text.replace(/\r\n?|[\u2028\u2029]/g, "\n").split("\n").forEach((source, index) => {
+    parts.push({ number: index + 1, source });
     // An odd number of trailing backslashes: the last one escapes the line break.
-    if (/(?<!\\)(?:\\\\)*\\$/.test(physical)) joined = { raw: raw.slice(0, -1), start };
-    else {
-      joined = undefined;
-      lines.push({ number: start, raw: raw.trim(), text: unescapeSource(raw) });
-    }
+    if (!/(?<!\\)(?:\\\\)*\\$/.test(source)) flush();
   });
-  if (joined) lines.push({ number: joined.start, raw: joined.raw.trim(), text: unescapeSource(joined.raw) });
+  flush();
   return lines;
 }
 
 // ALLOWED is a multiset: each listing excuses one occurrence, so a line that appears twice
 // must be listed twice. Appearing more or fewer times than listed fails the rule (#498).
-// An allowed line is matched by its source text, after the continuations are joined.
+// An allowed line is matched by its source text: a physical line as written, or, for a
+// line that is caught only once its continuations are joined, the joined text.
 function startsAShell(name, text, allowed = []) {
   const found = [];
   const listed = new Map();
   for (const line of allowed) listed.set(line, (listed.get(line) ?? 0) + 1);
   const seen = new Map();
-  for (const { number, raw, text: line } of logicalLines(text)) {
+  const judge = ({ number, raw, text: line }) => {
     const broken = STARTS_A_SHELL.filter(([, pattern]) => pattern.test(line)).map(([what]) => what);
-    if (broken.length === 0) continue;
+    if (broken.length === 0) return false;
     if (listed.has(raw)) seen.set(raw, (seen.get(raw) ?? 0) + 1);
     else found.push(`${name}:${number} ${broken.join(", ")}: ${raw}`);
+    return true;
+  };
+  for (const line of logicalLines(text)) {
+    if (!line.parts.map(judge).some(Boolean)) judge(line);
   }
   const times = n => `${n} ${n === 1 ? "time" : "times"}`;
   for (const [line, count] of listed) {
@@ -444,11 +452,19 @@ function sortTestFiles(names) {
 // Every path under tests/ that git would commit: the tracked ones (a force-added file
 // included) and the untracked ones that are not ignored. A build artefact or a
 // dependency directory that .gitignore keeps out is not listed; a file that is listed
-// but gone from the work tree (deleted, not yet staged) is dropped.
+// but gone from the work tree (deleted, not yet staged) is dropped. A directory in the
+// list is a submodule, whose files git does not list: refused. Git is asked about the
+// repository at `repository` only: GIT_DIR, GIT_INDEX_FILE and the like, which git sets
+// when it runs a hook, would point it (and the fixture below) at another one.
+const gitEnv = () => Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
 function committableTestFiles(repository = root) {
-  const git = spawnSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "tests"], { cwd: repository, encoding: "utf8" });
+  const git = spawnSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "tests"], { cwd: repository, encoding: "utf8", env: gitEnv() });
   assert.equal(git.status, 0, `git ls-files failed: ${git.error ?? git.stderr}`);
-  return git.stdout.split("\0").filter(Boolean).map(name => name.replace(/^tests\//, "")).filter(name => existsSync(join(repository, "tests", name)));
+  return git.stdout.split("\0").filter(Boolean).map(name => name.replace(/^tests\//, "")).filter(name => {
+    const entry = statSync(join(repository, "tests", name), { throwIfNoEntry: false });
+    assert.ok(!entry?.isDirectory(), `tests/${name} is a directory git lists as one entry (a submodule); its files cannot be scanned`);
+    return entry !== undefined;
+  });
 }
 
 test("no test file starts bash on its own (#380)", () => {
@@ -531,16 +547,17 @@ test("a shell name hidden by a line continuation or an escape is still found (#5
     ["a \\u escape", 'spawnSync("ba\\u0073h", ["-c", script]);'],
     ["a \\u{} escape", 'spawnSync("ba\\u{73}h");'],
     ["a long \\u{} escape", 'spawnSync("ba\\u{000073}h");'],
+    ["a \\u{} escape with more than eight digits", 'spawnSync("ba\\u{0000000073}h");'],
     ["an upper-case hex escape", 'spawnSync("\\x62\\x61\\x73\\x68");'],
     ["an octal escape", 'spawnSync("\\142ash");'],
     ["an escape in the /bin path", 'spawnSync("/bin/\\x62ash");'],
-    ["an escaped slash in the /bin path", 'spawnSync("\\/bin\\/sh");'],
+    ["an escaped slash in the /bin path", 'spawnSync("env", ["\\/bin\\/sh -c true"]);'],
     ["a shell option key spelled with \\u", "spawnSync(file, { sh\\u0065ll: true });"],
-    ["a shell option key spelled with \\x", 'spawnSync(file, { "\\x73hell": "/bin/dash" });'],
+    ["a shell option key spelled with \\x", 'spawnSync(file, { "\\x73hell": true });'],
     ["a shell option set on a variable", 'options["sh\\u{65}ll"] = true;'],
     ["SHELL spelled with an escape", "const s = process.env.SH\\u0045LL;"],
     ["execSync spelled with an escape", 'cp.\\u0065xecSync("true");'],
-    ["a backslash before a plain letter", 'spawnSync("ba\\sh", ["-c", script]);'],
+    ["a backslash before a plain letter", 'spawnSync(file, { "s\\hell": true });'],
     ["a backslash before most letters", 'spawnSync("b\\a\\s\\h");'],
     ["env and a hidden shell", "spawnSync('env', ['b\\x61sh']);"],
     ["a shebang with an escape", '"#!/usr/bin/env b\\u0061sh",'],
@@ -562,7 +579,16 @@ test("a continuation is joined and an escape decoded without false findings, and
   const allowedLine = 'const shell = docker(["run", "--entrypoint", "/bin/\\x73h", image]);';
   assert.equal(startsAShell("x.mjs", allowedLine).length, 1);
   assert.deepEqual(startsAShell("x.mjs", allowedLine, [allowedLine]), []);
-  assert.deepEqual(startsAShell("x.mjs", 'const shell = docker(["run", "--entrypoint", "/bin/sh",\\\n image]);', ['const shell = docker(["run", "--entrypoint", "/bin/sh", image]);']), []);
+  assert.deepEqual(startsAShell("x.mjs", 'const path = "/bin/s\\\nh";', ['const path = "/bin/sh";']), [], "caught only when joined: listed as joined");
+  // A comment that ends in a backslash does not continue: the next line is code, and is
+  // judged (and allowed) as the line it is. The rule before #576 saw these too.
+  const comment = startsAShell("x.mjs", '// see C:\\dir\\\nexecSync("true");');
+  assert.equal(comment.length, 1);
+  assert.ok(comment[0].startsWith("x.mjs:2 calls exec() or execSync(): execSync("), comment[0]);
+  assert.equal(startsAShell("x.mjs", 'spawnSync(file, { encoding: "utf8", // note\\\nshell: !0,\n});').length, 1);
+  const listedLine = "while ((m = invocationRe.exec(script))) {";
+  assert.deepEqual(startsAShell("x.mjs", `// see C:\\temp\\\n${listedLine}`, [listedLine]), []);
+  assert.equal(unescapeSource('"\\u{' + "f".repeat(400) + '}"').length, 406, "an escape beyond Unicode stays as written");
   for (const line of [
     'const text = "\\x41\\u0042\\u{43}\\104\\n\\t";',
     'const note = "push\\x20here";',
@@ -613,7 +639,7 @@ test("every JavaScript and TypeScript spelling is read, other scripts are refuse
 test("a force-added file under tests/node_modules is listed and refused, an ignored one is not (#576)", t => {
   const repo = scratch(t);
   const git = (...args) => {
-    const result = spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+    const result = spawnSync("git", args, { cwd: repo, encoding: "utf8", env: gitEnv() });
     assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.stderr}`);
   };
   git("init", "--quiet");
