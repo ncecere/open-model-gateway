@@ -153,6 +153,9 @@ local_actions:
             tar -xJf "${RUNNER_TEMP}/node.tar.xz" --strip-components=1 -C "${RUNNER_TEMP}/node"
             "${RUNNER_TEMP}/node/bin/node" --version
             echo "${RUNNER_TEMP}/node/bin" >> "$GITHUB_PATH"
+npm_scripts:
+  package.json:
+    test:container: node --test tests/container-image.test.mjs
 jobs:
   - file: .github/workflows/image.yml
     job: probe-prepare

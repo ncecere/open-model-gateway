@@ -176,7 +176,7 @@ const readWorkflow = file => toData(parseStrict(readLocalFromRepo(file), file));
 // The pins as the workflows define them now.
 // Local actions (`uses: ./.github/actions/<name>`) that a pinned job or pinned local action uses
 // are pinned too, as their parsed action.yml.
-export function currentPins(read = readWorkflow) {
+export function currentPins(read = readWorkflow, packages = repoPackages()) {
   const workflows = {}, jobs = [], local_actions = {};
   const addLocalActions = steps => {
     for (const step of steps) {
@@ -196,7 +196,12 @@ export function currentPins(read = readWorkflow) {
       addLocalActions(stepsOf(all[job]));
     }
   }
-  return { workflows, local_actions, jobs };
+  const runs = [...jobs.flatMap(({ definition }) => stepsOf(definition)), ...Object.values(local_actions).flatMap(action => stepsOf(action?.runs))]
+    .filter(step => typeof step.run === "string").map(step => step.run);
+  // The exact text of every npm script those jobs run, recursively: a changed script is a pin
+  // difference like a changed run line.
+  const npm_scripts = npmScriptsOf(runs, packages).found;
+  return { workflows, local_actions, npm_scripts, jobs };
 }
 
 export const readPinnedJobs = () => toData(parseStrict(readLocalFromRepo(PINNED_JOBS_FILE), PINNED_JOBS_FILE));
@@ -230,6 +235,10 @@ export function pinnedJobViolations(current, pinned) {
   for (const file of files) {
     const at = firstDifference(current.workflows?.[file], pinned?.workflows?.[file]);
     if (at !== null) out.push(`${file}: the workflow's own keys differ from the pin at ${at.slice(1) || "the top"}; ${UPDATE}`);
+  }
+  for (const pkg of new Set([...Object.keys(current.npm_scripts ?? {}), ...Object.keys(pinned?.npm_scripts ?? {})])) {
+    const at = firstDifference(current.npm_scripts?.[pkg], pinned?.npm_scripts?.[pkg]);
+    if (at !== null) out.push(`npm_scripts ${pkg}: the script ${at.slice(1) || "list"} run by a pinned job differs from the pin; ${UPDATE}`);
   }
   for (const file of new Set([...Object.keys(current.local_actions ?? {}), ...Object.keys(pinned?.local_actions ?? {})])) {
     const at = firstDifference(current.local_actions?.[file], pinned?.local_actions?.[file]);
@@ -271,35 +280,29 @@ export const PINNED_JOB_INPUTS = [
 ];
 const SCRIPT_PATH = /^(\.github|scripts|tests|deploy|tools|apps)\/[\w./-]+\.(sh|bash|py|mjs|js|cjs|ts)$/;
 let trackedCache;
-const tracked = () => (trackedCache ??= new Set(spawnSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8" }).stdout.split("\0").filter(Boolean)));
-const packageScripts = () => JSON.parse(readLocalFromRepo("package.json")).scripts ?? {};
+export const tracked = () => (trackedCache ??= new Set(spawnSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8" }).stdout.split("\0").filter(Boolean)));
 
-export function pinnedJobInputs(pins = currentPins(), scripts = packageScripts()) {
+export function pinnedJobInputs(pins = currentPins()) {
   const found = new Set(Object.keys(pins.local_actions ?? {}));
-  const read = (script, depth = 0) => {
+  const read = script => {
     // A path anywhere in the text, also under a checkout directory (control/.github/...) or
-    // inside a quoted program.
+    // inside a quoted program; and every word that is a tracked file.
     const code = script.replace(/^[ \t]*#.*$/gm, "");
     for (const [, path] of code.matchAll(/(?<![\w.-])(?:[\w-]+\/)?((?:\.github|scripts|tests|deploy|tools|apps)\/[\w./-]*\w)/g)) {
       if (tracked().has(path) || SCRIPT_PATH.test(path)) found.add(path);
     }
-    for (const words of shellCommands(script)) {
-      const texts = words.map(w => w.text);
-      for (const text of texts) {
-        const path = text.replace(/^\.\//, "");
-        if (tracked().has(path) || SCRIPT_PATH.test(path)) found.add(path);
-      }
-      const npm = texts.indexOf("npm");
-      if (npm === -1) continue;
-      const [sub, name] = texts.slice(npm + 1).filter(t => !t.startsWith("-"));
-      const script = sub === "test" ? "test" : ["run", "run-script"].includes(sub) ? name : null;
-      if (script === null || script === undefined) continue;
-      found.add(`package.json: ${script}`);
-      if (typeof scripts[script] === "string" && depth < 5) read(scripts[script], depth + 1);
+    for (const words of shellCommands(script)) for (const { text } of words) {
+      const path = text.replace(/^\.\//, "");
+      if (tracked().has(path) || SCRIPT_PATH.test(path)) found.add(path);
     }
   };
-  const steps = [...pins.jobs.flatMap(({ definition }) => stepsOf(definition)), ...Object.values(pins.local_actions ?? {}).flatMap(action => stepsOf(action?.runs))];
-  for (const step of steps) if (typeof step.run === "string") read(step.run);
+  for (const script of pinnedScripts(pins)) read(script);
+  for (const [pkg, scripts] of Object.entries(pins.npm_scripts ?? {})) {
+    for (const [name, text] of Object.entries(scripts)) {
+      found.add(`${pkg}: ${name}`);
+      if (typeof text === "string") read(text);
+    }
+  }
   return [...found].sort();
 }
 
@@ -341,6 +344,45 @@ export function stagingOverlayFiles(source = readLocalFromRepo("scripts/staging.
 }
 const readOverlays = () => Object.fromEntries(stagingOverlayFiles().map(file => [file, readWorkflow(file)]));
 
+// The keys staging.env.example may set (staging.py writes the file from it, and Compose reads
+// it as --env-file). Anything else (PATH, LD_PRELOAD, COMPOSE_PROFILES, DOCKER_*) is refused;
+// a new key is a change to this list. Commented examples in the file are not keys.
+export const STAGING_ENV_KEYS = new Map([
+  ["GATEWAY_IMAGE", "the image under test; must be the candidate"],
+  ["GATEWAY_HOST", "the host name Caddy serves"],
+  ["GATEWAY_PUBLIC_URL", "the public HTTPS origin"],
+  ["STAGING_BIND_ADDRESS", "the address the ingress ports bind to"],
+  ["STAGING_HTTP_PORT", "the ingress HTTP port"],
+  ["STAGING_HTTPS_PORT", "the ingress HTTPS port"],
+  ["GATEWAY_MAX_CONCURRENT_REQUESTS", "the gateway's request concurrency limit"],
+  ["GATEWAY_REQUEST_TIMEOUT_SECONDS", "the gateway's request deadline"],
+  ["GATEWAY_STOP_GRACE_PERIOD", "Compose's shutdown grace period for the gateway"],
+  ["GATEWAY_SECRET_ENV_ALLOWLIST", "provider secret reference names the gateway may read"],
+  ["GATEWAY_SMTP_SECRET_ENV_ALLOWLIST", "SMTP password reference names"],
+  ["GATEWAY_SMTP_HOST_ALLOWLIST", "SMTP relay hosts"],
+  ["GATEWAY_EGRESS_PRIVATE_ALLOW", "private networks the gateway may reach"],
+  ["GATEWAY_DATABASE_MAX_CONNECTIONS", "the per-replica database pool size"],
+]);
+
+// Characters a reader or a diff can miss: every control character but tab and LF, DEL, NEL
+// and the Unicode line and paragraph separators. Python's splitlines() (staging.py) breaks
+// lines at several of them, so a comment could hide a setting; staging.py refuses them too.
+const INVISIBLE = /[\x00-\x08\x0b-\x1f\x7f\x85\u2028\u2029]/;
+export const stagingTextFiles = () => [...new Set([
+  "deploy/staging/staging.env.example", "deploy/staging/compose.yaml", ...stagingOverlayFiles(),
+  ...PINNED_JOB_INPUTS.filter(entry => !entry.includes(": ")),
+])];
+export function invisibleCharacterViolations(texts = Object.fromEntries(stagingTextFiles().map(file => [file, readLocalFromRepo(file) ?? ""]))) {
+  const out = [];
+  for (const [file, text] of Object.entries(texts)) {
+    String(text).split("\n").forEach((line, i) => {
+      const bad = line.match(INVISIBLE);
+      if (bad) out.push(`${file}:${i + 1}: a control character or line separator (U+${bad[0].codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}) a diff does not show; only tab and LF are allowed`);
+    });
+  }
+  return out;
+}
+
 export function stagingCandidateViolations(compose, envExample, ci, overlays = readOverlays()) {
   const out = [];
   const candidate = stepOf(ci?.jobs?.["staging-image"], "docker/build-push-action")?.with?.tags;
@@ -362,7 +404,11 @@ export function stagingCandidateViolations(compose, envExample, ci, overlays = r
   const example = "deploy/staging/staging.env.example";
   const { values, problems } = stagingSettings(envExample);
   out.push(...problems.map(problem => `${example}: ${problem}`));
-  for (const name of Object.keys(values)) if (DOCKER_ENV.test(name)) out.push(`${example}: ${name} selects a builder or changes the Docker client (Compose reads this file as --env-file)`);
+  for (const name of Object.keys(values)) {
+    if (DOCKER_ENV.test(name)) out.push(`${example}: ${name} selects a builder or changes the Docker client (Compose reads this file as --env-file)`);
+    else if (!STAGING_ENV_KEYS.has(name)) out.push(`${example}: ${name} is not an allowed staging.env key (STAGING_ENV_KEYS in tests/supply-chain/policy.mjs)`);
+  }
+  out.push(...invisibleCharacterViolations({ [example]: envExample ?? "" }));
   if (values.GATEWAY_IMAGE !== candidate) out.push(`${example}: GATEWAY_IMAGE must be exactly the candidate ${candidate}`);
   return out;
 }
@@ -381,25 +427,69 @@ export function repoPackages() {
 const pinnedScripts = pins => [...pins.jobs.flatMap(({ definition }) => stepsOf(definition)), ...Object.values(pins.local_actions ?? {}).flatMap(action => stepsOf(action?.runs))]
   .filter(step => typeof step.run === "string").map(step => step.run);
 
-export function pinnedNpmViolations(pins = currentPins(), packages = repoPackages()) {
-  const out = new Set();
-  const scripts = packages["package.json"]?.scripts ?? {};
-  const read = (script, depth = 0) => {
+// One npm command: the package it acts on (`-w`/`--workspace`, `--prefix`, else the one it
+// runs in), the scripts it runs and whether it installs. Every spelling npm accepts for run,
+// test, start, stop, restart and install is read; `install-test` and its aliases do both.
+const NPM_RUN = new Set(["run", "run-script", "rum", "urn"]);
+const NPM_TEST = new Set(["test", "t", "tst"]);
+const NPM_INSTALL = new Set(["ci", "clean-install", "ic", "install-clean", "isntall-clean", "install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "add"]);
+const NPM_INSTALL_TEST = new Set(["it", "install-test", "cit", "install-ci-test", "clean-install-test", "sit"]);
+function npmCommand(texts, pkg) {
+  let i = 0, sub = null, name = null;
+  const words = [];
+  while (i < texts.length) {
+    const t = texts[i];
+    const [flag, inline] = t.includes("=") ? [t.slice(0, t.indexOf("=")), t.slice(t.indexOf("=") + 1)] : [t, null];
+    if (["-w", "--workspace", "--prefix", "-C"].includes(flag)) {
+      const dir = (inline ?? texts[++i] ?? "").replace(/\/+$/, "");
+      pkg = dir ? `${dir}/package.json` : pkg;
+    } else if (!t.startsWith("-")) words.push(t);
+    i++;
+  }
+  [sub, name] = words;
+  if (NPM_RUN.has(sub)) return { pkg, scripts: name ? [name] : [], install: false };
+  if (NPM_TEST.has(sub)) return { pkg, scripts: ["test"], install: false };
+  if (["start", "stop"].includes(sub)) return { pkg, scripts: [sub], install: false };
+  if (sub === "restart") return { pkg, scripts: ["restart", "stop", "start"], install: false };
+  if (NPM_INSTALL.has(sub)) return { pkg, scripts: [], install: true };
+  if (NPM_INSTALL_TEST.has(sub)) return { pkg, scripts: ["test"], install: true };
+  return { pkg, scripts: [], install: false };
+}
+
+// Every npm script the pinned jobs run, recursively, as { <package.json>: { <name>: text } },
+// and whether any of them installs.
+export function npmScriptsOf(scripts, packages) {
+  const found = {};
+  let installs = false;
+  const read = (script, pkg, depth) => {
     for (const words of shellCommands(script)) {
       const texts = words.map(w => w.text);
-      const npm = texts.indexOf("npm");
-      if (npm === -1) continue;
-      const [sub, name] = texts.slice(npm + 1).filter(t => !t.startsWith("-"));
-      if (["ci", "install", "i", "clean-install"].includes(sub)) {
-        for (const [file, pkg] of Object.entries(packages)) for (const hook of INSTALL_SCRIPTS) if (pkg?.scripts?.[hook] !== undefined) out.add(`${file}: ${hook} runs during npm ci in a pinned job; it is not allowed`);
+      const at = texts.findIndex(t => posix.basename(t) === "npm");
+      if (at === -1) continue;
+      const command = npmCommand(texts.slice(at + 1), pkg);
+      installs ||= command.install;
+      for (const name of command.scripts) {
+        found[command.pkg] ??= {};
+        if (name in found[command.pkg]) continue;
+        const text = packages[command.pkg]?.scripts?.[name] ?? null;
+        found[command.pkg][name] = text;
+        if (typeof text === "string" && depth < 8) read(text, command.pkg, depth + 1);
       }
-      const run = sub === "test" ? "test" : ["run", "run-script"].includes(sub) ? name : null;
-      if (!run) continue;
-      for (const hook of [`pre${run}`, `post${run}`]) if (scripts[hook] !== undefined) out.add(`package.json: ${hook} runs with the pinned npm run ${run}; it is not allowed`);
-      if (typeof scripts[run] === "string" && depth < 5) read(scripts[run], depth + 1);
     }
   };
-  for (const script of pinnedScripts(pins)) read(script);
+  for (const script of scripts) read(script, "package.json", 0);
+  return { found, installs };
+}
+
+export function pinnedNpmViolations(pins = currentPins(), packages = repoPackages()) {
+  const out = new Set();
+  const { found, installs } = npmScriptsOf(pinnedScripts(pins), packages);
+  for (const [pkg, scripts] of Object.entries(found)) {
+    for (const name of Object.keys(scripts)) {
+      for (const hook of [`pre${name}`, `post${name}`]) if (packages[pkg]?.scripts?.[hook] !== undefined) out.add(`${pkg}: ${hook} runs with the pinned npm script ${name}; it is not allowed`);
+    }
+  }
+  if (installs) for (const [file, pkg] of Object.entries(packages)) for (const hook of INSTALL_SCRIPTS) if (pkg?.scripts?.[hook] !== undefined) out.add(`${file}: ${hook} runs during npm ci in a pinned job; it is not allowed`);
   return [...out];
 }
 
@@ -801,7 +891,3 @@ export const buildChecks = (name, data) => imageBuildViolations(`.github/workflo
 export const actionChecks = (name, data, options) => actionPolicyViolations(`.github/workflows/${name}.yml`, data, options);
 export const withStep = (name, job, step) => { const data = structuredClone(loadWorkflow(name)); data.jobs[job].steps.push(step); return data; };
 export const stepOf = (job, action) => stepsOf(job).find(s => actionName(s.uses ?? "") === action);
-
-// Implemented in the next commit; the fixtures show what it must refuse.
-export function invisibleCharacterViolations() { return []; }
-export const stagingTextFiles = () => [];
