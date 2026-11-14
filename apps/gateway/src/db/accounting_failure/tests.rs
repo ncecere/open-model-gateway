@@ -1,7 +1,7 @@
 //! #389: the production accounting-failure signal. No database: the driver
 //! boundary is synthetic here; `inference::steering_tests` drives the real faults.
 use super::*;
-use crate::db::diagnostics::{self, Handle};
+use crate::db::diagnostics::{self, Handle, Signal};
 use std::collections::BTreeSet;
 
 const CANARY: &str = "accounting-secret-canary-389";
@@ -34,7 +34,7 @@ impl sqlx::error::DatabaseError for SyntheticDatabaseError {
         sqlx::error::ErrorKind::Other
     }
 }
-fn database(code: Option<&'static str>) -> sqlx::Error {
+pub(crate) fn database(code: Option<&'static str>) -> sqlx::Error {
     sqlx::Error::Database(Box::new(SyntheticDatabaseError(code)))
 }
 
@@ -43,12 +43,18 @@ const DEADLINES: [Cause; 3] = [
     Cause::DeadlineAcquiringConnection,
     Cause::DeadlineInDatabase,
 ];
-const STAGES: [&str; 5] = [
+const STAGES: [&str; 11] = [
     "pool_acquire_and_begin",
     "governance_storage",
     "route_lookup",
     "explicit_settlement",
     "cancellation_settlement",
+    "realtime_admission",
+    "realtime_settlement",
+    "job_storage",
+    "job_settlement",
+    "maintenance",
+    "key_authentication",
 ];
 const CAUSES: [&str; 16] = [
     "pool_timeout",
@@ -68,6 +74,15 @@ const CAUSES: [&str; 16] = [
     "deadline_acquiring_connection",
     "deadline_in_database",
 ];
+
+/// The (stage, cause) label values of captured signals, so a test can name a
+/// stage or cause by its exported value.
+pub(crate) fn labels(signals: &[Signal]) -> Vec<(&'static str, &'static str)> {
+    signals
+        .iter()
+        .map(|(stage, cause)| (stage.as_str(), cause.as_str()))
+        .collect()
+}
 
 /// The accounting-failure log lines in `text`, as (stage, cause). Every such
 /// line, whoever wrote it, must carry exactly the two closed fields.
@@ -315,6 +330,56 @@ async fn a_pool_statement_failure_without_a_connection_is_a_failed_start() {
             (Stage::PoolAcquireAndBegin, Cause::PoolClosed),
             (Stage::GovernanceStorage, Cause::StatementTimeout),
             (Stage::GovernanceStorage, Cause::Io),
+        ]
+    );
+}
+
+/// #497: the job, maintenance and key-lookup stages take the driver causes
+/// (the error passes through unchanged); the realtime stage takes only the
+/// deadline causes, and only when its deadline elapses.
+#[tokio::test]
+async fn the_later_stages_classify_like_the_first() {
+    let handle = Handle::new();
+    diagnostics::scope(handle.clone(), async {
+        assert!(matches!(
+            job_storage(sqlx::Error::PoolTimedOut),
+            sqlx::Error::PoolTimedOut
+        ));
+        maintenance_error(&database(Some("57P01")));
+        assert!(matches!(
+            key_authentication(database(Some("57014"))),
+            sqlx::Error::Database(_)
+        ));
+        assert!(matches!(
+            job_settlement(sqlx::Error::PoolClosed),
+            sqlx::Error::PoolClosed
+        ));
+        let done = tokio::time::timeout(std::time::Duration::from_secs(3), async {});
+        assert!(realtime_admission(done).await.is_ok());
+        let hung = tokio::time::timeout(std::time::Duration::from_millis(1), async {
+            settlement_waiting(Waiting::Connection);
+            std::future::pending::<()>().await
+        });
+        assert!(realtime_settlement(hung).await.is_err());
+        let hung = tokio::time::timeout(std::time::Duration::from_millis(1), async {
+            settlement_waiting(Waiting::Database);
+            std::future::pending::<()>().await
+        });
+        assert!(realtime_admission(hung).await.is_err());
+    })
+    .await;
+    assert_eq!(
+        handle.signals(),
+        [
+            (Stage::JobStorage, Cause::PoolTimeout),
+            (Stage::Maintenance, Cause::BackendTerminated),
+            (Stage::KeyAuthentication, Cause::StatementTimeout),
+            (Stage::JobSettlement, Cause::PoolClosed),
+            (
+                Stage::RealtimeSettlement,
+                Cause::DeadlineAcquiringConnection
+            ),
+            (Stage::RealtimeAdmission, Cause::DeadlineInDatabase),
         ]
     );
 }
