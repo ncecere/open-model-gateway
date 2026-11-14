@@ -767,6 +767,18 @@ mod tests {
                 vec!["/dev/random"],
             ),
             (
+                "const P: &str = concat!(\"/dev/ran\", 'd', \"om\");",
+                vec!["/dev/random"],
+            ),
+            (
+                "const P: &str = concat!(\"/dev/\", stringify!(random));",
+                vec!["/dev/random"],
+            ),
+            (
+                "const P: &str = concat!(\"/dev/ur\", stringify!(and), \"om\");",
+                vec!["urandom"],
+            ),
+            (
                 "fn a() { let _ = std::fs::read(\"/proc/sys/kernel/random/uuid\"); }",
                 vec!["/proc/sys/kernel/random"],
             ),
@@ -787,6 +799,11 @@ mod tests {
             "/// A random, opaque value.\nfn a() {}",
             "fn a() { let _ = \"/dev/randomness\"; }",
             "fn a() { let _ = concat!(\"/dev/\", \"null\"); }",
+            // A part only known at build time breaks the joined text.
+            "const V: &str = concat!(\"omg/\", env!(\"CARGO_PKG_VERSION\"));",
+            "const P: &str = concat!(\"/dev/\", env!(\"X\"), \"random\");",
+            "const P: &str = concat!(\"/dev/\", option_env!(\"X\"), \"random\");",
+            "const P: &str = concat!(\"/dev/\", include_str!(\"x\"), \"random\");",
             "/// Ids come from `/proc`-free sources.\nfn a() {}",
             // Row ids: identifiers only, by policy.
             "const Q: &str = \"INSERT INTO t(id) VALUES(gen_random_uuid())\";",
