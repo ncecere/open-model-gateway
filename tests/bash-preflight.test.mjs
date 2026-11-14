@@ -346,16 +346,25 @@ const ALLOWED = {
   // RegExp.prototype.exec, not child_process.
   "browser/alert-webhooks.spec.ts": ["const match = /^t=(\\d+),v1=([0-9a-f]{64})$/.exec(signature);"],
 };
+// ALLOWED is a multiset: each listing excuses one occurrence, so a line that appears twice
+// must be listed twice. Appearing more or fewer times than listed fails the rule (#498).
 function startsAShell(name, text, allowed = []) {
   const found = [];
-  const used = new Set();
+  const listed = new Map();
+  for (const line of allowed) listed.set(line, (listed.get(line) ?? 0) + 1);
+  const seen = new Map();
   text.split("\n").forEach((line, index) => {
     const broken = STARTS_A_SHELL.filter(([, pattern]) => pattern.test(line)).map(([what]) => what);
     if (broken.length === 0) return;
-    if (allowed.includes(line.trim())) used.add(line.trim());
+    if (listed.has(line.trim())) seen.set(line.trim(), (seen.get(line.trim()) ?? 0) + 1);
     else found.push(`${name}:${index + 1} ${broken.join(", ")}: ${line.trim()}`);
   });
-  for (const line of allowed) if (!used.has(line)) found.push(`${name}: an allowed line is gone, remove it from ALLOWED: ${line}`);
+  const times = n => `${n} ${n === 1 ? "time" : "times"}`;
+  for (const [line, count] of listed) {
+    const appears = seen.get(line) ?? 0;
+    if (appears === 0) found.push(`${name}: an allowed line is gone, remove it from ALLOWED: ${line}`);
+    else if (appears !== count) found.push(`${name}: an allowed line appears ${times(appears)} but is listed ${times(count)}: ${line}`);
+  }
   return found;
 }
 
@@ -404,6 +413,19 @@ test("no test file starts bash on its own (#380)", () => {
     "assert.match(upgrade, /helm\\.sh\\/hook: pre-upgrade\\n/);",
   ]) assert.deepEqual(startsAShell("x.mjs", line), [], line);
   assert.equal(startsAShell("x.mjs", "a();", ["b();"]).length, 1, "a stale allowed line is reported");
+});
+
+// An allowed line excuses one occurrence per listing, so a second copy of it (which could
+// feed a real spawn) is not excused by the first one's entry (#498).
+test("an allowed shell line may appear only as often as it is listed (#498)", () => {
+  const line = 'const shell = docker(["run", "--rm", "--entrypoint", "/bin/sh", image]);';
+  assert.equal(startsAShell("x.mjs", line).length, 1, "the line breaks the rule when it is not listed");
+  assert.deepEqual(startsAShell("x.mjs", line, [line]), [], "listed once, appearing once");
+  assert.deepEqual(startsAShell("x.mjs", `${line}\na();\n  ${line}`, [line]), [`x.mjs: an allowed line appears 2 times but is listed 1 time: ${line}`], "listed once, appearing twice");
+  assert.deepEqual(startsAShell("x.mjs", `${line}\n${line}`, [line, line]), [], "listing a line twice allows it twice");
+  assert.deepEqual(startsAShell("x.mjs", `${line}\n${line}\n${line}`, [line, line]), [`x.mjs: an allowed line appears 3 times but is listed 2 times: ${line}`], "listed twice, appearing three times");
+  assert.deepEqual(startsAShell("x.mjs", line, [line, line]), [`x.mjs: an allowed line appears 1 time but is listed 2 times: ${line}`], "listed twice, appearing once");
+  assert.deepEqual(startsAShell("x.mjs", "a();", [line]), [`x.mjs: an allowed line is gone, remove it from ALLOWED: ${line}`], "listed, gone");
 });
 
 // The real path: each suite, started with an old bash first on PATH, must stop before
