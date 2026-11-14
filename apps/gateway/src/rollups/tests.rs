@@ -1,7 +1,6 @@
 //! Hourly usage rollups (0032) against raw history: parity, late changes
 //! (change markers), the running-transaction bound, and the spend-spike
 //! alert baseline.
-#![allow(clippy::disallowed_methods)]
 use super::*;
 use crate::governance::tests::db::fixture;
 use crate::partitions::tests::seed_history;

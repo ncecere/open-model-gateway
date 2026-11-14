@@ -279,11 +279,7 @@ pub(crate) fn export_http_client_with_policy(
     // plain HTTP may only reach canonical loopback after DNS (#313).
     let policy = export_http_policy(url, policy);
     crate::egress::check_url(&policy, purpose, url)?;
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .dns_resolver(crate::egress::resolver_with(purpose, policy))
-        .redirect(reqwest::redirect::Policy::none())
-        .retry(reqwest::retry::never())
+    let client = crate::egress::client_builder(crate::egress::resolver_with(purpose, policy))
         .timeout(exchange_timeout)
         .connect_timeout(connect_timeout)
         .build()

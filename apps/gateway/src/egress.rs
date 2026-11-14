@@ -659,6 +659,61 @@ pub fn resolver_with(purpose: Purpose, policy: Policy) -> Arc<Resolver> {
     })
 }
 
+/// The one way to start a reqwest client (#509): redirects, implicit retries
+/// and ambient proxies (`HTTP(S)_PROXY`/`ALL_PROXY`) off, and every resolved
+/// address checked by `resolver` (from [`resolver`] or [`resolver_with`]).
+/// Callers add only their own timeouts, pool and TLS-mode settings. Clippy's
+/// `disallowed-methods` (`apps/gateway/clippy.toml`) rejects every other
+/// constructor and every method that could change these safeguards outside
+/// this module.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the egress-guarded constructor (#509)"
+)]
+pub(crate) fn client_builder(resolver: Arc<Resolver>) -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .no_proxy()
+        .dns_resolver(resolver)
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+}
+
+/// [`client_builder`]'s counterpart for an approved local endpoint
+/// (`providers/local/endpoints.rs`): `host` connects only to the pinned,
+/// already-approved `destinations`, with the same redirect, retry and proxy
+/// safeguards. No DNS lookup happens for `host`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the egress-guarded constructor (#509)"
+)]
+pub(crate) fn pinned_client_builder(
+    host: &str,
+    destinations: &[SocketAddr],
+) -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .resolve_to_addrs(host, destinations)
+}
+
+/// Adds operator-configured trust anchors (`GATEWAY_S3_CA_FILE`) to a builder
+/// from [`client_builder`]. Kept here so that every change to what TLS
+/// trusts is in this module (#509).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the egress-guarded constructor (#509)"
+)]
+pub(crate) fn add_root_certificates(
+    mut builder: reqwest::ClientBuilder,
+    certificates: impl IntoIterator<Item = reqwest::Certificate>,
+) -> reqwest::ClientBuilder {
+    for certificate in certificates {
+        builder = builder.add_root_certificate(certificate);
+    }
+    builder
+}
+
 impl Resolve for Resolver {
     fn resolve(&self, name: Name) -> Resolving {
         let (purpose, policy, refused) = (
@@ -688,6 +743,10 @@ mod property_tests;
 #[cfg(test)]
 #[path = "egress_source_scan_tests.rs"]
 mod source_scan_tests;
+
+#[cfg(test)]
+#[path = "egress_client_tests.rs"]
+mod client_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1011,59 +1070,6 @@ mod tests {
         );
     }
 
-    /// Every HTTP client the gateway builds goes through the policy: a new or
-    /// edited `Client::builder()` without the resolver fails this test.
-    #[test]
-    fn every_http_client_uses_the_egress_resolver() {
-        fn files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-            for entry in std::fs::read_dir(dir).unwrap() {
-                let path = entry.unwrap().path();
-                if path.is_dir() {
-                    files(&path, out);
-                } else if path.extension().is_some_and(|e| e == "rs") {
-                    out.push(path);
-                }
-            }
-        }
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut all = Vec::new();
-        files(&root, &mut all);
-        let mut checked = 0;
-        for path in all {
-            let name = path
-                .strip_prefix(&root)
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/");
-            if name.ends_with("tests.rs")
-                || name.contains("_tests")
-                || name.contains("/tests/")
-                || name == "egress.rs"
-            {
-                continue;
-            }
-            let source = std::fs::read_to_string(&path).unwrap();
-            // Test code inside a production file starts at its `#[cfg(test)]` module.
-            let production = source.split("#[cfg(test)]\nmod tests").next().unwrap();
-            for (at, _) in production.match_indices("Client::builder()") {
-                let before = &production[..at];
-                if before
-                    .rsplit_once("fn ")
-                    .is_some_and(|(_, f)| f.starts_with("for_test"))
-                {
-                    continue; // a test-only constructor
-                }
-                let window: String = production[at..].chars().take(700).collect();
-                assert!(
-                    window.contains("dns_resolver(") || window.contains("resolve_to_addrs("),
-                    "{name}: a reqwest client without the egress resolver"
-                );
-                checked += 1;
-            }
-        }
-        assert!(checked >= 8, "found {checked} clients; did the scan break?");
-    }
-
     #[test]
     fn configured_ip_literal_endpoints_are_checked_at_startup() {
         // #352: the Bedrock allowlist case below refuses a Purpose::Provider
@@ -1187,9 +1193,7 @@ mod tests {
             }
         });
         let client = |policy: Policy| {
-            reqwest::Client::builder()
-                .no_proxy()
-                .dns_resolver(resolver_with(Purpose::Provider, policy))
+            client_builder(resolver_with(Purpose::Provider, policy))
                 .build()
                 .unwrap()
         };
@@ -1214,8 +1218,8 @@ mod tests {
     /// #321 (GitHub issue #321, "Telemetry export: shared egress refusal
     /// logs repeat and name the collector host"): a real HTTP client -
     /// exactly the `reqwest::Client`/`Resolver` path every exporter and
-    /// provider adapter uses (`egress::resolver_with` +
-    /// `.dns_resolver(..)`) - pointed at `localhost`, a real hostname
+    /// provider adapter uses (`egress::client_builder` with
+    /// `egress::resolver_with`) - pointed at `localhost`, a real hostname
     /// resolved by real DNS and refused by a strict (production-like)
     /// policy (loopback needs `GATEWAY_ENV=development`), not a synthetic
     /// address. Several repeated connection attempts against that same
@@ -1234,14 +1238,10 @@ mod tests {
     async fn telemetry_refusal_is_transition_only_and_host_free_across_repeated_real_attempts() {
         let capture = crate::log_capture_test::Capture::start();
         let strict = Policy::default();
-        let telemetry_client = reqwest::Client::builder()
-            .no_proxy()
-            .dns_resolver(resolver_with(Purpose::Telemetry, strict.clone()))
+        let telemetry_client = client_builder(resolver_with(Purpose::Telemetry, strict.clone()))
             .build()
             .unwrap();
-        let provider_client = reqwest::Client::builder()
-            .no_proxy()
-            .dns_resolver(resolver_with(Purpose::Provider, strict))
+        let provider_client = client_builder(resolver_with(Purpose::Provider, strict))
             .build()
             .unwrap();
 

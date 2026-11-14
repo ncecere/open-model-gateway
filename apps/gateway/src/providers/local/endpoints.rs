@@ -139,12 +139,8 @@ impl ApprovedEndpoints {
             if approval_refused {
                 continue;
             }
-            let client = reqwest::Client::builder()
-                .no_proxy()
-                .redirect(reqwest::redirect::Policy::none())
-                .retry(reqwest::retry::never())
+            let client = crate::egress::pinned_client_builder(host, &destinations)
                 .connect_timeout(Duration::from_secs(10))
-                .resolve_to_addrs(host, &destinations)
                 .build()
                 .map_err(|_| Rejected::Invalid)?;
             endpoints.insert(base.clone(), Endpoint { client, base });

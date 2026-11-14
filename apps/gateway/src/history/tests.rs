@@ -2,7 +2,6 @@
 //! missing or out-of-scope parent at insert, parents are never deleted or
 //! re-keyed, concurrent admissions lock no parent row (no MultiXacts), the
 //! verifier and its incident, and the upgrade of a seeded 0033 database.
-#![allow(clippy::disallowed_methods)]
 use super::*;
 use crate::governance::tests::db::{Fixture, done, fixture, request};
 use crate::store::Store;

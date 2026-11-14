@@ -1,4 +1,7 @@
 #![cfg(feature = "integration-tests")]
+// Test clients reach loopback test servers directly (#509: production code uses
+// `egress::client_builder`).
+#![allow(clippy::disallowed_methods)]
 
 use async_trait::async_trait;
 use axum::{http::StatusCode, middleware, routing::post};
