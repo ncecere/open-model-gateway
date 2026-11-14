@@ -28,7 +28,7 @@ pub use context::ResponseBound;
 use context::{ContextTracker, EventSize, SessionConfig};
 
 use super::*;
-use crate::db::accounting_failure::realtime_deadline;
+use crate::db::accounting_failure::{realtime_admission, realtime_settlement};
 use crate::{
     billing::MeterUsage,
     inference::{
@@ -317,8 +317,9 @@ impl RealtimeSession {
         }
         let bound = self.context.request(max_output_tokens);
         if self.armed != Some(bound) {
-            // An elapsed deadline is counted with what it waited on (#497).
-            realtime_deadline(timeout(
+            // An elapsed deadline is counted with what it waited on (#497);
+            // it rolls back and holds nothing beyond the session.
+            realtime_admission(timeout(
                 Duration::from_secs(5),
                 self.repository.realtime_reserve_window(
                     &self.principal,
@@ -350,7 +351,9 @@ impl RealtimeSession {
             return Err(InferenceError::InvalidUpstream);
         };
         let sequence = self.sequence.checked_add(1).ok_or(InferenceError::Busy)?;
-        realtime_deadline(timeout(
+        // An elapsed deadline leaves the forwarded request's window held as
+        // unknown cost when the session finishes (#497).
+        realtime_settlement(timeout(
             Duration::from_secs(3),
             self.repository
                 .realtime_open_response(self.id, sequence, bound),
@@ -379,7 +382,7 @@ impl RealtimeSession {
         }
         let (sequence, bound) = (*sequence, *bound);
         let usage = usage.filter(RealtimeUsage::valid);
-        realtime_deadline(timeout(
+        realtime_settlement(timeout(
             Duration::from_secs(3),
             self.repository
                 .realtime_settle_response(self.id, sequence, status, usage, bound),
@@ -424,7 +427,7 @@ impl RealtimeSession {
         drop(self.upstream.take());
         self.finished = true;
         let record = self.record(outcome, error, finish);
-        let result = realtime_deadline(timeout(
+        let result = realtime_settlement(timeout(
             Duration::from_secs(3),
             self.repository.realtime_finish(&record),
         ))
@@ -475,7 +478,7 @@ impl Drop for RealtimeSession {
         let record = self.record(Outcome::Cancelled, None, None);
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
-                let finished = realtime_deadline(timeout(Duration::from_secs(3), repository.realtime_finish(&record)));
+                let finished = realtime_settlement(timeout(Duration::from_secs(3), repository.realtime_finish(&record)));
                 if !matches!(finished.await, Ok(Ok(()))) {
                     tracing::error!(execution_id = %record.id, "cancelled realtime finalization failed; reconciliation required");
                     crate::ops_log::emit(crate::ops_log::OpsEvent::FinalizationNeedsReconciliation {

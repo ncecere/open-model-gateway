@@ -11,9 +11,12 @@ use crate::{
     visibility::{JOB_OWNER_SQL, Viewer, visible_sql},
 };
 
-/// Every statement here is counted once when it fails, at the `job_storage`
-/// stage (#497); the error is passed on unchanged.
-pub(super) use crate::db::accounting_failure::job_storage;
+/// Every statement here is counted once when it fails (#497), at the
+/// `job_storage` stage, or at `job_settlement` for the three whose failure
+/// leaves an admitted reservation to reconciliation (the job records written
+/// after admission and a native batch's upstream id); the error is passed on
+/// unchanged.
+pub(super) use crate::db::accounting_failure::{job_settlement, job_storage};
 type Result<T> = std::result::Result<T, sqlx::Error>;
 
 pub(crate) const JOB_COLUMNS: &str = "id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,upstream_id,state,upstream_status,progress,error_code,created_at,completed_at,expires_at,cancel_requested_at,deleted_at,poll_deadline_at,settled_at,video_seconds,video_size,batch_endpoint,request_total,request_completed,request_failed,batch_mode,user_id,input_file_id,work_file_id,output_file_id,error_file_id,price_tier,retry_limit,submit_started_at,in_progress_at,finalizing_at,last_progress_at,completion_window_hours";
@@ -137,7 +140,7 @@ pub(crate) struct NewJob<'a> {
 pub(crate) async fn insert_job(store: &Store, job: &NewJob<'_>) -> Result<JobRow> {
     sqlx::query_as(&format!("INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,upstream_id,poll_deadline_at,video_seconds,video_size,batch_endpoint) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING {JOB_COLUMNS}"))
         .bind(job.id).bind(job.kind.as_str()).bind(job.workspace_id).bind(job.api_key_id).bind(job.deployment_id).bind(job.execution_id).bind(job.public_model).bind(job.provider).bind(job.upstream_id.as_str()).bind(job.poll_deadline_at).bind(job.video_seconds).bind(job.video_size).bind(job.batch_endpoint)
-        .fetch_one(&store.pool).await.map_err(job_storage)
+        .fetch_one(&store.pool).await.map_err(job_settlement)
 }
 /// A new engine batch (0021): created before any upstream work.
 pub(crate) struct NewBatch<'a> {
@@ -162,7 +165,7 @@ pub(crate) struct NewBatch<'a> {
 pub(crate) async fn insert_batch(store: &Store, b: &NewBatch<'_>) -> Result<JobRow> {
     sqlx::query_as(&format!("INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,upstream_id,poll_deadline_at,batch_endpoint,batch_mode,user_id,input_file_id,work_file_id,price_tier,retry_limit,request_total,request_completed,request_failed,upstream_status,completion_window_hours) VALUES($1,'batch',$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,$11,$12,$13,$14,$15,$16,0,0,'validating',$17) RETURNING {JOB_COLUMNS}"))
         .bind(b.id).bind(b.workspace_id).bind(b.api_key_id).bind(b.deployment_id).bind(b.execution_id).bind(b.public_model).bind(b.provider).bind(b.poll_deadline_at).bind(b.endpoint.as_str()).bind(b.mode.as_str()).bind(b.user_id).bind(b.input_file_id).bind(b.work_file_id).bind(b.price_tier).bind(b.retry_limit).bind(b.requests).bind(b.window_hours)
-        .fetch_one(&store.pool).await.map_err(job_storage)
+        .fetch_one(&store.pool).await.map_err(job_settlement)
 }
 /// A job of `kind` owned by `workspace` that `viewer` may see
 /// (`crate::visibility`); anything else is not found, from the same query.
@@ -347,7 +350,7 @@ pub(crate) async fn set_upstream(store: &Store, id: Uuid, upstream: &UpstreamId)
             .bind(upstream.as_str())
             .execute(&store.pool)
             .await
-            .map_err(job_storage)?
+            .map_err(job_settlement)?
             .rows_affected()
             == 1,
     )

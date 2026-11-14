@@ -43,14 +43,16 @@ const DEADLINES: [Cause; 3] = [
     Cause::DeadlineAcquiringConnection,
     Cause::DeadlineInDatabase,
 ];
-const STAGES: [&str; 9] = [
+const STAGES: [&str; 11] = [
     "pool_acquire_and_begin",
     "governance_storage",
     "route_lookup",
     "explicit_settlement",
     "cancellation_settlement",
-    "realtime_deadline",
+    "realtime_admission",
+    "realtime_settlement",
     "job_storage",
+    "job_settlement",
     "maintenance",
     "key_authentication",
 ];
@@ -348,13 +350,22 @@ async fn the_later_stages_classify_like_the_first() {
             key_authentication(database(Some("57014"))),
             sqlx::Error::Database(_)
         ));
+        assert!(matches!(
+            job_settlement(sqlx::Error::PoolClosed),
+            sqlx::Error::PoolClosed
+        ));
         let done = tokio::time::timeout(std::time::Duration::from_secs(3), async {});
-        assert!(realtime_deadline(done).await.is_ok());
+        assert!(realtime_admission(done).await.is_ok());
         let hung = tokio::time::timeout(std::time::Duration::from_millis(1), async {
             settlement_waiting(Waiting::Connection);
             std::future::pending::<()>().await
         });
-        assert!(realtime_deadline(hung).await.is_err());
+        assert!(realtime_settlement(hung).await.is_err());
+        let hung = tokio::time::timeout(std::time::Duration::from_millis(1), async {
+            settlement_waiting(Waiting::Database);
+            std::future::pending::<()>().await
+        });
+        assert!(realtime_admission(hung).await.is_err());
     })
     .await;
     assert_eq!(
@@ -363,7 +374,12 @@ async fn the_later_stages_classify_like_the_first() {
             (Stage::JobStorage, Cause::PoolTimeout),
             (Stage::Maintenance, Cause::BackendTerminated),
             (Stage::KeyAuthentication, Cause::StatementTimeout),
-            (Stage::RealtimeDeadline, Cause::DeadlineAcquiringConnection),
+            (Stage::JobSettlement, Cause::PoolClosed),
+            (
+                Stage::RealtimeSettlement,
+                Cause::DeadlineAcquiringConnection
+            ),
+            (Stage::RealtimeAdmission, Cause::DeadlineInDatabase),
         ]
     );
 }

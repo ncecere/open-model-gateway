@@ -907,6 +907,9 @@ async fn what_an_elapsed_realtime_deadline_leaves_held(pool: PgPool) {
     assert_eq!(reserve.0, "settled", "a reservation deadline holds nothing");
     // The forwarded request is unopened: its window stays held as unknown
     // cost until reconciliation (`realtime_settlement`).
-    assert_eq!(opened.0, "unknown", "an open deadline leaves the window held");
+    assert_eq!(
+        opened.0, "unknown",
+        "an open deadline leaves the window held"
+    );
     assert!(opened.1.is_some_and(|held| held > 0), "with a held amount");
 }
