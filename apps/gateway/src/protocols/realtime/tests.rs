@@ -340,19 +340,71 @@ fn realtime_limits_are_bounded() {
     }
 }
 
-/// Exercise Axum's *actual* error producer, not `axum::Error::new` around
-/// the upstream transport's type: those are different crates after an upgrade.
-/// No database, gateway credentials or external upstream is needed.
+/// The error Axum's *actual* browser parser returns for `messages` (then a
+/// TCP close without a close frame when `drop` is set), not `axum::Error::new`
+/// around the upstream transport's type: those are different crates after an
+/// upgrade. No database, gateway credentials or external upstream is needed.
+async fn axum_error(
+    messages: Vec<tokio_tungstenite::tungstenite::Message>,
+    drop: bool,
+) -> axum::Error {
+    let (errors, mut received) = tokio::sync::mpsc::channel(1);
+    let app = axum::Router::new().route(
+        "/",
+        axum::routing::get(move |upgrade: WebSocketUpgrade| {
+            let errors = errors.clone();
+            async move {
+                upgrade
+                    .max_message_size(1024)
+                    .max_frame_size(1024)
+                    .on_upgrade(move |mut socket| async move {
+                        while let Some(message) = socket.recv().await {
+                            if let Err(error) = message {
+                                errors.send(error).await.unwrap();
+                                break;
+                            }
+                        }
+                    })
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let (mut client, _) = tokio_tungstenite::connect_async(format!("ws://{address}/"))
+        .await
+        .unwrap();
+    for message in messages {
+        client.send(message).await.unwrap();
+    }
+    if drop {
+        std::mem::drop(client);
+    }
+    let error = timeout(Duration::from_secs(30), received.recv())
+        .await
+        .expect("Axum must reject the browser message")
+        .expect("Axum must return an error");
+    server.abort();
+    error
+}
+
+fn client_frame(
+    payload: &[u8],
+    opcode: tokio_tungstenite::tungstenite::protocol::frame::coding::Data,
+    last: bool,
+) -> tokio_tungstenite::tungstenite::Message {
+    use tokio_tungstenite::tungstenite::protocol::frame::{Frame, coding::OpCode};
+    tokio_tungstenite::tungstenite::Message::Frame(Frame::message(
+        payload.to_vec(),
+        OpCode::Data(opcode),
+        last,
+    ))
+}
+
 #[tokio::test]
 async fn axum_browser_message_and_frame_limits_keep_their_error_identity() {
-    use tokio_tungstenite::tungstenite::{
-        Message as ClientMessage,
-        protocol::frame::{Frame, coding::Data, coding::OpCode},
-    };
+    use tokio_tungstenite::tungstenite::{Message as ClientMessage, protocol::frame::coding::Data};
 
-    let fragment = |len, opcode, last| {
-        ClientMessage::Frame(Frame::message(vec![b'x'; len], OpCode::Data(opcode), last))
-    };
     for (messages, oversized) in [
         // A single frame exceeds both caps (text and binary).
         (vec![ClientMessage::Text("x".repeat(1025).into())], true),
@@ -360,49 +412,63 @@ async fn axum_browser_message_and_frame_limits_keep_their_error_identity() {
         // Each frame fits, but the assembled message exceeds the message cap.
         (
             vec![
-                fragment(600, Data::Text, false),
-                fragment(600, Data::Continue, true),
+                client_frame(&[b'x'; 600], Data::Text, false),
+                client_frame(&[b'x'; 600], Data::Continue, true),
             ],
             true,
         ),
         // A protocol violation must not be mistaken for a size refusal.
-        (vec![fragment(1, Data::Continue, true)], false),
+        (vec![client_frame(b"x", Data::Continue, true)], false),
     ] {
-        let (errors, mut received) = tokio::sync::mpsc::channel(1);
-        let app = axum::Router::new().route(
-            "/",
-            axum::routing::get(move |upgrade: WebSocketUpgrade| {
-                let errors = errors.clone();
-                async move {
-                    upgrade
-                        .max_message_size(1024)
-                        .max_frame_size(1024)
-                        .on_upgrade(move |mut socket| async move {
-                            while let Some(message) = socket.recv().await {
-                                if let Err(error) = message {
-                                    errors.send(error).await.unwrap();
-                                    break;
-                                }
-                            }
-                        })
-                }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let (mut client, _) = tokio_tungstenite::connect_async(format!("ws://{address}/"))
-            .await
-            .unwrap();
-        for message in messages {
-            client.send(message).await.unwrap();
-        }
-        let error = timeout(Duration::from_secs(30), received.recv())
-            .await
-            .expect("Axum must reject the browser message")
-            .expect("Axum must return an error");
-        server.abort();
+        let error = axum_error(messages, false).await;
         assert_eq!(too_large(&error), oversized, "{error:?}");
+        if oversized {
+            assert_eq!(protocol_fault(&error), None, "{error:?}");
+        }
+    }
+}
+
+/// #410: what the client provably broke is a fault; a lost connection is not.
+#[tokio::test]
+async fn axum_browser_protocol_faults_are_told_from_a_lost_connection() {
+    use super::relay::Fault;
+    use tokio_tungstenite::tungstenite::protocol::frame::coding::Data;
+
+    for (messages, drop, fault) in [
+        (
+            vec![client_frame(b"\xff\xfe", Data::Text, true)],
+            false,
+            Some(Fault::InvalidUtf8),
+        ),
+        // Invalid UTF-8 split across fragments is still invalid.
+        (
+            vec![
+                client_frame(b"ok\xe2", Data::Text, false),
+                client_frame(b"\x28", Data::Continue, true),
+            ],
+            false,
+            Some(Fault::InvalidUtf8),
+        ),
+        (
+            vec![client_frame(b"x", Data::Continue, true)],
+            false,
+            Some(Fault::Violation),
+        ),
+        // A new data frame while a fragmented message is open.
+        (
+            vec![
+                client_frame(b"x", Data::Text, false),
+                client_frame(b"y", Data::Text, true),
+            ],
+            false,
+            Some(Fault::Violation),
+        ),
+        // The TCP connection closes without a close frame.
+        (vec![], true, None),
+    ] {
+        let error = axum_error(messages, drop).await;
+        assert_eq!(protocol_fault(&error), fault, "{error:?}");
+        assert!(!too_large(&error), "{error:?}");
     }
 }
 
@@ -417,6 +483,13 @@ fn upstream_errors_are_not_browser_size_refusals() {
     // Neither arbitrary IO errors nor attacker-controlled error text suffice.
     let io = axum::Error::new(std::io::Error::other("Capacity(MessageTooLong)"));
     assert!(!too_large(&io));
+    // Nor are they browser protocol faults (#410).
+    use tokio_tungstenite::tungstenite::error::ProtocolError;
+    let upstream = axum::Error::new(Error::Protocol(ProtocolError::UnexpectedContinueFrame));
+    assert_eq!(protocol_fault(&upstream), None);
+    let utf8 = axum::Error::new(Error::Utf8("\u{fffd}".into()));
+    assert_eq!(protocol_fault(&utf8), None);
+    assert_eq!(protocol_fault(&io), None);
 }
 
 #[cfg(feature = "integration-tests")]

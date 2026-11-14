@@ -31,10 +31,20 @@ pub(super) fn inference_error_text(error: InferenceError) -> String {
     )
 }
 
+// The `error` event messages for the gateway's own closes.
+pub(super) const IDLE_MESSAGE: &str = "The session was idle for too long";
+pub(super) const EXPIRED_MESSAGE: &str = "The session reached its maximum duration";
+pub(super) const BINARY_MESSAGE: &str = "Binary frames are not supported; send JSON text events";
+pub(super) const TOO_LARGE_MESSAGE: &str = "The event exceeds the gateway's message size limit";
+
 /// How a session ended (decides the close frame and the attempt outcome).
 pub(super) enum End {
     ClientClosed,
+    /// The connection went away without a closing handshake (an I/O error,
+    /// a reset or end of stream), or the client could no longer be written to.
     ClientGone,
+    /// The client broke the WebSocket protocol (#410).
+    ClientProtocol(Fault),
     Idle,
     MaxDuration,
     Rejected(Rejection),
@@ -82,6 +92,49 @@ pub(super) fn too_large(error: &axum::Error) -> bool {
     std::error::Error::source(error)
         .and_then(|e| e.downcast_ref::<browser_tungstenite::Error>())
         .is_some_and(|e| matches!(e, browser_tungstenite::Error::Capacity(_)))
+}
+/// A WebSocket protocol fault on the client's side, as opposed to a size
+/// refusal or a lost connection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Fault {
+    /// A text message whose payload is not UTF-8 (close 1007).
+    InvalidUtf8,
+    /// Any other protocol violation, such as a continuation frame with
+    /// nothing to continue or a non-zero reserved bit (close 1002).
+    Violation,
+}
+
+impl Fault {
+    /// The outcome, attempt error and `error` event of a session the fault
+    /// ended: failed when idle, cancelled (the hold kept) mid-response.
+    pub(super) fn ending(self, in_flight: bool) -> (Outcome, Option<InferenceError>, String) {
+        let text = match self {
+            Self::InvalidUtf8 => invalid_text("invalid_payload", "Text frames must be valid UTF-8"),
+            Self::Violation => invalid_text(
+                "protocol_error",
+                "The client violated the WebSocket protocol",
+            ),
+        };
+        if in_flight {
+            (Outcome::Cancelled, None, text)
+        } else {
+            (Outcome::Failed, Some(InferenceError::InvalidRequest), text)
+        }
+    }
+}
+
+/// Classify a browser socket error from Axum's pinned parser (see
+/// `too_large`). A reset without a closing handshake is a lost connection,
+/// not a fault, and so is an I/O error or anything unrecognised: only an
+/// error the client provably caused is blamed on it.
+pub(super) fn protocol_fault(error: &axum::Error) -> Option<Fault> {
+    use browser_tungstenite::{Error, error::ProtocolError};
+    match std::error::Error::source(error)?.downcast_ref::<Error>()? {
+        Error::Utf8(_) => Some(Fault::InvalidUtf8),
+        Error::Protocol(ProtocolError::ResetWithoutClosingHandshake) => None,
+        Error::Protocol(_) | Error::AttackAttempt => Some(Fault::Violation),
+        _ => None,
+    }
 }
 async fn send_client(
     client: &mut futures_util::stream::SplitSink<WebSocket, Message>,
@@ -155,7 +208,10 @@ impl Relay {
         self.idle = Instant::now() + self.limits.idle;
         let text = match message {
             Some(Err(error)) if too_large(&error) => return Break(End::TooLarge),
-            None | Some(Err(_)) => return Break(End::ClientGone),
+            Some(Err(error)) => {
+                return Break(protocol_fault(&error).map_or(End::ClientGone, End::ClientProtocol));
+            }
+            None => return Break(End::ClientGone),
             Some(Ok(Message::Close(_))) => return Break(End::ClientClosed),
             Some(Ok(Message::Binary(_))) => return Break(End::Binary),
             Some(Ok(Message::Text(text))) => text,

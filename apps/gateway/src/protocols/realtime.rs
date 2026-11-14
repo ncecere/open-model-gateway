@@ -700,27 +700,26 @@ pub(crate) fn validate_measured(
 // --------------------------------------------------------------- Proxy ----
 
 mod relay;
-use relay::{End, Ended, inference_error_text, invalid_text, rejection_error, rejection_text};
-
-// The `error` event messages for the gateway's own closes.
-const IDLE_MESSAGE: &str = "The session was idle for too long";
-const EXPIRED_MESSAGE: &str = "The session reached its maximum duration";
-const BINARY_MESSAGE: &str = "Binary frames are not supported; send JSON text events";
-const TOO_LARGE_MESSAGE: &str = "The event exceeds the gateway's message size limit";
+use relay::{End, Fault, inference_error_text, invalid_text, rejection_error, rejection_text};
 
 async fn proxy(socket: WebSocket, session: RealtimeSession) {
-    let Some(Ended {
-        end,
-        in_flight,
-        closing,
-    }) = relay::relay(socket, session).await
-    else {
+    let Some(ended) = relay::relay(socket, session).await else {
         return;
     };
+    let (end, in_flight) = (ended.end, ended.in_flight);
     let (close, outcome, error, finish) = match end {
-        End::ClientClosed | End::ClientGone if in_flight => (None, Outcome::Cancelled, None, None),
-        End::ClientClosed | End::ClientGone => {
+        End::ClientClosed if !in_flight => {
             (None, Outcome::Succeeded, None, Some(FinishLabel::Stop))
+        }
+        // Never a clean stop (#410): a close mid-response or a lost connection.
+        End::ClientClosed | End::ClientGone => (None, Outcome::Cancelled, None, None),
+        End::ClientProtocol(fault @ Fault::InvalidUtf8) => {
+            let (outcome, error, text) = fault.ending(in_flight);
+            (Some((1007, "invalid_payload", text)), outcome, error, None)
+        }
+        End::ClientProtocol(fault @ Fault::Violation) => {
+            let (outcome, error, text) = fault.ending(in_flight);
+            (Some((1002, "protocol_error", text)), outcome, error, None)
         }
         End::Idle | End::MaxDuration if in_flight => (
             Some((
@@ -736,7 +735,7 @@ async fn proxy(socket: WebSocket, session: RealtimeSession) {
             Some((
                 1000,
                 "idle_timeout",
-                invalid_text("idle_timeout", IDLE_MESSAGE),
+                invalid_text("idle_timeout", relay::IDLE_MESSAGE),
             )),
             Outcome::Succeeded,
             None,
@@ -746,7 +745,7 @@ async fn proxy(socket: WebSocket, session: RealtimeSession) {
             Some((
                 1000,
                 "session_expired",
-                invalid_text("session_expired", EXPIRED_MESSAGE),
+                invalid_text("session_expired", relay::EXPIRED_MESSAGE),
             )),
             Outcome::Succeeded,
             None,
@@ -762,7 +761,7 @@ async fn proxy(socket: WebSocket, session: RealtimeSession) {
             Some((
                 1003,
                 "unsupported_data",
-                invalid_text("unsupported_event", BINARY_MESSAGE),
+                invalid_text("unsupported_event", relay::BINARY_MESSAGE),
             )),
             Outcome::Failed,
             Some(InferenceError::Unsupported),
@@ -772,7 +771,7 @@ async fn proxy(socket: WebSocket, session: RealtimeSession) {
             Some((
                 1009,
                 "message_too_big",
-                invalid_text("message_too_big", TOO_LARGE_MESSAGE),
+                invalid_text("message_too_big", relay::TOO_LARGE_MESSAGE),
             )),
             Outcome::Failed,
             Some(InferenceError::InvalidRequest),
@@ -801,7 +800,7 @@ async fn proxy(socket: WebSocket, session: RealtimeSession) {
             None,
         ),
     };
-    closing.finish(close, outcome, error, finish).await;
+    ended.closing.finish(close, outcome, error, finish).await;
 }
 
 #[cfg(test)]
@@ -811,4 +810,4 @@ mod tests;
 pub(crate) use tests::inference_openapi_handshake_fixtures;
 
 #[cfg(test)]
-use relay::{is_output_delta, session_text, too_large};
+use relay::{is_output_delta, protocol_fault, session_text, too_large};
