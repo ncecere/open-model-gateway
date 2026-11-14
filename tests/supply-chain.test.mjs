@@ -17,7 +17,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
@@ -968,16 +968,24 @@ function readRustToolchainChannel() {
   return parseToolchainToml(text).channel;
 }
 
-// Every `Dockerfile` anywhere in the repository (not a fixed list), skipping directories
-// that are never source: VCS internals, dependency/build output.
+// Every Dockerfile anywhere in the repository (not a fixed list): a file named
+// `Dockerfile*`, `*.dockerfile` or `Containerfile*`, in any case (#488), the names Docker,
+// BuildKit and Podman look for or are commonly given. It skips the directories that are
+// not source: `.git` (Git's own objects),
+// `node_modules` (installed npm packages), `target*` (Cargo's build output, also
+// `target-<name>` directories of parallel builds), `dist` (the built SPA) and `.turbo`
+// (a build cache). Nothing may build from them: a build step or Compose `build:` whose
+// context or Dockerfile is in one of them is refused (#488, below), because the checks
+// here never read what is there.
 const DOCKERFILE_SKIP_DIRS = /^(\.git|node_modules|target.*|dist|\.turbo)$/;
+const DOCKERFILE_NAME = /^(dockerfile.*|.*\.dockerfile|containerfile.*)$/i;
 export function findDockerfiles(dir = root) {
   const out = [];
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     if (e.isDirectory()) {
       if (DOCKERFILE_SKIP_DIRS.test(e.name)) continue;
       out.push(...findDockerfiles(join(dir, e.name)));
-    } else if (e.name === "Dockerfile") {
+    } else if (DOCKERFILE_NAME.test(e.name)) {
       out.push(join(dir, e.name));
     }
   }
@@ -3370,4 +3378,270 @@ test("fixtures: floating, computed and malformed container and service images ar
   assert.match(action({ using: "docker", image: "docker://alpine:3" }).join(), /runs\.image: alpine:3 is not pinned by digest/);
   assert.match(action({ using: "docker", image: "Dockerfile" }).join(), /must name a digest-pinned docker:\/\/ image/);
   assert.match(action({ using: "docker" }).join(), /the image must be one literal string/);
+});
+
+// ---- what the image builds build (#488) ----
+
+// The checks above read the Dockerfiles the walker finds; these tie them to what is built.
+// An image is built only by a docker/build-push-action step or a Compose `build:` section,
+// and each names one of the Dockerfiles below through a context outside the skipped
+// directories. What a build step may change is pinned here:
+// - `file` (the Dockerfile; default `<context>/Dockerfile`) only one of KNOWN_DOCKERFILES;
+// - `context` a literal directory of the checkout (without it the action builds the Git
+//   context, which the checks never read), not in or under a skipped directory;
+// - `target` (which stage is built; the default is the last, the runtime) only where
+//   IMAGE_BUILDS lists it, which today is nowhere;
+// - no `build-contexts` (`<name>=docker-image://<image>` replaces a stage or a FROM image,
+//   pinned or not, without a change to the Dockerfile);
+// - no `BUILDKIT_*` build argument (`BUILDKIT_SYNTAX` loads another Dockerfile frontend);
+// and IMAGE_BUILDS holds every build step with the exact set of its `with:` keys and the
+// values of `context`, `file`, `target` and `build-args`. A new step, a step moved to
+// another job, or a new key is a reviewed change to this list.
+const KNOWN_DOCKERFILES = RUNTIME_DOCKERFILES;
+const IMAGE_BUILDS = new Map([
+  [".github/workflows/ci.yml: job 'staging-image'", { keys: ["cache-from", "cache-to", "context", "load", "tags"], context: "." }],
+  [".github/workflows/image.yml: job 'build'", { keys: ["attests", "cache-from", "cache-to", "context", "labels", "outputs", "platforms", "provenance"], context: "." }],
+  [".github/workflows/branch-images.yml: job 'build'", { keys: ["attests", "cache-from", "cache-to", "context", "labels", "outputs", "platforms", "provenance"], context: "." }],
+  [".github/workflows/loadtest-image.yml: job 'build'", {
+    keys: ["attests", "build-args", "cache-from", "cache-to", "context", "file", "labels", "outputs", "platforms", "provenance"],
+    context: ".", file: "deploy/loadtest/Dockerfile", "build-args": "CARGO_BUILD_JOBS=4",
+  }],
+]);
+const PINNED_BUILD_INPUTS = ["context", "file", "target", "build-args"];
+// Other ways to build an image from a workflow step. Not a complete list: a guard against the
+// ordinary ones, like the package-manager check above.
+const OTHER_IMAGE_BUILDERS = new Set(["docker/bake-action", "redhat-actions/buildah-build", "mr-smithers-excellent/docker-build-push", "elgohr/publish-docker-github-action", "docker/build-push-action/subaction"]);
+
+const isMapping = v => v !== null && typeof v === "object" && !Array.isArray(v);
+
+// A build context or Dockerfile path, relative to `base` (a directory of the checkout, "."
+// for the root): returns the normalized path, or the reason it is refused.
+export function buildPath(value, base = ".") {
+  if (typeof value !== "string" || value === "") return { refused: "must be one literal, non-empty path" };
+  if (value.includes("${")) return { refused: `'${value}' is an expression or variable, which cannot be checked` };
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value) || /^git@/i.test(value) || value.includes("#")) return { refused: `'${value}' is a remote context, which the checks never read` };
+  if (value.startsWith("/") || value.includes("\\")) return { refused: `'${value}' must be a relative path in the checkout` };
+  const path = posix.normalize(posix.join(base, value)).replace(/\/+$/, "") || ".";
+  if (path === ".." || path.startsWith("../")) return { refused: `'${value}' leaves the checkout` };
+  const skipped = path.split("/").find(segment => DOCKERFILE_SKIP_DIRS.test(segment));
+  if (skipped) return { refused: `'${value}' is in '${skipped}', a directory the Dockerfile walker skips` };
+  return { path };
+}
+
+function buildStepsOf(file, data) {
+  const steps = [];
+  for (const [name, job] of jobsOf(data)) stepsOf(job).forEach(step => steps.push([`${file}: job '${name}'`, step]));
+  stepsOf(isMapping(data?.runs) ? data.runs : null).forEach(step => steps.push([`${file}: runs`, step]));
+  return steps;
+}
+
+// Every image build command in a `run:` script: a container builder (docker, podman, ...) with
+// a build or bake subcommand, or Compose with --build, on one line (continuations joined).
+const RUN_BUILDERS = new Set(["docker", "docker-compose", "podman", "nerdctl", "buildah", "buildctl", "kaniko", "staging.py"]);
+const RUN_BUILD_WORDS = new Set(["build", "bake", "bud", "--build"]);
+export function runBuildViolations(where, script) {
+  return script.replace(/\\\n/g, " ").split(/\n|;|&&|\|\|/).flatMap(line => {
+    const words = line.split(/[^A-Za-z0-9_.+-]+/).map(word => word.toLowerCase());
+    const builder = words.some(word => RUN_BUILDERS.has(word) || word.endsWith("/staging.py"));
+    const build = words.some(word => RUN_BUILD_WORDS.has(word)) || (words.includes("buildx") && words.includes("b"));
+    return builder && build ? [`${where}: a run step builds an image (${JSON.stringify(line.trim().slice(0, 60))}); use a docker/build-push-action step listed in IMAGE_BUILDS`] : [];
+  });
+}
+
+export function imageBuildViolations(file, data, approved = IMAGE_BUILDS, seen = new Set()) {
+  const out = [];
+  for (const [where, step] of buildStepsOf(file, data)) {
+    if (typeof step.run === "string") out.push(...runBuildViolations(where, step.run));
+    if (typeof step.uses !== "string") continue;
+    const action = actionName(step.uses);
+    if (OTHER_IMAGE_BUILDERS.has(action)) { out.push(`${where}: ${action} builds an image outside the checks; use docker/build-push-action`); continue; }
+    if (action !== "docker/build-push-action") continue;
+    const inputs = step.with;
+    if (!isMapping(inputs)) { out.push(`${where}: a build step needs a literal with: mapping`); continue; }
+    if ("build-contexts" in inputs) out.push(`${where}: build-contexts can replace a stage or base image of the Dockerfile; it is not allowed`);
+    if ("build-args" in inputs) {
+      if (typeof inputs["build-args"] !== "string") out.push(`${where}: build-args must be a literal string`);
+      else for (const line of inputs["build-args"].split("\n")) if (/^\s*BUILDKIT_/i.test(line)) out.push(`${where}: build argument '${line.trim()}' changes how BuildKit builds (BUILDKIT_SYNTAX loads another frontend); it is not allowed`);
+    }
+    const context = buildPath(inputs.context);
+    if (context.refused) out.push(`${where}: context ${context.refused}`);
+    if ("file" in inputs) {
+      const dockerfile = buildPath(inputs.file);
+      if (dockerfile.refused) out.push(`${where}: file ${dockerfile.refused}`);
+      else if (!KNOWN_DOCKERFILES.includes(dockerfile.path)) out.push(`${where}: file '${inputs.file}' is not one of the known Dockerfiles (${KNOWN_DOCKERFILES.join(", ")})`);
+    } else if (context.path && !KNOWN_DOCKERFILES.includes(posix.join(context.path, "Dockerfile"))) {
+      out.push(`${where}: the default Dockerfile '${posix.join(context.path, "Dockerfile")}' is not one of the known Dockerfiles`);
+    }
+    const expected = approved.get(where);
+    if ("target" in inputs && expected?.target === undefined) out.push(`${where}: target '${inputs.target}' builds another stage than the runtime image; it is not listed in IMAGE_BUILDS`);
+    if (!expected) { out.push(`${where}: an image build step that is not listed in IMAGE_BUILDS`); continue; }
+    if (seen.has(where)) { out.push(`${where}: more than one image build step`); continue; }
+    seen.add(where);
+    const keys = Object.keys(inputs).sort();
+    if (JSON.stringify(keys) !== JSON.stringify(expected.keys)) out.push(`${where}: with: keys ${keys.join(", ")}; IMAGE_BUILDS lists ${expected.keys.join(", ")}`);
+    for (const input of PINNED_BUILD_INPUTS) if (inputs[input] !== expected[input]) out.push(`${where}: ${input} is ${JSON.stringify(inputs[input])}; IMAGE_BUILDS lists ${JSON.stringify(expected[input])}`);
+  }
+  return out;
+}
+
+// Compose `build:` sections (#488): a build of a service takes only an explicit `context`
+// (relative to the Compose file, in the checkout, outside the skipped directories) and an
+// optional `dockerfile` (relative to the context, one of KNOWN_DOCKERFILES). Every other key
+// is refused, among them `target` (another stage), `additional_contexts` (replaces a stage or
+// base image, as build-contexts does), `args` (BUILDKIT_SYNTAX), `dockerfile_inline`, `ssh`
+// and `secrets`. Each Compose file is checked on its own, so an override file cannot add one.
+const COMPOSE_BUILD_KEYS = ["context", "dockerfile"];
+export const COMPOSE_FILE = /^(docker-)?compose(\.[^/]+)?\.ya?ml$/i;
+
+export function composeBuildViolations(file, data, builds = []) {
+  const out = [];
+  const services = isMapping(data?.services) ? data.services : {};
+  for (const [name, service] of Object.entries(services)) {
+    if (!isMapping(service) || service.build === undefined) continue;
+    const where = `${file}: service '${name}' build`;
+    const build = typeof service.build === "string" ? { context: service.build } : service.build;
+    if (!isMapping(build)) { out.push(`${where}: must be a context path or a mapping`); continue; }
+    for (const key of Object.keys(build)) if (!COMPOSE_BUILD_KEYS.includes(key)) out.push(`${where}: '${key}' is not allowed (only ${COMPOSE_BUILD_KEYS.join(" and ")})`);
+    const context = buildPath(build.context, posix.dirname(file));
+    if (context.refused) { out.push(`${where}: context ${context.refused}`); continue; }
+    const dockerfile = buildPath(build.dockerfile ?? "Dockerfile", context.path);
+    if (dockerfile.refused) out.push(`${where}: dockerfile ${dockerfile.refused}`);
+    else if (!KNOWN_DOCKERFILES.includes(dockerfile.path)) out.push(`${where}: dockerfile '${dockerfile.path}' is not one of the known Dockerfiles (${KNOWN_DOCKERFILES.join(", ")})`);
+    else builds.push({ file, service: name, context: context.path, dockerfile: dockerfile.path });
+  }
+  return out;
+}
+
+function repoComposeFiles(dir = root) {
+  return readdirSync(dir, { withFileTypes: true }).flatMap(e => {
+    if (e.isDirectory()) return dir === root && e.name !== "deploy" ? [] : repoComposeFiles(join(dir, e.name));
+    return COMPOSE_FILE.test(e.name) ? [join(dir, e.name).slice(root.length)] : [];
+  });
+}
+
+test("every workflow image build step builds a known Dockerfile, context and stage, with its listed inputs (#488)", () => {
+  const seen = new Set();
+  const violations = repoFiles().flatMap(({ file, text }) => imageBuildViolations(file, toData(parseStrict(text, file)), IMAGE_BUILDS, seen));
+  assert.deepEqual(violations, []);
+  assert.deepEqual([...IMAGE_BUILDS.keys()].filter(where => !seen.has(where)), [], "every listed build step exists");
+  assert.deepEqual(allDockerfiles().map(({ file }) => file).sort(), [...KNOWN_DOCKERFILES].sort(), "the walker finds exactly the known Dockerfiles");
+});
+
+test("every Compose build section builds a known Dockerfile from the checkout (#488)", () => {
+  const files = repoComposeFiles();
+  for (const expected of ["compose.yaml", "deploy/demo/compose.yaml", "deploy/loadtest/compose.yaml", "deploy/staging/compose.yaml", "deploy/staging/compose.openai.yaml"]) assert.ok(files.includes(expected), expected);
+  const builds = [];
+  const violations = files.flatMap(file => composeBuildViolations(file, toData(parseStrict(readLocalFromRepo(file), file)), builds));
+  assert.deepEqual(violations, []);
+  // The staging services that share the gateway's build (through the merge key) are read.
+  assert.deepEqual([...new Set(builds.map(b => `${b.file} ${b.context} ${b.dockerfile}`))], ["deploy/staging/compose.yaml . Dockerfile"]);
+  assert.ok(builds.length >= 2 && builds.some(b => b.service === "gateway"), "the gateway service and the ops services built with it");
+});
+
+test("fixtures: the Dockerfile walker finds Dockerfile*, *.dockerfile and Containerfile* in any case, outside the skipped directories (#488)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "omg-walker-"));
+  try {
+    const unpinned = "FROM alpine:3\n";
+    // No two names differ only in case, so the fixture also holds on a case-insensitive file system.
+    const files = ["Dockerfile", "Dockerfile.release", "DOCKERFILE.dev", "app.dockerfile", "Containerfile", "containerfile.prod", "deploy/dockerfile", "deploy/x.Dockerfile", "deploy/sub/CONTAINERFILE",
+      ".git/Dockerfile", "node_modules/p/Dockerfile", "target/Dockerfile", "target-wt/Containerfile", "apps/web/dist/Dockerfile", ".turbo/Dockerfile", "notes.txt", "Dockerfile-notes/README"];
+    for (const file of files) { mkdirSync(join(dir, posix.dirname(file)), { recursive: true }); writeFileSync(join(dir, file), unpinned); }
+    const found = findDockerfiles(dir).map(p => p.slice(dir.length + 1)).sort();
+    assert.deepEqual(found, files.slice(0, 9).sort());
+    // Each one found is checked: its unpinned base is reported.
+    for (const file of found) assert.equal(unpinnedDockerfileBases(file, unpinned).length, 1, file);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("fixtures: a build step or Compose build that builds something else is refused (#488)", () => {
+  const load = name => toData(parseStrict(readFileSync(join(workflowsDir, `${name}.yml`), "utf8"), `.github/workflows/${name}.yml`));
+  const workflows = Object.fromEntries(["ci", "image", "branch-images", "loadtest-image"].map(name => [name, load(name)]));
+  const buildStep = (data, job) => stepsOf(data.jobs[job]).find(s => actionName(s.uses ?? "") === "docker/build-push-action");
+  const check = (name, data) => imageBuildViolations(`.github/workflows/${name}.yml`, data, IMAGE_BUILDS, new Set());
+  for (const [name, data] of Object.entries(workflows)) assert.deepEqual(check(name, data), [], name);
+  const jobOf = { ci: "staging-image", image: "build", "branch-images": "build", "loadtest-image": "build" };
+  const OTHER = `mirror.gcr.io/library/debian:13-slim@sha256:${"b".repeat(64)}`;
+  const RUST = "mirror.gcr.io/library/rust:1.99.1-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c";
+  const mutations = [
+    ["target on the publish build", "image", w => { w.target = "build"; }, /target 'build' builds another stage/],
+    ["target on the pull-request scan build", "ci", w => { w.target = "build"; }, /target 'build' builds another stage/],
+    ["target on the branch build", "branch-images", w => { w.target = "web"; }, /target 'web'/],
+    ["an unknown Dockerfile.release", "image", w => { w.file = "Dockerfile.release"; }, /file 'Dockerfile\.release' is not one of the known Dockerfiles/],
+    ["a Containerfile", "ci", w => { w.file = "Containerfile"; }, /file 'Containerfile' is not one of the known/],
+    ["a *.dockerfile", "loadtest-image", w => { w.file = "deploy/loadtest/release.dockerfile"; }, /not one of the known/],
+    ["a Dockerfile under target*", "image", w => { w.file = "target-release/Dockerfile"; }, /in 'target-release', a directory the Dockerfile walker skips/],
+    ["a Dockerfile under dist", "ci", w => { w.file = "apps/web/dist/Dockerfile"; }, /in 'dist'/],
+    ["a known Dockerfile reached through ..", "loadtest-image", w => { w.file = "deploy/loadtest/../../Dockerfile"; }, /file is "deploy\/loadtest\/\.\.\/\.\.\/Dockerfile"/],
+    ["a file from an expression", "image", w => { w.file = "${{ inputs.dockerfile }}"; }, /file '\$\{\{ inputs\.dockerfile \}\}' is an expression/],
+    ["build-contexts swapping the Rust base", "image", w => { w["build-contexts"] = `${RUST}=docker-image://${OTHER}`; }, /build-contexts can replace a stage/],
+    ["build-contexts replacing a stage", "loadtest-image", w => { w["build-contexts"] = "build=docker-image://rust:latest"; }, /build-contexts/],
+    ["a BUILDKIT_SYNTAX build-arg", "image", w => { w["build-args"] = "BUILDKIT_SYNTAX=docker.io/docker/dockerfile:1"; }, /build argument 'BUILDKIT_SYNTAX=.*' changes how BuildKit builds/],
+    ["a BUILDKIT_SYNTAX line beside a listed build-arg", "loadtest-image", w => { w["build-args"] += "\nBUILDKIT_SYNTAX=docker.io/docker/dockerfile:1"; }, /build argument 'BUILDKIT_SYNTAX/],
+    ["context in dist", "image", w => { w.context = "apps/web/dist"; }, /context 'apps\/web\/dist' is in 'dist'/],
+    ["context in target", "ci", w => { w.context = "target"; }, /context 'target' is in 'target'/],
+    ["context in node_modules", "branch-images", w => { w.context = "node_modules/pkg"; }, /in 'node_modules'/],
+    ["context in .git", "loadtest-image", w => { w.context = ".git"; }, /in '\.git'/],
+    ["no context (the Git context)", "image", w => { delete w.context; }, /context must be one literal, non-empty path/],
+    ["a remote context", "ci", w => { w.context = "https://github.com/other/repo.git#main"; }, /remote context/],
+    ["a context outside the checkout", "image", w => { w.context = ".."; }, /leaves the checkout/],
+    ["a context with no known Dockerfile", "ci", w => { w.context = "apps/web"; }, /default Dockerfile 'apps\/web\/Dockerfile' is not one of the known/],
+    ["another key", "ci", w => { w.secrets = "x=y"; }, /with: keys .*secrets/],
+    ["a removed key", "image", w => { delete w.provenance; }, /with: keys/],
+    ["another listed build-arg value", "loadtest-image", w => { w["build-args"] = "CARGO_BUILD_JOBS=8"; }, /build-args is "CARGO_BUILD_JOBS=8"/],
+  ];
+  for (const [label, name, mutate, reason] of mutations) {
+    const data = structuredClone(workflows[name]);
+    mutate(buildStep(data, jobOf[name]).with);
+    const found = check(name, data);
+    assert.ok(found.some(v => reason.test(v)), `${label}: ${found.join("; ")}`);
+  }
+  // A build step that is not listed, a second one, or another builder.
+  const extra = (name, step) => { const data = structuredClone(workflows[name]); data.jobs[jobOf[name]].steps.push(step); return check(name, data); };
+  const listed = buildStep(workflows.ci, "staging-image");
+  assert.match(extra("ci", structuredClone(listed)).join(), /more than one image build step/);
+  const moved = structuredClone(workflows.ci);
+  moved.jobs.other = { "runs-on": "ubuntu-24.04", steps: [structuredClone(listed)] };
+  assert.match(check("ci", moved).join(), /job 'other': an image build step that is not listed/);
+  assert.match(extra("image", { uses: `docker/bake-action@${"0".repeat(40)}` }).join(), /docker\/bake-action builds an image outside the checks/);
+  assert.match(imageBuildViolations("action.yml", { runs: { using: "composite", steps: [{ uses: `docker/build-push-action@${"0".repeat(40)}`, with: { context: "." } }] } }).join(), /action\.yml: runs: an image build step that is not listed/);
+  // An image built by a run step.
+  for (const run of ["docker build --target build -t x .", "docker buildx build -f Containerfile .", "docker image build .", "docker buildx b .", "docker buildx bake", "docker \\\n  build .", "docker compose -f deploy/staging/compose.yaml build gateway",
+    "docker compose up --build -d", "docker-compose build", "podman build .", "buildah bud .", "python3 scripts/staging.py build", "set -e; docker build ."]) {
+    assert.equal(extra("ci", { run }).length, 1, run);
+  }
+  for (const run of ["docker buildx version", "docker buildx imagetools inspect x", "cargo build --locked", "npm run build:web", "python3 scripts/staging.py up", "docker compose -f deploy/staging/compose.yaml up -d --wait"]) {
+    assert.deepEqual(extra("ci", { run }), [], run);
+  }
+
+  // Compose: the staging gateway build and its merge-key copies.
+  const composeFile = "deploy/staging/compose.yaml";
+  const compose = toData(parseStrict(readLocalFromRepo(composeFile), composeFile));
+  assert.deepEqual(composeBuildViolations(composeFile, compose), []);
+  const composeMutations = [
+    ["target", b => { b.target = "build"; }, /'target' is not allowed/],
+    ["additional_contexts swapping the base", b => { b.additional_contexts = { [RUST]: `docker-image://${OTHER}` }; }, /'additional_contexts' is not allowed/],
+    ["args with BUILDKIT_SYNTAX", b => { b.args = { BUILDKIT_SYNTAX: "docker.io/docker/dockerfile:1" }; }, /'args' is not allowed/],
+    ["an inline Dockerfile", b => { b.dockerfile_inline = `FROM ${OTHER}`; }, /'dockerfile_inline' is not allowed/],
+    ["an unknown Dockerfile.release", b => { b.dockerfile = "Dockerfile.release"; }, /dockerfile 'Dockerfile\.release' is not one of the known/],
+    ["a Containerfile", b => { b.dockerfile = "Containerfile"; }, /dockerfile 'Containerfile' is not one of the known/],
+    ["a Dockerfile in dist", b => { b.dockerfile = "apps/web/dist/Dockerfile"; }, /in 'dist'/],
+    ["context in a skipped directory", b => { b.context = "../../target"; }, /context '\.\.\/\.\.\/target' is in 'target'/],
+    ["context outside the checkout", b => { b.context = "../../.."; }, /leaves the checkout/],
+    ["context from a variable", b => { b.context = "${BUILD_CONTEXT:-../..}"; }, /is an expression or variable/],
+    ["a remote context", b => { b.context = "https://github.com/other/repo.git"; }, /remote context/],
+    ["no context", b => { delete b.context; }, /context must be one literal/],
+  ];
+  for (const [label, mutate, reason] of composeMutations) {
+    const data = structuredClone(compose);
+    mutate(data.services.gateway.build);
+    const found = composeBuildViolations(composeFile, data);
+    assert.ok(found.some(v => reason.test(v)), `${label}: ${found.join("; ")}`);
+  }
+  assert.match(composeBuildViolations("deploy/staging/compose.openai.yaml", { services: { gateway: { build: { target: "build" } } } }).join(), /'target' is not allowed/, "an override file cannot add a target");
+  assert.match(composeBuildViolations("compose.yaml", { services: { x: { build: "deploy/loadtest/dist" } } }).join(), /in 'dist'/, "the string form is a context");
+  assert.deepEqual(composeBuildViolations("deploy/loadtest/compose.yaml", { services: { x: { build: { context: "../..", dockerfile: "deploy/loadtest/Dockerfile" } } } }), [], "the load-test Dockerfile from the root");
+  assert.deepEqual(composeBuildViolations("deploy/loadtest/compose.yaml", { services: { x: { build: "." } } }), [], "the load-test Dockerfile as its directory's default");
+  assert.match(composeBuildViolations("compose.yaml", { services: { x: { build: ["."] } } }).join(), /must be a context path or a mapping/);
 });
