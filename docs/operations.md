@@ -438,7 +438,7 @@ The [example monitoring files](#alerting-and-dashboards) cover this counter. `pr
 Example monitoring files are in [`deploy/monitoring/`](../deploy/monitoring/):
 
 - `prometheus.example.yml`: scrape configuration for `job="open-model-gateway"`.
-- `prometheus-rules.yml`: example alerts. Check them with `promtool check rules` before deploying them; it is not run in CI (#TBD). They cover metrics down, 5xx rate, inference p95 latency, held settlements, accounting failures by stage and cause (settlement stages critical on the first failure), growing unknown reservations, a stuck pending floor, budget denials, capacity saturation, upstream failure rate, time to first token, pool saturation, alert-evaluator failures, and collector errors. The thresholds are starting points.
+- `prometheus-rules.yml`: example alerts. Check them with `promtool check rules` before deploying them; it is not run in CI (#584). They cover metrics down, 5xx rate, inference p95 latency, held settlements, accounting failures by stage and cause (settlement stages critical on the first failure), growing unknown reservations, a stuck pending floor, budget denials, capacity saturation, upstream failure rate, time to first token, pool saturation, alert-evaluator failures, and collector errors. The thresholds are starting points.
 - `grafana-dashboard.json`: import it and select a Prometheus data source. It has `instance` and `provider` variables and overview, HTTP, inference, accounting, and internals rows.
 
 Also probe `/health/ready` from outside, for example with blackbox-exporter, because metrics alone cannot tell you the public listener is reachable.

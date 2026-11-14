@@ -1,7 +1,7 @@
 // Example monitoring files (deploy/monitoring): the Prometheus rules and the
 // Grafana dashboard parse, name only metric families and labels the gateway
 // exports (apps/gateway/src/metrics_export.rs), and cover the accounting
-// failure counter (#528). promtool is not run here or in CI (#TBD); check the
+// failure counter (#528). promtool is not run here or in CI (#584); check the
 // rules with `promtool check rules` before deploying them.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -116,7 +116,7 @@ test("accounting failures alert, split by settlement stage (#528)", () => {
 test("the docs do not claim CI validates the rules with promtool (#528)", () => {
   const docs = read("docs/operations.md");
   assert.doesNotMatch(docs, /validated with `promtool/);
-  assert.match(docs, /`promtool check rules` before deploying them; it is not run in CI \(#TBD\)/);
+  assert.match(docs, /`promtool check rules` before deploying them; it is not run in CI \(#584\)/);
 });
 
 test("dashboard panel ids are unique and panels do not overlap", () => {
