@@ -514,7 +514,7 @@ mod tests {
     /// (#511). Clippy resolves these paths through aliases, re-exports and
     /// renamed imports, so `tokio_tungstenite::tungstenite::...` and
     /// `aes_gcm::aead::Generate` are covered by the defining crate's path.
-    const CLIPPY_LIST: [&str; 20] = [
+    const CLIPPY_LIST: [&str; 30] = [
         "tungstenite::handshake::client::generate_key",
         "rustls::crypto::SecureRandom::fill",
         "crypto_common::Generate::generate",
@@ -535,6 +535,16 @@ mod tests {
         "std::hash::RandomState::new",
         "std::collections::HashMap::hasher",
         "std::collections::HashSet::hasher",
+        "tower::util::rng::HasherRng::new",
+        "tower::util::rng::Rng::next_u64",
+        "tower::util::rng::Rng::next_f64",
+        "tower::util::rng::Rng::next_range",
+        "tungstenite::client::IntoClientRequest::into_client_request",
+        "rustls::crypto::SupportedKxGroup::start",
+        "rustls::crypto::SupportedKxGroup::start_and_complete",
+        "rustls::crypto::ring::Ticketer::new",
+        "rustls::crypto::aws_lc_rs::Ticketer::new",
+        "rustls::server::ProducesTickets::encrypt",
     ];
 
     /// Every call on [`CLIPPY_LIST`] is a `disallowed-methods` entry in
@@ -560,6 +570,74 @@ mod tests {
 
     /// What Clippy cannot name (a field, a type used through `Default`, a
     /// device path) is named here instead (#511).
+    /// The crates whose paths `clippy.toml` names (#509, #511), at the
+    /// versions the paths were written and probed for. Clippy reports a
+    /// path it cannot resolve only as a warning, and not at all under
+    /// `allow-invalid`, so a version change must bring the entries up for
+    /// review: update the paths, re-run a planted probe, then this table.
+    const REVIEWED_CRATES: [(&str, &[&str]); 8] = [
+        ("crypto-common", &["0.1", "0.2"]),
+        ("oauth2", &["5"]),
+        ("openidconnect", &["4"]),
+        ("reqwest", &["0.12"]),
+        ("rustls", &["0.23"]),
+        ("sqlx", &["0.8"]),
+        ("tower", &["0.5"]),
+        ("tungstenite", &["0.29", "0.30"]),
+    ];
+
+    /// `major.minor` for `0.x` versions, `major` otherwise (the semver
+    /// compatibility line).
+    fn line(version: &str) -> String {
+        let mut parts = version.split('.');
+        let major = parts.next().unwrap_or_default();
+        if major == "0" {
+            format!("0.{}", parts.next().unwrap_or_default())
+        } else {
+            major.to_owned()
+        }
+    }
+
+    #[test]
+    fn the_crates_clippy_toml_names_are_at_their_reviewed_versions() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let lock = std::fs::read_to_string(root.join("../../Cargo.lock")).unwrap();
+        let mut versions: std::collections::BTreeMap<&str, BTreeSet<String>> = Default::default();
+        let mut name = None;
+        for text in lock.lines() {
+            if let Some(value) = text.strip_prefix("name = ") {
+                name = Some(value.trim_matches('"'));
+            } else if let (Some(crate_name), Some(value)) =
+                (name.take(), text.strip_prefix("version = "))
+            {
+                versions
+                    .entry(crate_name)
+                    .or_default()
+                    .insert(line(value.trim_matches('"')));
+            }
+        }
+        for (crate_name, reviewed) in REVIEWED_CRATES {
+            let reviewed: BTreeSet<String> = reviewed.iter().map(|v| (*v).to_owned()).collect();
+            assert_eq!(
+                versions.get(crate_name),
+                Some(&reviewed),
+                "Cargo.lock: {crate_name} moved; review its clippy.toml entries (#511)"
+            );
+        }
+        // Every crate an entry names is in the table.
+        let config = std::fs::read_to_string(root.join("clippy.toml")).unwrap();
+        for entry in config
+            .lines()
+            .filter_map(|l| l.trim_start().strip_prefix("{ path = \""))
+        {
+            let first = entry.split("::").next().unwrap().replace('_', "-");
+            assert!(
+                first == "std" || REVIEWED_CRATES.iter().any(|(c, _)| *c == first),
+                "clippy.toml names {first}; add it to REVIEWED_CRATES (#511)"
+            );
+        }
+    }
+
     #[test]
     fn sources_clippy_cannot_name_are_named() {
         for (source, expected) in [
@@ -584,6 +662,44 @@ mod tests {
                 "fn a() { let _ = <ahash::RandomState as Default>::default(); }",
                 vec!["RandomState"],
             ),
+            (
+                "fn a() { let _ = tower::util::rng::HasherRng::default(); }",
+                vec!["HasherRng"],
+            ),
+            // A path assembled by `concat!` or spelled with `.` and `//`.
+            (
+                "fn a() { let _ = std::fs::read(concat!(\"/dev/ur\", \"andom\")); }",
+                vec!["urandom"],
+            ),
+            (
+                "const P: &str = std::concat!(\"/dev\", concat!(\"/ran\", \"dom\"));",
+                vec!["/dev/random"],
+            ),
+            (
+                "fn a() { let _ = std::fs::read(\"/dev/./random\"); }",
+                vec!["/dev/random"],
+            ),
+            (
+                "fn a() { let _ = std::fs::read(\"/dev//random\"); }",
+                vec!["/dev/random"],
+            ),
+            (
+                "fn a() { let _ = std::fs::read(\"/tmp/../dev/random\"); }",
+                vec!["/dev/random"],
+            ),
+            (
+                "fn a() { let _ = std::fs::read(\"/proc/sys/kernel/random/uuid\"); }",
+                vec!["/proc/sys/kernel/random"],
+            ),
+            (
+                "fn a() { let _ = std::fs::read(\"/proc//sys/./kernel/random/boot_id\"); }",
+                vec!["/proc/sys/kernel/random"],
+            ),
+            // pgcrypto's CSPRNG, in SQL.
+            (
+                "const Q: &str = \"SELECT encode(gen_random_bytes(32),'hex')\";",
+                vec!["gen_random_bytes"],
+            ),
         ] {
             assert_eq!(draws(source), expected, "{source}");
         }
@@ -591,6 +707,10 @@ mod tests {
             "fn a() { let _ = std::fs::read(\"/dev/null\"); }",
             "/// A random, opaque value.\nfn a() {}",
             "fn a() { let _ = \"/dev/randomness\"; }",
+            "fn a() { let _ = concat!(\"/dev/\", \"null\"); }",
+            "/// Ids come from `/proc`-free sources.\nfn a() {}",
+            // Row ids: identifiers only, by policy.
+            "const Q: &str = \"INSERT INTO t(id) VALUES(gen_random_uuid())\";",
         ] {
             assert!(draws(source).is_empty(), "{source}");
         }

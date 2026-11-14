@@ -362,6 +362,15 @@ fn sanctioned(name: &str) -> Vec<Finding> {
             guarded("fn add_root_certificates"),
         ],
         "db.rs" => vec![level("allow", false, &[], None, "let in start")],
+        // tungstenite fills the upstream handshake's Sec-WebSocket-Key from
+        // its own generator: a protocol nonce, not a gateway secret (#511).
+        "providers/openai/realtime.rs" => vec![level(
+            "expect",
+            false,
+            &[],
+            Some("tungstenite's Sec-WebSocket-Key is a handshake nonce, not a secret (#511)"),
+            "fn handshake_request",
+        )],
         "lib.rs" => vec![level("allow", true, &["test"], None, "crate")],
         _ => Vec::new(),
     }
