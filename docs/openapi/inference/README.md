@@ -101,7 +101,8 @@ extensions are part of this contract, **not covered by SDK generation**:
   drop test; cancellation itself cannot be inferred from response bytes.
 - `x-omg-websocket` describes the 101 handshake, mutually exclusive Bearer or
   key-subprotocol authentication, the client-event allowlist and close codes
-  1000 (idle/session expiry), 1003 (binary client frames), 1008 (event/policy/rate
+  1000 (idle/session expiry), 1002 (client WebSocket protocol violation), 1003
+  (binary client frames), 1007 (text frame or close reason not UTF-8), 1008 (event/policy/rate
   denials), 1009 (transport size cap), and 1011 (fatal upstream/server failure).
   Frames are not HTTP bodies. See [Realtime](../../realtime.md).
 - `x-omg-refusals` records status, native envelope, code and trigger. Video

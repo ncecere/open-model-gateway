@@ -1112,6 +1112,175 @@ async fn an_oversized_fragmented_message_cancels_an_in_flight_session_and_keeps_
     cap_closes_an_in_flight_session(pool, Trip::Fragments).await;
 }
 
+/// How a client ends a session other than by a clean close (#410).
+#[derive(Clone, Copy, Debug)]
+enum Leave {
+    /// A text frame whose payload is not UTF-8.
+    InvalidUtf8,
+    /// A continuation frame with no message to continue.
+    StrayContinuation,
+    /// The TCP connection goes away without a close frame.
+    Drop,
+}
+
+/// The close code, reason and `error` event code the gateway answers a
+/// client protocol fault with (`None`: the client is gone; nothing is sent).
+fn fault_close(how: Leave) -> Option<(u16, &'static str)> {
+    match how {
+        Leave::InvalidUtf8 => Some((1007, "invalid_payload")),
+        Leave::StrayContinuation => Some((1002, "protocol_error")),
+        Leave::Drop => None,
+    }
+}
+
+/// Leave the session the given way; for a protocol fault, check the
+/// `error` event and close frame the gateway answers with.
+async fn leave(mut client: Client, how: Leave) {
+    use tungstenite::protocol::frame::{
+        Frame,
+        coding::{Data, OpCode},
+    };
+    let frame = |payload: &[u8], data| {
+        Message::Frame(Frame::message(payload.to_vec(), OpCode::Data(data), true))
+    };
+    match how {
+        Leave::InvalidUtf8 => {
+            let bad = frame(b"{\"type\":\"\xff\xfe\"}", Data::Text);
+            client.send(bad).await.unwrap();
+        }
+        Leave::StrayContinuation => client.send(frame(b"{}", Data::Continue)).await.unwrap(),
+        Leave::Drop => {
+            drop(client);
+            return;
+        }
+    }
+    let (code, reason) = fault_close(how).unwrap();
+    let error = until(&mut client, "error").await;
+    assert_eq!(error["error"]["type"], "invalid_request_error", "{error}");
+    assert_eq!(error["error"]["code"], reason, "{error}");
+    let close = next(&mut client).await;
+    assert_eq!(close["code"], code, "{how:?}: {close}");
+    assert_eq!(close["reason"], reason, "{how:?}: {close}");
+}
+
+/// No response in flight: a protocol fault fails the session, a dropped
+/// connection cancels it, and neither is presented as a clean stop. The
+/// admission window is released either way (nothing upstream was billable).
+async fn client_leaves_an_idle_session(pool: PgPool, how: Leave) {
+    let g = gateway(pool, Init::Safe, vec![], limits()).await;
+    let mut client = g.connect().await;
+    opened(&mut client).await;
+    leave(client, how).await;
+    let row = g.finished().await;
+    let expected = match how {
+        Leave::InvalidUtf8 | Leave::StrayContinuation => {
+            ("failed", Some("invalid_request_error"), "error")
+        }
+        Leave::Drop => ("cancelled", None, "cancelled"),
+    };
+    assert_eq!(
+        (
+            row["state"].as_str().unwrap(),
+            row["error_code"].as_str(),
+            row["finish_reason"].as_str().unwrap()
+        ),
+        expected,
+        "{how:?}: {row}"
+    );
+    // No response was opened: the admission window settles at a known zero.
+    assert_eq!(row["reservation"], "settled", "{how:?}: {row}");
+    assert_eq!(row["actual"], 0, "{how:?}: {row}");
+    assert!(
+        g.mock.shared.wait_closed().await,
+        "the upstream socket is closed"
+    );
+    let types = g.mock.shared.received_types();
+    assert!(
+        types.iter().all(|t| t == "session.update"),
+        "nothing the client sent reached upstream: {types:?}"
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn an_invalid_utf8_text_frame_fails_an_idle_session(pool: PgPool) {
+    client_leaves_an_idle_session(pool, Leave::InvalidUtf8).await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_stray_continuation_frame_fails_an_idle_session(pool: PgPool) {
+    client_leaves_an_idle_session(pool, Leave::StrayContinuation).await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_dropped_connection_cancels_an_idle_session(pool: PgPool) {
+    client_leaves_an_idle_session(pool, Leave::Drop).await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_clean_close_ends_an_idle_session_as_a_stop(pool: PgPool) {
+    let g = gateway(pool, Init::Safe, vec![], limits()).await;
+    let mut client = g.connect().await;
+    opened(&mut client).await;
+    client.close(None).await.unwrap();
+    let row = g.finished().await;
+    assert_eq!(
+        (row["state"].as_str(), row["finish_reason"].as_str()),
+        (Some("succeeded"), Some("stop")),
+        "{row}"
+    );
+    assert!(row["error_code"].is_null(), "{row}");
+}
+
+/// A protocol fault while a response is in flight: the client is told why,
+/// upstream is closed and the session fails with the response's window kept
+/// as unknown cost; nothing is settled.
+async fn client_fault_fails_an_in_flight_session(pool: PgPool, how: Leave) {
+    let g = gateway(pool, Init::Safe, vec![Reply::Hang], limits()).await;
+    let mut client = g.connect().await;
+    opened(&mut client).await;
+    send(&mut client, json!({"type":"response.create"})).await;
+    until(&mut client, "response.created").await;
+    leave(client, how).await;
+    assert!(
+        g.mock.shared.wait_closed().await,
+        "the fault closes the upstream socket"
+    );
+    let row = g.finished().await;
+    assert_eq!(row["state"], "failed", "{how:?}: {row}");
+    assert_eq!(row["error_code"], "invalid_request_error", "{how:?}: {row}");
+    assert_eq!(row["finish_reason"], "error", "never a clean stop");
+    assert_eq!(
+        row["reservation"], "unknown",
+        "held, never released or settled"
+    );
+    assert!(row["actual"].is_null(), "no actual cost on the reservation");
+    assert_eq!(row["held"], hold(expected_bounds(&g, &[])[0], 1000));
+    assert!(row["input_tokens"].is_null(), "unknown usage is not zero");
+    let id = row["id"].as_str().unwrap();
+    let responses = g.responses(id).await;
+    assert_eq!(
+        (responses.len(), responses[0]["state"].as_str()),
+        (1, Some("unknown"))
+    );
+    assert!(
+        g.ledger(id)
+            .await
+            .iter()
+            .all(|(kind, _)| kind != "settlement"),
+        "no settlement is fabricated"
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn an_invalid_utf8_text_frame_fails_an_in_flight_session(pool: PgPool) {
+    client_fault_fails_an_in_flight_session(pool, Leave::InvalidUtf8).await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_stray_continuation_frame_fails_an_in_flight_session(pool: PgPool) {
+    client_fault_fails_an_in_flight_session(pool, Leave::StrayContinuation).await;
+}
+
 /// Shared with the inference contract; all traffic uses the existing local
 /// gateway + mock upstream fixture, never a paid provider.
 pub(crate) async fn inference_openapi_handshake_fixtures(

@@ -27,7 +27,7 @@ Before any client event is forwarded, the gateway sends its own `session.update`
 
 ## Client events
 
-Only JSON text frames are accepted. A binary frame gets an error event and close 1003. Allowed event types:
+Only JSON text frames are accepted. A binary frame gets an error event and close 1003. A text frame or close reason that is not UTF-8 gets an `invalid_payload` error event and close 1007; any other WebSocket protocol violation (for example a continuation frame with nothing to continue) gets a `protocol_error` error event and close 1002. Allowed event types:
 
 | Event | Rules |
 | --- | --- |
@@ -66,7 +66,16 @@ The session holds one process concurrency permit (`GATEWAY_MAX_CONCURRENT_REQUES
 - **`response.done`:** usage must be complete and consistent; otherwise it is unknown. Known usage is valued with the pinned price, each meter rounded up, and replaces the window. Unknown usage keeps `max(window, known floor)`. A response above its window's text-input, audio-input or output bound is recorded as unbounded.
 - **Rate limits:** requests per minute and concurrency count the session once.
 - **End:** the reservation settles when every response settled. Its actual cost is the sum of the responses, with 15-key cost components. Otherwise it stays `unknown` and retains the held windows; an unused reserved window is released. A forwarded `response.create` that was neither created nor rejected, and a response still open at the end, keep their windows as unknown. A session with no responses settles at a known zero: realtime sessions bill only per response, and input transcription is refused. Manual reconciliation (`resolve_usage`) of realtime sessions returns 400, because the valuation is per response.
-- **Termination:** client close, a client disconnect or any gateway-side end drops the upstream socket immediately. A disconnect while a response is in flight records the session as `cancelled`. Upstream closes and errors send an error event and close 1011. They are never presented as a clean end. Graceful shutdown does not wait for upgraded sockets. A session cut off by a process stop may not be finalized; lease reconciliation (`max session + 60 s`) then marks it unknown and its open responses unknown, and the holds are kept.
+- **Termination:** client close, a client disconnect or any gateway-side end drops the upstream socket immediately. The session's outcome by how the client left:
+
+  | Client end | No response in flight | Response in flight |
+  | --- | --- | --- |
+  | Close frame (with a valid UTF-8 reason) | `succeeded`, finish reason `stop` | `cancelled`, hold kept |
+  | Connection lost without a close frame (reset, I/O error), or a gateway write to the client that fails or times out (a slow or unwritable client) | `cancelled` | `cancelled`, hold kept |
+  | Text frame or close reason not UTF-8 (close 1007), or other protocol violation (close 1002) | `failed`, `invalid_request_error` | `failed`, `invalid_request_error`, hold kept |
+  | Message above the size cap (close 1009) | `failed`, `invalid_request_error` | `failed`, hold kept |
+
+  Upstream closes and errors send an error event and close 1011. They are never presented as a clean end. Graceful shutdown does not wait for upgraded sockets. A session cut off by a process stop may not be finalized; lease reconciliation (`max session + 60 s`) then marks it unknown and its open responses unknown, and the holds are kept.
 
 ### Hold sizing
 
