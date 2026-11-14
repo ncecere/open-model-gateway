@@ -173,6 +173,7 @@ jobs:
       - run: npm run test:ci
       - run: npm run test:conflict-markers
       - run: npm run test:structure
+      - run: npm run test:monitoring
       - name: Install age (pinned release, SHA-256 verified; test:staging includes the encrypted backup tests)
         run: |
           set -euo pipefail
