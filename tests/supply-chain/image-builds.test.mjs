@@ -109,3 +109,73 @@ test("setup-buildx-action without inputs is refused", () => {
   delete stepOf(data.jobs["staging-image"], "docker/setup-buildx-action").with;
   assert.match(buildChecks("ci", data).join(), /setup-buildx-action: with: must be exactly/);
 });
+
+// ---- jobs that can write or publish must be pinned ----
+
+const RETAG = `name: retag
+on:
+  workflow_run:
+    workflows: [image]
+    types: [completed]
+permissions:
+  packages: write
+jobs:
+  retag:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          echo "\${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u x --password-stdin
+          docker pull busybox
+          docker tag busybox ghcr.io/ncecere/open-model-gateway:latest-release
+          docker push ghcr.io/ncecere/open-model-gateway:latest-release
+`;
+const retag = () => toData(parseStrict(RETAG, ".github/workflows/retag.yml"));
+
+test("a job that can write through workflow-level permissions must be pinned", () => {
+  assert.match(unpinnedImageJobViolations(".github/workflows/retag.yml", retag()).join(), /job 'retag' can write packages, so it must be pinned/);
+});
+
+test("a job with write-all permissions must be pinned", () => {
+  const data = retag();
+  delete data.permissions;
+  data.jobs.retag.permissions = "write-all";
+  assert.match(unpinnedImageJobViolations(".github/workflows/retag.yml", data).join(), /job 'retag' can write .*, so it must be pinned/);
+});
+
+test("a job with no permissions anywhere (the repository default token) must be pinned", () => {
+  const data = retag();
+  delete data.permissions;
+  assert.match(unpinnedImageJobViolations(".github/workflows/retag.yml", data).join(), /job 'retag' can write .*, so it must be pinned/);
+});
+
+test("a job that can write contents must be pinned", () => {
+  const data = structuredClone(loadWorkflow("ci"));
+  data.jobs.web.permissions = { contents: "write" };
+  assert.match(unpinnedImageJobViolations(".github/workflows/ci.yml", data).join(), /job 'web' can write contents, so it must be pinned/);
+});
+
+const PUBLISHING_RUNS = [
+  'echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u x --password-stdin',
+  "docker push ghcr.io/ncecere/open-model-gateway:latest-release",
+  "docker image push ghcr.io/ncecere/open-model-gateway:x",
+  "docker tag busybox ghcr.io/ncecere/open-model-gateway:latest-release",
+  'docker buildx imagetools create --tag ghcr.io/ncecere/open-model-gateway:x "${SRC}"',
+  "oras push ghcr.io/ncecere/x:y file",
+  "oras copy ghcr.io/a/b:c ghcr.io/ncecere/x:y",
+  "cosign sign --yes ghcr.io/ncecere/x@sha256:abc",
+  "cosign attest --yes --predicate p.json ghcr.io/ncecere/x@sha256:abc",
+  "gh release create v9.9.9 dist/x",
+  "gh release upload v9.9.9 dist/x",
+  "skopeo copy docker://busybox docker://ghcr.io/ncecere/x:y",
+];
+for (const run of PUBLISHING_RUNS) {
+  test(`a job that is not pinned may not publish: ${run.slice(0, 50)}`, () => {
+    const data = structuredClone(loadWorkflow("ci"));
+    data.jobs.web.steps.push({ run });
+    assert.match(buildChecks("ci", data).join(), /publishes, signs or retags an image or release; only a pinned job may/);
+  });
+}
+
+test("a job that is not pinned may still tag a local image", () => {
+  assert.deepEqual(buildChecks("ci", withStep("ci", "web", { run: "docker tag open-model-gateway:staging local/test:1" })), []);
+});

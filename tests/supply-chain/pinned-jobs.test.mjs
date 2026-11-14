@@ -3,8 +3,8 @@
 // to a real workflow, which the earlier checks accepted.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { SHA, actionName, loadWorkflow, stepsOf } from "./lib.mjs";
-import { PINNED_JOBS_FILE, currentPins, pinnedJobViolations, readPinnedJobs } from "./policy.mjs";
+import { SHA, actionName, loadWorkflow, parseStrict, readLocalFromRepo, stepsOf, toData } from "./lib.mjs";
+import { PINNED_JOB_INPUTS, PINNED_JOBS_FILE, currentPins, pinnedJobInputViolations, pinnedJobViolations, readPinnedJobs, stagingCandidateViolations } from "./policy.mjs";
 
 const CHECKOUT = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const DOWNLOAD = "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333";
@@ -58,3 +58,55 @@ for (const [label, name, mutate] of EDITS) {
     assert.ok(found.length > 0 && found.every(v => v.includes(`update the pinned job in ${PINNED_JOBS_FILE}, which a reviewer must read`)), found.join("; "));
   });
 }
+
+// ---- what the pinned jobs run from the repository ----
+
+const SETUP_NODE = ".github/actions/setup-node/action.yml";
+const readWithAction = mutate => {
+  const read = readMutated("ci", () => {});
+  const action = toData(parseStrict(readLocalFromRepo(SETUP_NODE), SETUP_NODE));
+  mutate(action);
+  return file => (file === SETUP_NODE ? action : read(file) ?? toData(parseStrict(readLocalFromRepo(file), file)));
+};
+const LOCAL_ACTION_EDITS = [
+  ["a retag appended to setup-node", a => { a.runs.steps.at(-1).run += "\ndocker pull busybox && docker tag busybox open-model-gateway:staging\n"; }],
+  ["an escaped DOCKER_HOST written to GITHUB_ENV in setup-node", a => { a.runs.steps.at(-1).run += "\nprintf 'DOCKER_\\x48OST=tcp://evil:2375\\n' >> \"$GITHUB_ENV\"\n"; }],
+  ["another setup-node input", a => { a.inputs = { version: { default: "latest" } }; }],
+];
+for (const [label, mutate] of LOCAL_ACTION_EDITS) {
+  test(`a local action used by a pinned job refuses ${label}`, () => {
+    const found = pinnedJobViolations(currentPins(readWithAction(mutate)), readPinnedJobs());
+    assert.ok(found.length > 0 && found.every(v => v.includes(`update the pinned job in ${PINNED_JOBS_FILE}`)), found.join("; "));
+  });
+}
+
+test("the files the pinned jobs run are the listed PINNED_JOB_INPUTS", () => {
+  assert.deepEqual(pinnedJobInputViolations(currentPins()), []);
+  assert.ok(PINNED_JOB_INPUTS.includes("scripts/staging.py") && PINNED_JOB_INPUTS.includes(".github/scripts/fetch-verified.sh"), "the list is not empty");
+});
+
+const NEW_INPUTS = [
+  ["a new script in a run line", "image", d => beforeBuild(d, "build", { run: "bash .github/scripts/new-step.sh" })],
+  ["a new python script", "ci", d => afterScan(d, { run: "python3 -I scripts/other.py" })],
+  ["a new npm script", "ci", d => afterScan(d, { run: "npm run test:web" })],
+];
+for (const [label, name, mutate] of NEW_INPUTS) {
+  test(`a pinned job refuses ${label} until it is listed`, () => {
+    assert.match(pinnedJobInputViolations(currentPins(readMutated(name, mutate))).join(), /is run by a pinned job but not listed in PINNED_JOB_INPUTS/);
+  });
+}
+
+test("the staging rehearsal runs the candidate image under test", () => {
+  const file = "deploy/staging/compose.yaml";
+  const compose = () => toData(parseStrict(readLocalFromRepo(file), file));
+  const example = readLocalFromRepo("deploy/staging/staging.env.example");
+  const ci = loadWorkflow("ci");
+  assert.deepEqual(stagingCandidateViolations(compose(), example, ci), []);
+  const released = compose();
+  released.services.gateway.image = "ghcr.io/ncecere/open-model-gateway:v0.4.1";
+  assert.match(stagingCandidateViolations(released, example, ci).join(), /service 'gateway' image .* is not the candidate/);
+  const migrate = compose();
+  migrate.services.migrate.image = "ghcr.io/ncecere/open-model-gateway:v0.4.1";
+  assert.match(stagingCandidateViolations(migrate, example, ci).join(), /service 'migrate' image .* is not the candidate/);
+  assert.match(stagingCandidateViolations(compose(), example.replace("GATEWAY_IMAGE=open-model-gateway:staging", "GATEWAY_IMAGE=ghcr.io/ncecere/open-model-gateway:v0.4.1"), ci).join(), /staging\.env\.example/);
+});
