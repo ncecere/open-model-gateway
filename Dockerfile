@@ -14,7 +14,7 @@ RUN npm run build:web
 # compiler also supports edition 2024; do not use the manifest MSRV blindly when
 # updating Cargo.lock. Bookworm sets the build's glibc baseline; compatibility
 # with the supported Debian 13 runtime must pass native build/runtime gates.
-FROM mirror.gcr.io/library/rust:1.99.1-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS build
+FROM mirror.gcr.io/library/rust:1.100.0-bookworm@sha256:ade39a710ef85f3506cffcfec3e8a24ba090badef1dff2fb798f71d878833fea AS build
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY apps/gateway/ apps/gateway/
@@ -34,7 +34,7 @@ RUN cargo build --locked --release --jobs "$CARGO_BUILD_JOBS" -p open-model-gate
 #   docker buildx imagetools inspect gcr.io/distroless/cc-debian13:nonroot
 # The binary itself does what the former shell entrypoint did: umask 077,
 # `*_FILE` secret import, and never migrating or bootstrapping implicitly.
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cc66d222f0a7ec996b78a99fe76a969bc80b539a5016ad866c14d1949bc6d0ab AS runtime
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cb87acc574abe719b6e5c547384defa2f7b1f24af9605d3f618cf852495d8be2 AS runtime
 WORKDIR /app
 COPY --from=build --chmod=0555 /build/target/release/open-model-gateway /usr/local/bin/open-model-gateway
 COPY --from=web /build/apps/web/dist/ /app/web/
