@@ -463,6 +463,26 @@ async fn axum_browser_protocol_faults_are_told_from_a_lost_connection() {
             false,
             Some(Fault::Violation),
         ),
+        // A close frame whose reason is not UTF-8 (1000 + 0xff).
+        (
+            vec![{
+                use tokio_tungstenite::tungstenite::protocol::frame::{
+                    Frame, FrameHeader,
+                    coding::{Control, OpCode},
+                };
+                let header = FrameHeader {
+                    opcode: OpCode::Control(Control::Close),
+                    ..FrameHeader::default()
+                };
+                let reason = vec![0x03, 0xe8, 0xff];
+                tokio_tungstenite::tungstenite::Message::Frame(Frame::from_payload(
+                    header,
+                    reason.into(),
+                ))
+            }],
+            false,
+            Some(Fault::InvalidUtf8),
+        ),
         // The TCP connection closes without a close frame.
         (vec![], true, None),
     ] {
