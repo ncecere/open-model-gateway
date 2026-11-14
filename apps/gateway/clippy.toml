@@ -26,6 +26,7 @@ disallowed-methods = [
   { path = "reqwest::ClientBuilder::resolve_to_addrs", reason = "pinned destinations use crate::egress::pinned_client_builder (#509)" },
   { path = "reqwest::ClientBuilder::connector_layer", reason = "a connector layer can bypass crate::egress::client_builder's safeguards (#509)" },
   { path = "reqwest::ClientBuilder::unix_socket", reason = "a socket path bypasses crate::egress::client_builder's resolver (#509)" },
+  { path = "reqwest::ClientBuilder::windows_named_pipe", reason = "a pipe path bypasses crate::egress::client_builder's resolver (#509)", allow-invalid = true },
   { path = "reqwest::ClientBuilder::danger_accept_invalid_certs", reason = "TLS verification stays on; see crate::egress::client_builder (#509)" },
   { path = "reqwest::ClientBuilder::danger_accept_invalid_hostnames", reason = "TLS verification stays on; see crate::egress::client_builder (#509)" },
   { path = "reqwest::ClientBuilder::use_preconfigured_tls", reason = "TLS verification stays on; see crate::egress::client_builder (#509)" },
