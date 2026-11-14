@@ -1,35 +1,56 @@
-// Run steps and env that select another builder or Docker endpoint (#488).
+// Run steps of jobs that are not pinned (#488): the run-command parser, env and step shells.
+// A cheap extra check; the jobs that build, publish or test an image are pinned whole.
 import assert from "node:assert/strict";
-import { join } from "node:path";
 import { test } from "node:test";
 import { loadWorkflow } from "./lib.mjs";
-import { COMPOSE_FILE, buildChecks, composeDotenvViolations, runBuildViolations, withStep } from "./policy.mjs";
+import { buildChecks, runBuildViolations, shellCommands, stepOf, withStep } from "./policy.mjs";
 
-test("fixtures: a run step that selects another builder or Docker endpoint is refused (#488 review 4)", () => {
-  for (const run of ["docker buildx create --use --driver remote tcp://evil:1234", "docker buildx use evil", "docker buildx create --name x --driver kubernetes", "docker context create evil --docker host=tcp://evil:2375",
-    "docker context use evil", "docker --context evil buildx version", "docker -c evil ps", "docker buildx --builder evil du", "docker -H tcp://evil:2375 ps", "docker --host=tcp://evil:2375 ps"]) {
-    assert.match(buildChecks("ci", withStep("ci", "staging-image", { run })).join(), /selects a builder or Docker endpoint/, run);
-  }
-});
-
-test("fixtures: env that selects a builder or changes the Docker client is refused (#488 review 5)", () => {
-  const cases = [
-    ["workflow env DOCKER_HOST", d => { d.env = { DOCKER_HOST: "tcp://evil:2375" }; }],
-    ["job env BUILDX_BUILDER", d => { d.jobs["staging-image"].env.BUILDX_BUILDER = "evil"; }],
-    ["step env DOCKER_CONTEXT", d => { d.jobs["staging-image"].steps[2].env = { DOCKER_CONTEXT: "evil" }; }],
-    ["step env BUILDKIT_PROGRESS", d => { d.jobs["staging-image"].steps[2].env = { BUILDKIT_PROGRESS: "plain" }; }],
-    ["job env DOCKER_BUILDKIT", d => { d.jobs["staging-image"].env.DOCKER_BUILDKIT = "0"; }],
-    ["job env DOCKER_CONFIG", d => { d.jobs["staging-image"].env.DOCKER_CONFIG = "/tmp/evil"; }],
-    ["step env COMPOSE_FILE", d => { d.jobs["staging-image"].steps.push({ env: { COMPOSE_FILE: "/tmp/evil.yml" }, run: "python3 scripts/staging.py up" }); }],
-    ["DOCKER_HOST written to GITHUB_ENV", d => { d.jobs["staging-image"].steps.push({ run: 'echo "DOCKER_HOST=tcp://evil:2375" >> "$GITHUB_ENV"' }); }],
-    ["BUILDX_CONFIG exported", d => { d.jobs["staging-image"].steps.push({ run: "export BUILDX_CONFIG=/tmp/evil" }); }],
-    ["DOCKER_CONFIG outside the listed publish steps", d => { d.jobs["staging-image"].steps.push({ run: 'export DOCKER_CONFIG="$RUNNER_TEMP/x"' }); }],
-  ];
-  for (const [label, mutate] of cases) {
+const REFUSED_ENV = [
+  ["workflow env DOCKER_HOST", d => { d.env = { DOCKER_HOST: "tcp://evil:2375" }; }],
+  ["job env BUILDX_BUILDER", d => { d.jobs.web.env = { BUILDX_BUILDER: "evil" }; }],
+  ["step env DOCKER_CONTEXT", d => { stepOf(d.jobs.web, "actions/checkout").env = { DOCKER_CONTEXT: "evil" }; }],
+  ["step env BUILDKIT_PROGRESS", d => { stepOf(d.jobs.web, "actions/checkout").env = { BUILDKIT_PROGRESS: "plain" }; }],
+  ["job env DOCKER_BUILDKIT", d => { d.jobs.web.env = { DOCKER_BUILDKIT: "0" }; }],
+  ["job env DOCKER_CONFIG", d => { d.jobs.web.env = { DOCKER_CONFIG: "/tmp/evil" }; }],
+  ["step env COMPOSE_FILE", d => { d.jobs.web.steps.push({ env: { COMPOSE_FILE: "/tmp/evil.yml" }, run: "python3 scripts/staging.py up" }); }],
+  ["DOCKER_HOST written to GITHUB_ENV", d => { d.jobs.web.steps.push({ run: 'echo "DOCKER_HOST=tcp://evil:2375" >> "$GITHUB_ENV"' }); }],
+  ["DOCKER_HOST written in pieces to GITHUB_ENV", d => { d.jobs.web.steps.push({ run: 'echo "DOCKER_""HOST=tcp://evil:2375" >> "$GITHUB_ENV"' }); }],
+  ["BUILDX_CONFIG exported", d => { d.jobs.web.steps.push({ run: "export BUILDX_CONFIG=/tmp/evil" }); }],
+  ["DOCKER_CONFIG exported", d => { d.jobs.web.steps.push({ run: 'export DOCKER_CONFIG="$RUNNER_TEMP/x"' }); }],
+];
+for (const [label, mutate] of REFUSED_ENV) {
+  test(`env that changes the Docker client is refused: ${label}`, () => {
     const data = structuredClone(loadWorkflow("ci"));
     mutate(data);
-    assert.match(buildChecks("ci", data).join(), /selects a builder or changes the Docker client/, label);
-  }
+    assert.match(buildChecks("ci", data).join(), /selects a builder or changes the Docker client/);
+  });
+}
+
+const REFUSED_SHELLS = [
+  { shell: "python", run: "import subprocess; subprocess.run(['docker', 'build', '.'])" },
+  { shell: "docker build -t x . && bash {0}", run: "true" },
+  { shell: "pwsh", run: "docker build ." },
+];
+for (const step of REFUSED_SHELLS) {
+  test(`a step shell other than bash or sh is refused: ${step.shell}`, () => assert.match(buildChecks("ci", withStep("ci", "web", step)).join(), /shell .* is not bash or sh/));
+}
+
+test("a job default shell other than bash or sh is refused", () => {
+  const data = withStep("ci", "web", { run: "true" });
+  data.jobs.web.defaults = { run: { shell: "python {0}" } };
+  assert.match(buildChecks("ci", data).join(), /shell .* is not bash or sh/);
+});
+
+test("the bash and sh step shells are accepted", () => {
+  for (const shell of ["bash", "sh"]) assert.deepEqual(buildChecks("ci", withStep("ci", "web", { shell, run: "true" })), [], shell);
+});
+
+test("the shell reader splits commands and removes quotes", () => {
+  const words = script => shellCommands(script).map(ws => ws.map(w => w.text).join(" "));
+  assert.deepEqual(words('a "b c" d; e && f | g'), ["a b c d", "e", "f", "g"]);
+  assert.deepEqual(words('echo "DOCKER_""HOST=x" >> "$GITHUB_ENV"'), ["echo DOCKER_HOST=x"]);
+  assert.deepEqual(words("x=$(docker build -q .)\n# docker build .\ny"), ["docker build -q .", "x=", "y"]);
+  assert.deepEqual(words("a \\\n  b"), ["a b"]);
 });
 
 // ---- the run-command parser (#488) ----
@@ -117,22 +138,4 @@ test("the run-command parser accepts ordinary commands that only look like build
 
 test("the run-command parser refuses builds, builder and endpoint switches and unchecked Compose files", () => {
   for (const line of RUN_LINES_THAT_ARE_REFUSED) assert.ok(runCheck(line).length > 0, line);
-});
-
-test("a step outside the pinned jobs may use only the bash or sh shell", () => {
-  const refused = [
-    { shell: "python", run: "import subprocess; subprocess.run(['docker', 'build', '.'])" },
-    { shell: "docker build -t x . && bash {0}", run: "true" },
-    { shell: "pwsh", run: "docker build ." },
-  ];
-  for (const step of refused) assert.match(buildChecks("ci", withStep("ci", "web", step)).join(), /shell .* is not bash or sh/, step.shell);
-  const data = withStep("ci", "web", { run: "true" });
-  data.jobs.web.defaults = { run: { shell: "python {0}" } };
-  assert.match(buildChecks("ci", data).join(), /shell .* is not bash or sh/, "a job default shell");
-  for (const shell of ["bash", "sh"]) assert.deepEqual(buildChecks("ci", withStep("ci", "web", { shell, run: "true" })), [], shell);
-});
-
-test("a .env file next to a checked Compose file is refused", () => {
-  assert.match(composeDotenvViolations(["deploy/staging/compose.yaml"], path => path === "deploy/staging/.env").join(), /deploy\/staging\/\.env sets Compose variables/);
-  assert.deepEqual(composeDotenvViolations(["deploy/staging/compose.yaml"], () => false), []);
 });

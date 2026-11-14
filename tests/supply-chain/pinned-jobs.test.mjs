@@ -8,7 +8,7 @@ import { PINNED_JOBS_FILE, currentPins, pinnedJobViolations, readPinnedJobs } fr
 
 const CHECKOUT = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const DOWNLOAD = "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333";
-const workflowNames = ["image", "branch-images", "loadtest-image", "oci-import", "ci"];
+const workflowNames = ["image", "branch-images", "loadtest-image", "oci-import", "prune-dev-images", "ci"];
 const readMutated = (name, mutate) => {
   const all = Object.fromEntries(workflowNames.map(n => [`.github/workflows/${n}.yml`, structuredClone(loadWorkflow(n))]));
   mutate(all[`.github/workflows/${name}.yml`]);

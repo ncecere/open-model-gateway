@@ -23,7 +23,7 @@ import { test } from "node:test";
 import { runInNewContext } from "node:vm";
 import { isMap, isScalar, parseDocument, visit } from "yaml";
 import { bashPath, runBash } from "./bash-preflight.mjs";
-import { APPROVED_RUNTIME, APPROVED_RUST, KNOWN_DOCKERFILES, RUNTIME_DOCKERFILES, SHA, actionName, containerImagesIn, findDockerfiles, jobsOf, parseStrict, readLocalFromRepo, repoFiles, root, stepsOf, toData, unknownDockerfileViolations, walk, wf, workflowsDir } from "./supply-chain/lib.mjs";
+import { APPROVED_RUNTIME, OTHER_BASE, APPROVED_RUST, KNOWN_DOCKERFILES, RUNTIME_DOCKERFILES, SHA, actionName, containerImagesIn, findDockerfiles, jobsOf, parseStrict, readLocalFromRepo, repoFiles, root, stepsOf, toData, unknownDockerfileViolations, walk, wf, workflowsDir } from "./supply-chain/lib.mjs";
 
 // An unsupported shell fails this file here, before any test or fixture runs (#380).
 bashPath();
@@ -580,7 +580,6 @@ export function parseToolchainToml(text) {
 // heredoc, continuation, lone-backslash, `# escape=`, split-keyword, U+0085 and U+2028
 // forms and built from the other base (verified by hand with Docker 29.1.3). All three readers must
 // refuse each fixture, for the stated reason.
-const OTHER_BASE = `mirror.gcr.io/library/debian:13-slim@sha256:${"b".repeat(64)}`;
 const WRONG_RUST = `mirror.gcr.io/library/rust:1.98.0-bookworm@sha256:${"c".repeat(64)}`;
 // The decoy: the stage that is really built last uses another base, and the approved
 // line follows it as something that is not an instruction.
@@ -2137,8 +2136,8 @@ function assertPublicationGraph(flows) {
     assertRequiredPublication(image.jobs[name], name === "verify" ? ["Stop isolated staging"] : name === "publish" ? ["Job summary", "Remove registry credentials"] : []);
   }
   const architectures = [
-    { platform: "linux/amd64", runner: "ubuntu-24.04" },
-    { platform: "linux/arm64", runner: "ubuntu-24.04-arm" },
+    { platform: "linux/amd64", pair: "linux-amd64", runner: "ubuntu-24.04" },
+    { platform: "linux/arm64", pair: "linux-arm64", runner: "ubuntu-24.04-arm" },
   ];
   assert.deepEqual(image.jobs.build.strategy, { "fail-fast": true, matrix: { include: architectures } });
   assert.equal(image.jobs.build["runs-on"], "${{ matrix.runner }}");
@@ -2154,7 +2153,7 @@ function assertPublicationGraph(flows) {
       platform: `linux/${arch}`, image_repository: "ghcr.io/ncecere/open-model-gateway", source_revision: "${{ github.sha }}",
     });
   }
-  assert.deepEqual(image.jobs.verify.strategy, { "fail-fast": true, matrix: { include: architectures.map(a => ({
+  assert.deepEqual(image.jobs.verify.strategy, { "fail-fast": true, matrix: { include: architectures.map(({ pair, ...a }) => ({
     ...a, import_job: `import-${a.platform.slice(6)}`, digest_output: `digest_linux_${a.platform.slice(6)}`,
   })) } });
   assert.equal(image.jobs.verify["runs-on"], "${{ matrix.runner }}");
@@ -3249,7 +3248,7 @@ test("fixtures: the Dockerfile walker finds Dockerfile*, *.dockerfile and Contai
   }
 });
 
-test("fixtures: a .dockerignore is not a Dockerfile, and an unknown Dockerfile name fails clearly (#488 review 11)", () => {
+test("fixtures: a .dockerignore is not a Dockerfile, and an unknown Dockerfile name fails clearly (#488)", () => {
   const dir = mkdtempSync(join(tmpdir(), "omg-walker-"));
   try {
     for (const file of ["Dockerfile", "Dockerfile.dockerignore", "app.Dockerfile.dockerignore"]) writeFileSync(join(dir, file), "x\n");

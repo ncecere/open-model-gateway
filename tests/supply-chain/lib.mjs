@@ -75,7 +75,7 @@ export function findDockerfiles(dir = root) {
   return out;
 }
 // Each file the walker finds must be a known Dockerfile; anything else fails here by name,
-// before a reader error about its contents (#488 review).
+// before a reader error about its contents (#488).
 export function unknownDockerfileViolations(files) {
   return files.filter(file => !KNOWN_DOCKERFILES.includes(file)).map(file => `${file} is named like a Dockerfile but is not one of the known Dockerfiles (${KNOWN_DOCKERFILES.join(", ")}): `
     + "if it is built, add it to KNOWN_DOCKERFILES with its build in IMAGE_BUILDS; otherwise rename it");
@@ -110,3 +110,5 @@ export const wf = body => `name: fixture\non: push\n${body}\n`;
 export const loadWorkflow = name => toData(parseStrict(readFileSync(join(workflowsDir, `${name}.yml`), "utf8"), `.github/workflows/${name}.yml`));
 export const KNOWN_DOCKERFILES = RUNTIME_DOCKERFILES;
 export const isMapping = v => v !== null && typeof v === "object" && !Array.isArray(v);
+// A digest-pinned base image that is not an approved one, for fixtures.
+export const OTHER_BASE = `mirror.gcr.io/library/debian:13-slim@sha256:${"b".repeat(64)}`;

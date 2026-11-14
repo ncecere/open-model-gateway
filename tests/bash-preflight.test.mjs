@@ -322,6 +322,27 @@ const ALLOWED = {
     '["another shell", f => { scan(f).shell = "bash {0}"; }],',
     '["job defaults", f => { job(f).defaults = { run: { shell: "bash {0}" } }; }],',
   ],
+  "supply-chain/policy.mjs": [
+    // The step shells the run-step checks can read, compared with a step's `shell:` key. Not
+    // a spawn option.
+    "export const STEP_SHELLS = new Set([\"bash\", \"sh\"]);",
+    "const shellViolation = (where, shell) => (shell === undefined || STEP_SHELLS.has(shell) ? [] : [`${where}: shell '${shell}' is not bash or sh, so the run-step checks cannot read the step`]);",
+  ],
+  "supply-chain/run-steps.test.mjs": [
+    // Step and job `shell:` keys in parsed workflow data, which the run-step checks must
+    // refuse or accept. Never run.
+    "{ shell: \"python\", run: \"import subprocess; subprocess.run(['docker', 'build', '.'])\" },",
+    "{ shell: \"docker build -t x . && bash {0}\", run: \"true\" },",
+    "{ shell: \"pwsh\", run: \"docker build .\" },",
+    "data.jobs.web.defaults = { run: { shell: \"python {0}\" } };",
+    "for (const shell of [\"bash\", \"sh\"]) assert.deepEqual(buildChecks(\"ci\", withStep(\"ci\", \"web\", { shell, run: \"true\" })), [], shell);",
+  ],
+  "supply-chain/pinned-jobs.test.mjs": [
+    // Steps added to parsed workflow data (a python step shell and a custom step shell that is
+    // itself a build), which the pinned-job check must refuse. Never run.
+    "[\"I2: a python step that builds\", \"image\", d => beforeBuild(d, \"build\", { shell: \"python\", run: \"import subprocess; subprocess.run(['docker', 'build', '.'])\" })],",
+    "[\"S: a custom step shell that is itself a build\", \"ci\", d => afterScan(d, { shell: \"docker build -t open-model-gateway:staging . && bash {0}\", run: \"true\" })],",
+  ],
   // RegExp.prototype.exec, not child_process.
   "browser/alert-webhooks.spec.ts": ["const match = /^t=(\\d+),v1=([0-9a-f]{64})$/.exec(signature);"],
 };

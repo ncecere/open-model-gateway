@@ -1,19 +1,48 @@
-// The checks of #493 and #488 and their review: container images, image builds, Compose
-// builds, actions and run steps. The tests are in tests/supply-chain/*.test.mjs.
+// The checks of #493 and #488: container images, image builds, the pinned image jobs, the
+// run steps of other jobs, Compose files and actions. The tests are in
+// tests/supply-chain/*.test.mjs; the shared readers in lib.mjs.
+//
+// What these checks are: they make a change to what CI builds, and to the jobs that build,
+// publish or test an image, a visible change in review, and they catch accidental drift. They
+// are not a boundary against a deliberately malicious pull request, which controls the
+// workflows and these tests; mandatory review of workflow diffs and of pinned-jobs.yaml is.
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, posix } from "node:path";
-import { APPROVED_RUNTIME, APPROVED_RUST, DOCKERFILE_NAME, DOCKERFILE_SKIP_DIRS, KNOWN_DOCKERFILES, RUNTIME_DOCKERFILES, SHA, actionName, actionsDir, containerImagesIn, findDockerfiles, isDockerfileName, isMapping, jobsOf, loadWorkflow, parseStrict, readLocalFromRepo, repoFiles, root, stepsOf, toData, unknownDockerfileViolations, walk, wf, workflowsDir } from "./lib.mjs";
-// ---- job and service container images (#493) ----
+import {
+  DOCKERFILE_SKIP_DIRS, KNOWN_DOCKERFILES, actionName, actionsDir, isMapping, jobsOf, loadWorkflow, parseStrict, readLocalFromRepo, root, stepsOf, toData, workflowsDir,
+} from "./lib.mjs";
 
-// Every image a job runs in (`container:`, written as a string or as a mapping with
-// `image:`) or beside (`services.<name>`, a string or a mapping with `image:`), and the
-// image of a Docker container action (`runs.image`, `docker://...`), must be pinned by
-// digest: `<image>[:<tag>]@sha256:<64 lower-case hex>`. A floating tag would change what
-// runs next to the job's token without a commit. A value that is not a literal string (an
-// expression, a computed services mapping, a missing image) cannot be checked here and is
-// refused unless listed below as `<file>: <where>` with the reason; every entry must be used.
+// ---- job and service containers (#493) ----
+
+// Every image a job runs in (`container:`, a string or a mapping's `image:`) or beside
+// (`services.<name>`, a string or a mapping's `image:`) must be pinned by digest:
+// `<image>[:<tag>]@sha256:<64 lower-case hex>`. A value that is not one literal string (an
+// expression, a computed services mapping, a missing image) is refused unless listed here as
+// `<file>: <where>` with the reason; every entry must be used. None is listed.
 export const CONTAINER_IMAGE_EXPRESSIONS = new Map([]);
 export const PINNED_IMAGE = /^[^\s@$]+@sha256:[0-9a-f]{64}$/;
+
+// Container `options:` that reach the host or replace what the image runs, refused unless
+// listed here as `<file>: <where>: <option>` with the reason. None is listed: today's options
+// are the PostgreSQL services' --health-* settings.
+export const CONTAINER_OPTIONS_ALLOWED = new Map([]);
+const HOST_OPTIONS = /^--?(privileged|cap-add|volume|mount|entrypoint|pull|device|security-opt|volumes-from)(=|$)|^-v$|^-v./;
+const HOST_NAMESPACES = /^--(network|net|pid|ipc|userns|uts|cgroupns)(=|$)/;
+
+export function containerOptionViolations(key, container) {
+  const out = [];
+  if (container.credentials !== undefined) out.push(`${key}: credentials is not allowed on a job or service container (a registry login next to the job)`);
+  if (container.options === undefined) return out;
+  if (typeof container.options !== "string" || container.options.includes("${{")) return [...out, `${key}: options must be one literal string`];
+  const words = container.options.trim().split(/\s+/);
+  words.forEach((word, i) => {
+    const value = word.includes("=") ? word.split("=")[1] : words[i + 1];
+    const refused = HOST_OPTIONS.test(word) || (HOST_NAMESPACES.test(word) && /^(host|container:)/.test(value ?? ""));
+    if (refused && !CONTAINER_OPTIONS_ALLOWED.has(`${key}: ${word}`)) out.push(`${key}: option '${word}' is not allowed on a job or service container (it reaches the host or replaces what the image runs)`);
+  });
+  return out;
+}
 
 export function containerPinViolations(file, data, allowed = CONTAINER_IMAGE_EXPRESSIONS, used = new Set()) {
   const out = [];
@@ -28,96 +57,52 @@ export function containerPinViolations(file, data, allowed = CONTAINER_IMAGE_EXP
       out.push(`${key}: ${image} is not pinned by digest (<image>[:<tag>]@sha256:<64 hex>)`);
     }
   };
-    for (const [name, job] of jobsOf(data)) {
+  for (const [name, job] of jobsOf(data)) {
     if (job?.container !== undefined) {
-      if (isMapping(job.container)) check(`job '${name}' container.image`, job.container.image);
-      else check(`job '${name}' container`, job.container);
+      if (isMapping(job.container)) {
+        check(`job '${name}' container.image`, job.container.image);
+        out.push(...containerOptionViolations(`${file}: job '${name}' container`, job.container));
+      } else check(`job '${name}' container`, job.container);
     }
-    if (job?.services !== undefined) {
-      if (!isMapping(job.services)) { check(`job '${name}' services`, job.services); continue; }
-      for (const [svc, value] of Object.entries(job.services)) {
-        if (isMapping(value)) check(`job '${name}' services.${svc}.image`, value.image);
-        else check(`job '${name}' services.${svc}`, value);
-      }
+    if (job?.services === undefined) continue;
+    if (!isMapping(job.services)) { check(`job '${name}' services`, job.services); continue; }
+    for (const [service, value] of Object.entries(job.services)) {
+      if (!isMapping(value)) { check(`job '${name}' services.${service}`, value); continue; }
+      check(`job '${name}' services.${service}.image`, value.image);
+      out.push(...containerOptionViolations(`${file}: job '${name}' services.${service}`, value));
     }
-  }
-  if (isMapping(data?.runs) && String(data.runs.using).toLowerCase() === "docker") {
-    const image = data.runs.image;
-    if (typeof image === "string" && !image.includes("${{") && !image.startsWith("docker://")) out.push(`${file}: runs.image: a Docker action must name a digest-pinned docker:// image, not build ${image}`);
-    else check("runs.image", typeof image === "string" ? image.replace(/^docker:\/\//, "") : image);
   }
   return out;
 }
 
+// ---- what an image build step builds (#488) ----
 
-
-// ---- what the image builds build (#488) ----
-
-// The checks above read the Dockerfiles the walker finds; these tie them to what is built.
-// An image is built only by a docker/build-push-action step or a Compose `build:` section,
-// and each names one of the Dockerfiles below through a context outside the skipped
-// directories. What a build step may change is pinned here:
-// - `file` (the Dockerfile; default `<context>/Dockerfile`) only one of KNOWN_DOCKERFILES;
-// - `context` a literal directory of the checkout (without it the action builds the Git
-//   context, which the checks never read), not in or under a skipped directory;
-// - `target` (which stage is built; the default is the last, the runtime) only where
-//   IMAGE_BUILDS lists it, which today is nowhere;
-// - no `build-contexts` (`<name>=docker-image://<image>` replaces a stage or a FROM image,
-//   pinned or not, without a change to the Dockerfile);
-// - no `BUILDKIT_*` build argument (`BUILDKIT_SYNTAX` loads another Dockerfile frontend);
-// and IMAGE_BUILDS holds every build step with every one of its `with:` inputs, as written in
-// the workflow (#488 review): the cache sources and targets (only the job's own `type=gha`
-// scope), the outputs (an OCI archive or the local daemon, never a registry), the SBOM
-// generator, the platforms, tags and labels. Values with `${{ }}` are pinned as text: what
-// they expand to comes from the runner, the job matrix or the read-only meta job. A new step,
-// a step moved to another job, or any changed input is a reviewed change to this list.
-export const SBOM_ATTEST = "type=sbom,generator=mirror.gcr.io/docker/buildkit-syft-scanner:stable-1@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9";
-export const OCI_ARCHIVE = "type=oci,dest=${{ runner.temp }}/image.tar,oci-mediatypes=true";
-export const IMAGE_BUILDS = new Map([
-  [".github/workflows/ci.yml: job 'staging-image'", {
-    context: ".", load: true, tags: "open-model-gateway:staging", "cache-from": "type=gha,scope=staging", "cache-to": "type=gha,mode=max,scope=staging",
-  }],
-  [".github/workflows/image.yml: job 'build'", {
-    context: ".", platforms: "${{ matrix.platform }}", labels: "${{ needs.meta.outputs.build_labels }}", outputs: OCI_ARCHIVE, attests: SBOM_ATTEST, provenance: "mode=max",
-    "cache-from": "type=gha,scope=image-${{ env.PLATFORM_PAIR }}", "cache-to": "type=gha,mode=max,scope=image-${{ env.PLATFORM_PAIR }}",
-  }],
-  [".github/workflows/branch-images.yml: job 'build'", {
-    context: ".", platforms: "linux/amd64", outputs: OCI_ARCHIVE, attests: SBOM_ATTEST, provenance: "mode=max", labels: "org.opencontainers.image.title=open-model-gateway\norg.opencontainers.image.source=https://github.com/${{ github.repository }}\norg.opencontainers.image.revision=${{ steps.name.outputs.sha }}\norg.opencontainers.image.licenses=MIT\n",
-    "cache-from": "type=gha,scope=image-linux-amd64", "cache-to": "type=gha,mode=max,scope=image-linux-amd64",
-  }],
-  [".github/workflows/loadtest-image.yml: job 'build'", {
-    context: ".", file: "deploy/loadtest/Dockerfile", platforms: "linux/amd64", outputs: OCI_ARCHIVE, "build-args": "CARGO_BUILD_JOBS=4", attests: SBOM_ATTEST, provenance: "mode=max",
-    labels: "org.opencontainers.image.title=open-model-gateway-loadtest\norg.opencontainers.image.source=https://github.com/${{ github.repository }}\norg.opencontainers.image.revision=${{ steps.name.outputs.sha }}\norg.opencontainers.image.licenses=MIT\n", "cache-from": "type=gha,scope=loadtest-linux-amd64", "cache-to": "type=gha,mode=max,scope=loadtest-linux-amd64",
-  }],
-]);
-
-// docker/setup-buildx-action (#488 review): the default docker-container driver running the
-// pinned BuildKit image, and nothing else. `driver`, `endpoint` (a remote builder), `config`
-// and the inline configs (registry mirrors), `use`, `version` (a downloaded Buildx) and other
-// driver options are refused because the inputs must be exactly these.
+// An image is built only by a docker/build-push-action step in a pinned job (below) or a
+// Compose `build:` section. On every build step:
+// - `file` (default `<context>/Dockerfile`) is one of KNOWN_DOCKERFILES;
+// - `context` is a literal directory of the checkout outside the skipped directories
+//   (without one the action builds the Git context, which no check reads);
+// - no `target` (the last stage, the runtime image, is built), no `build-contexts`
+//   (`<name>=docker-image://<image>` replaces a stage or base image) and no `BUILDKIT_*`
+//   build argument (`BUILDKIT_SYNTAX` loads another Dockerfile frontend);
+// - an expression in any input but `labels` is one of BUILD_INPUT_EXPRESSIONS. `env.*`,
+//   `steps.*`, `needs.*` and `inputs.*` are refused: an earlier step can write env through
+//   $GITHUB_ENV (a cache scope of `x,url=https://...` redirects the cache), and the others
+//   come from outside the step. `labels` are image metadata; their expressions (the
+//   repository, the source commit, the read-only meta job's labels) are pinned as text by
+//   the job pin.
+export const BUILD_INPUT_EXPRESSIONS = [
+  "matrix.<key>, a key of every literal strategy.matrix.include leg of the same pinned job",
+  "runner.temp",
+];
+// docker/setup-buildx-action takes exactly the pinned BuildKit image with the default
+// docker-container driver: no `driver`, `endpoint`, `config`, inline BuildKit
+// configuration (registry mirrors), `use` or `version`.
 export const BUILDKIT_IMAGE = "mirror.gcr.io/moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea";
 export const BUILDX_INPUTS = { "driver-opts": `image=${BUILDKIT_IMAGE}` };
 
-// Environment that selects another builder or Docker daemon, or changes the Docker client's
-// configuration, the Compose files or BuildKit's behaviour (#488 review). Refused in every
-// `env:` mapping (workflow, job, step) and named in no `run:` script (which could write it to
-// $GITHUB_ENV or export it), except where RUN_DOCKER_ENV lists it.
-export const DOCKER_ENV = /^(BUILDX_\w*|BUILDKIT_\w*|DOCKER_HOST|DOCKER_CONTEXT|DOCKER_CONFIG|DOCKER_BUILDKIT|DOCKER_TLS_VERIFY|DOCKER_CERT_PATH|COMPOSE_FILE|COMPOSE_PATH_SEPARATOR|COMPOSE_PROJECT_DIRECTORY)$/;
-// DOCKER_CONFIG only, and only in jobs that run neither setup-buildx-action nor a build (checked):
-// each logs in to the registry with a fresh private configuration and removes it afterwards.
-export const RUN_DOCKER_ENV = new Map([
-  [".github/workflows/branch-images.yml: job 'publish'", "a fresh private directory (mktemp) for registry credentials, removed afterwards; the job runs no build"],
-  [".github/workflows/loadtest-image.yml: job 'publish'", "a fresh private directory (mktemp) for registry credentials, removed afterwards; the job runs no build"],
-  [".github/workflows/image.yml: job 'probe-prepare'", "a fresh private directory (mktemp) for registry credentials, removed afterwards; the job runs no build"],
-  [".github/workflows/image.yml: job 'probe-sign'", "a fresh private directory (mktemp) for registry credentials, removed afterwards; the job runs no build"],
-  [".github/workflows/image.yml: job 'probe-verify'", "a fresh private directory (mktemp) for registry credentials, removed afterwards; the job runs no build"],
-  [".github/workflows/image.yml: job 'publish'", "a fresh private directory (mktemp) for registry credentials, removed afterwards; the job runs no build"],
-  [".github/workflows/image.yml: job 'release'", "a fresh private directory (mktemp) for registry credentials, removed afterwards; the job runs no build"],
-]);
-
-
-// A build context or Dockerfile path, relative to `base` (a directory of the checkout, "."
-// for the root): returns the normalized path, or the reason it is refused.
+// A build context or Dockerfile path relative to `base` (a directory of the checkout): the
+// normalized path, or the reason it is refused.
 export function buildPath(value, base = ".") {
   if (typeof value !== "string" || value === "") return { refused: "must be one literal, non-empty path" };
   if (value.includes("${")) return { refused: `'${value}' is an expression or variable, which cannot be checked` };
@@ -130,104 +115,354 @@ export function buildPath(value, base = ".") {
   return { path };
 }
 
-export function buildStepsOf(file, data) {
-  const steps = [];
-  for (const [name, job] of jobsOf(data)) stepsOf(job).forEach(step => steps.push([`${file}: job '${name}'`, step]));
-  stepsOf(isMapping(data?.runs) ? data.runs : null).forEach(step => steps.push([`${file}: runs`, step]));
-  return steps;
+const matrixKeys = job => {
+  const include = job?.strategy?.matrix?.include;
+  if (!Array.isArray(include) || include.length === 0 || !include.every(isMapping)) return new Set();
+  return new Set(Object.keys(include[0]).filter(key => include.every(leg => typeof leg[key] === "string")));
+};
+
+function buildStepViolations(where, inputs, job) {
+  const out = [];
+  if (!isMapping(inputs)) return [`${where}: a build step needs a literal with: mapping`];
+  if ("build-contexts" in inputs) out.push(`${where}: build-contexts can replace a stage or base image of the Dockerfile; it is not allowed`);
+  if ("target" in inputs) out.push(`${where}: target '${inputs.target}' builds another stage than the runtime image; it is not allowed`);
+  if ("build-args" in inputs) {
+    if (typeof inputs["build-args"] !== "string") out.push(`${where}: build-args must be a literal string`);
+    else for (const line of inputs["build-args"].split("\n")) if (/^\s*BUILDKIT_/i.test(line)) out.push(`${where}: build argument '${line.trim()}' changes how BuildKit builds (BUILDKIT_SYNTAX loads another frontend); it is not allowed`);
+  }
+  const context = buildPath(inputs.context);
+  if (context.refused) out.push(`${where}: context ${context.refused}`);
+  if ("file" in inputs) {
+    const dockerfile = buildPath(inputs.file);
+    if (dockerfile.refused) out.push(`${where}: file ${dockerfile.refused}`);
+    else if (!KNOWN_DOCKERFILES.includes(dockerfile.path)) out.push(`${where}: file '${inputs.file}' is not one of the known Dockerfiles (${KNOWN_DOCKERFILES.join(", ")})`);
+  } else if (context.path && !KNOWN_DOCKERFILES.includes(posix.join(context.path, "Dockerfile"))) {
+    out.push(`${where}: the default Dockerfile '${posix.join(context.path, "Dockerfile")}' is not one of the known Dockerfiles`);
+  }
+  const keys = matrixKeys(job);
+  for (const [input, value] of Object.entries(inputs)) {
+    if (input === "labels" || typeof value !== "string") continue;
+    for (const [, expression] of value.matchAll(/\$\{\{\s*(.*?)\s*\}\}/g)) {
+      const matrix = expression.match(/^matrix\.([A-Za-z0-9_-]+)$/);
+      if (expression === "runner.temp" || (matrix && keys.has(matrix[1]))) continue;
+      out.push(`${where}: ${input} uses \${{ ${expression} }}, which is not a pinned value (only ${BUILD_INPUT_EXPRESSIONS.join("; ")})`);
+    }
+  }
+  return out;
 }
 
-// Every image build command in a `run:` script: a container builder (docker, podman, ...) with
-// a build or bake subcommand, or Compose with --build, on one line (continuations joined).
-export const RUN_BUILDERS = new Set(["docker", "docker-compose", "podman", "nerdctl", "buildah", "buildctl", "kaniko", "staging.py"]);
-export const RUN_BUILD_WORDS = new Set(["build", "bake", "bud", "--build"]);
+// ---- pinned image jobs (#488) ----
+
+// Every job that builds, publishes, signs, attests, imports or tests an image is pinned in
+// full in pinned-jobs.yaml: a run step can do anything (check out other code over the
+// Dockerfile, put a wrapper first on PATH, write DOCKER_HOST to $GITHUB_ENV, retag the image
+// under test after the scan), so the tripwire is that any change to such a job is a visible
+// change to that file. `"*"` pins every job of the workflow; the workflow's own keys (name,
+// on, permissions, env, concurrency, defaults) are pinned with its jobs.
+export const PINNED_WORKFLOWS = new Map([
+  [".github/workflows/image.yml", "*"],
+  [".github/workflows/branch-images.yml", "*"],
+  [".github/workflows/loadtest-image.yml", "*"],
+  [".github/workflows/oci-import.yml", "*"],
+  // Deletes dev image versions with a packages: write token.
+  [".github/workflows/prune-dev-images.yml", "*"],
+  [".github/workflows/ci.yml", ["staging-image", "image"]],
+]);
+export const PINNED_JOBS_FILE = "tests/supply-chain/pinned-jobs.yaml";
+const UPDATE = `update the pinned job in ${PINNED_JOBS_FILE}, which a reviewer must read (node tests/supply-chain/update-pinned-jobs.mjs rewrites it)`;
+
+const readWorkflow = file => toData(parseStrict(readLocalFromRepo(file), file));
+
+// The pins as the workflows define them now.
+export function currentPins(read = readWorkflow) {
+  const workflows = {}, jobs = [];
+  for (const [file, which] of PINNED_WORKFLOWS) {
+    const { jobs: all, ...rest } = read(file);
+    workflows[file] = rest;
+    for (const job of which === "*" ? Object.keys(all) : which) jobs.push({ file, job, definition: all[job] ?? null });
+  }
+  return { workflows, jobs };
+}
+
+export const readPinnedJobs = () => toData(parseStrict(readLocalFromRepo(PINNED_JOBS_FILE), PINNED_JOBS_FILE));
+
+// The keys of the pinned jobs, as `<file>: job '<name>'`.
+export const pinnedJobKeys = (pins = currentPins()) => new Set(pins.jobs.map(({ file, job }) => `${file}: job '${job}'`));
+
+// The path of the first difference between two values, or null.
+function firstDifference(a, b, path = "") {
+  if (Object.is(a, b)) return null;
+  if (isMapping(a) && isMapping(b)) {
+    for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      const found = firstDifference(a[key], b[key], `${path}.${key}`);
+      if (found !== null) return found;
+    }
+    return Object.keys(a).join() === Object.keys(b).join() ? null : `${path} (key order)`;
+  }
+  if (Array.isArray(a) && Array.isArray(b)) {
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+      const found = firstDifference(a[i], b[i], `${path}[${i}]`);
+      if (found !== null) return found;
+    }
+    return null;
+  }
+  return path || "(the whole value)";
+}
+
+export function pinnedJobViolations(current, pinned) {
+  const out = [];
+  const files = new Set([...Object.keys(current.workflows ?? {}), ...Object.keys(pinned?.workflows ?? {})]);
+  for (const file of files) {
+    const at = firstDifference(current.workflows?.[file], pinned?.workflows?.[file]);
+    if (at !== null) out.push(`${file}: the workflow's own keys differ from the pin at ${at.slice(1) || "the top"}; ${UPDATE}`);
+  }
+  const byKey = list => new Map((Array.isArray(list) ? list : []).map(entry => [`${entry.file}: job '${entry.job}'`, entry.definition]));
+  const now = byKey(current.jobs), then = byKey(pinned?.jobs);
+  for (const key of new Set([...now.keys(), ...then.keys()])) {
+    if (!now.has(key)) out.push(`${key} is pinned but no longer listed in PINNED_WORKFLOWS; ${UPDATE}`);
+    else if (!then.has(key)) out.push(`${key} is not pinned yet; ${UPDATE}`);
+    else {
+      const at = firstDifference(now.get(key), then.get(key));
+      if (at !== null) out.push(`${key} differs from the pinned job at ${at.slice(1) || "the whole job"}; ${UPDATE}`);
+    }
+  }
+  return out;
+}
+
+// A job outside the pinned set that builds, logs in, publishes or calls another workflow.
+const IMAGE_ACTIONS = new Set(["docker/build-push-action", "docker/setup-buildx-action", "docker/metadata-action", "docker/login-action"]);
+const IMAGE_WRITE_SCOPES = ["packages", "id-token", "attestations"];
+export function unpinnedImageJobViolations(file, data, pinned = pinnedJobKeys()) {
+  const out = [];
+  for (const [name, job] of jobsOf(data)) {
+    const key = `${file}: job '${name}'`;
+    if (pinned.has(key)) continue;
+    const action = stepsOf(job).map(s => actionName(s.uses ?? "")).find(a => IMAGE_ACTIONS.has(a));
+    const writes = isMapping(job?.permissions) && IMAGE_WRITE_SCOPES.find(scope => job.permissions[scope] === "write");
+    const why = action ? `uses ${action}` : writes ? `can write ${writes}` : job?.uses !== undefined ? "calls another workflow" : null;
+    if (why) out.push(`${key} ${why}, so it must be pinned: add it to PINNED_WORKFLOWS and ${UPDATE}`);
+  }
+  return out;
+}
+
+// ---- run steps outside the pinned jobs (#488) ----
+
+// A cheap extra check for jobs that are not pinned; the pinned jobs are checked whole. It reads
+// each `run:` script for the ordinary spellings of an image build, a builder or daemon switch
+// and an unchecked Compose file. A guard, not a proof: it does not run the shell, so a command
+// assembled at run time, a script file a step runs, or a Compose file written at run time is
+// not understood (a command word taken from a variable is refused for that reason).
+
+// Environment that selects another builder or Docker daemon, or changes the Docker client's
+// configuration, the Compose files or BuildKit: refused in every env: mapping and named in no
+// run script of a job that is not pinned.
+export const DOCKER_ENV = /^(BUILDX_\w*|BUILDKIT_\w*|DOCKER_HOST|DOCKER_CONTEXT|DOCKER_CONFIG|DOCKER_BUILDKIT|DOCKER_TLS_VERIFY|DOCKER_CERT_PATH|COMPOSE_FILE|COMPOSE_PATH_SEPARATOR|COMPOSE_PROJECT_DIRECTORY|COMPOSE_ENV_FILES)$/;
+export const STEP_SHELLS = new Set(["bash", "sh"]);
+
+// Simple commands of a script: continuations joined, split at newlines, ; & | && || ( ) $( and
+// backticks, comments dropped, words shell-split (quotes removed; `DOCKER_""HOST` is one word).
+// Each word records whether it holds a `$` expansion.
+export function shellCommands(script) {
+  const s = script.replace(/\\\n/g, " ");
+  const commands = [], stack = [];
+  let words = [], word = null, quoted = false;
+  const add = (text, variable = false) => { word ??= { text: "", variable: false }; word.text += text; word.variable ||= variable; };
+  const endWord = () => { if (word !== null) words.push(word); word = null; };
+  const endCommand = () => { endWord(); if (words.length) commands.push(words); words = []; };
+  // A command substitution is read as commands of its own; its value is a variable word.
+  const open = close => { stack.push({ words, word, quoted, close }); words = []; word = null; quoted = false; };
+  const close = () => { endCommand(); ({ words, word, quoted } = stack.pop()); add("", true); };
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === "`") { if (stack.at(-1)?.close === "`") close(); else open("`"); continue; }
+    if (s.startsWith("$(", i)) { open(")"); i++; continue; }
+    if (quoted) {
+      if (c === '"') quoted = false;
+      else if (c === "\\" && i + 1 < s.length) add(s[++i]);
+      else add(c, c === "$");
+      continue;
+    }
+    if (c === '"') { add(""); quoted = true; continue; }
+    if (c === "'") { const j = s.indexOf("'", i + 1); add(s.slice(i + 1, j === -1 ? s.length : j)); i = j === -1 ? s.length : j; continue; }
+    if (c === "\\" && i + 1 < s.length) { add(s[++i]); continue; }
+    if (c === "#" && word === null) { const j = s.indexOf("\n", i); i = j === -1 ? s.length : j - 1; continue; }
+    if (c === ")" && stack.at(-1)?.close === ")") { close(); continue; }
+    if ("\n;&|()".includes(c)) { endCommand(); continue; }
+    if (c === " " || c === "\t") { endWord(); continue; }
+    if (c === ">" || c === "<") { endWord(); add(c); endWord(); continue; }
+    add(c, c === "$");
+  }
+  while (stack.length) close();
+  endCommand();
+  // Redirections and their targets are not words of the command.
+  return commands.map(ws => ws.filter((w, i) => !/^[<>]$/.test(w.text) && !(i > 0 && /^[<>]$/.test(ws[i - 1].text)))).filter(ws => ws.length);
+}
+
+const PREFIX_COMMANDS = new Set(["sudo", "env", "exec", "command", "time", "nohup", "xargs", "nice"]);
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+const refuse = reason => ({ refuse: reason });
+const DOCKER_GLOBALS = {
+  "-c": refuse("--context selects another Docker endpoint"), "--context": refuse("--context selects another Docker endpoint"),
+  "-H": refuse("--host selects another Docker daemon"), "--host": refuse("--host selects another Docker daemon"),
+  "--config": refuse("--config selects another Docker client configuration (contexts, plugins)"),
+  "--tls": refuse("TLS options are for a remote daemon"), "--tlsverify": refuse("TLS options are for a remote daemon"),
+  "--tlscacert": refuse("TLS options are for a remote daemon"), "--tlscert": refuse("TLS options are for a remote daemon"), "--tlskey": refuse("TLS options are for a remote daemon"),
+  "-l": "value", "--log-level": "value", "-D": "flag", "--debug": "flag", "-v": "flag", "--version": "flag", "-h": "flag", "--help": "flag",
+};
+const BUILDX_GLOBALS = { "--builder": refuse("--builder selects another builder"), "-D": "flag", "--debug": "flag", "-h": "flag", "--help": "flag" };
+const COMPOSE_GLOBALS = {
+  "-f": "file", "--file": "file",
+  "--project-directory": refuse("--project-directory moves where the Compose files and .env are read from"),
+  "--env-file": refuse("--env-file sets Compose variables such as COMPOSE_FILE"),
+  "-p": "value", "--project-name": "value", "--profile": "value", "--ansi": "value", "--progress": "value", "--parallel": "value",
+  "--dry-run": "flag", "--compatibility": "flag", "--all-resources": "flag", "-h": "flag", "--help": "flag",
+};
+
+// Reads options up to the first word that is not one. `table` maps an option to "value"
+// (takes one), "file" (a Compose file, collected), "flag" (takes none) or a refusal, for
+// `--name value`, `--name=value` and short `-nvalue`. An option not in the table is refused.
+function options(args, table, command) {
+  const files = [];
+  let i = 0;
+  while (i < args.length && args[i].startsWith("-") && args[i] !== "-") {
+    const arg = args[i];
+    const long = arg.startsWith("--");
+    const name = long ? arg.split("=")[0] : arg.slice(0, 2);
+    const inline = long ? arg.includes("=") : arg.length > 2;
+    const kind = table[name];
+    if (kind === undefined) return { refused: `unknown ${command} option '${arg}'` };
+    if (isMapping(kind)) return { refused: kind.refuse };
+    if (kind === "value" || kind === "file") {
+      const value = inline ? arg.slice(long ? name.length + 1 : 2) : args[i + 1];
+      if (kind === "file") files.push(value ?? "");
+      if (!inline) i++;
+    }
+    i++;
+  }
+  return { files, rest: args.slice(i) };
+}
+
+function composeCommand(args, composeFiles) {
+  const read = options(args, COMPOSE_GLOBALS, "compose");
+  if (read.refused) return read.refused;
+  for (const file of read.files) if (file.includes("$") || !composeFiles.has(posix.normalize(file))) return `Compose file '${file}' is not one of the checked Compose files (repoComposeFiles)`;
+  const [sub, ...rest] = read.rest;
+  if (sub === "build") return "compose build builds an image";
+  if (["up", "run", "create"].includes(sub) && rest.includes("--build")) return `compose ${sub} --build builds an image`;
+  return null;
+}
+
+function dockerCommand(args, composeFiles) {
+  const read = options(args, DOCKER_GLOBALS, "docker");
+  if (read.refused) return read.refused;
+  const [sub, ...rest] = read.rest;
+  if (sub === "build") return "docker build builds an image";
+  if ((sub === "image" || sub === "builder") && rest[0] === "build") return `docker ${sub} build builds an image`;
+  if (sub === "buildx") {
+    const bx = options(rest, BUILDX_GLOBALS, "buildx");
+    if (bx.refused) return bx.refused;
+    if (["build", "b", "bake"].includes(bx.rest[0])) return `buildx ${bx.rest[0]} builds an image`;
+    if (["create", "use"].includes(bx.rest[0])) return `buildx ${bx.rest[0]} selects another builder`;
+  }
+  if (sub === "context" && ["create", "use", "update", "import"].includes(rest[0])) return `docker context ${rest[0]} selects another Docker endpoint`;
+  if (sub === "compose") return composeCommand(rest, composeFiles);
+  return null;
+}
+
+// The reason one simple command is refused, or null.
+function commandViolation(words, composeFiles) {
+  let i = 0;
+  for (;;) {
+    while (i < words.length && ASSIGNMENT.test(words[i].text)) i++;
+    if (i < words.length && PREFIX_COMMANDS.has(words[i].text)) { i++; while (i < words.length && words[i].text.startsWith("-")) i++; continue; }
+    break;
+  }
+  if (i >= words.length) return null;
+  const word = words[i];
+  if (word.variable && !/^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?(\/[A-Za-z0-9._-]+)+$/.test(word.text)) return `the command word '${word.text}' is taken from a variable, which cannot be checked`;
+  const name = posix.basename(word.text).toLowerCase();
+  const args = words.slice(i + 1).map(w => w.text);
+  if (/^python3?$/.test(name) && args[0]?.endsWith("staging.py")) return args.find((a, k) => k > 0 && !a.startsWith("-")) === "build" ? "staging.py build builds an image" : null;
+  if (name === "staging.py") return args.find(a => !a.startsWith("-")) === "build" ? "staging.py build builds an image" : null;
+  if (name === "docker") return dockerCommand(args, composeFiles);
+  if (name === "docker-compose") return composeCommand(args, composeFiles);
+  if (["podman", "nerdctl"].includes(name)) {
+    const words2 = args.filter(a => !a.startsWith("-"));
+    if (words2[0] === "build" || (["image", "builder", "buildx"].includes(words2[0]) && ["build", "b", "bake"].includes(words2[1]))) return `${name} builds an image`;
+    if (words2[0] === "compose" && words2.includes("build")) return `${name} compose builds an image`;
+    return null;
+  }
+  if (name === "buildah") return ["bud", "build"].includes(args.find(a => !a.startsWith("-"))) ? "buildah builds an image" : null;
+  if (["buildctl", "kaniko", "executor"].includes(name)) return `${name} builds an image`;
+  return null;
+}
+
+let composeFilesCache;
+export const checkedComposeFiles = () => (composeFilesCache ??= new Set(repoComposeFiles()));
+
 export function runBuildViolations(where, script, composeFiles = checkedComposeFiles()) {
-  return script.replace(/\\\n/g, " ").split(/\n|;|&&|\|\|/).flatMap(line => {
-    const words = line.split(/[^A-Za-z0-9_.+-]+/).map(word => word.toLowerCase());
-    const builder = words.some(word => RUN_BUILDERS.has(word) || word.endsWith("/staging.py"));
-    const build = words.some(word => RUN_BUILD_WORDS.has(word)) || (words.includes("buildx") && words.includes("b"));
-    const out = builder && build ? [`${where}: a run step builds an image (${JSON.stringify(line.trim().slice(0, 60))}); use a docker/build-push-action step listed in IMAGE_BUILDS`] : [];
-    const docker = words.includes("docker") || words.includes("buildx");
-    const selects = /\bbuildx\s+(?:-\S+\s+)*(?:create|use)\b/.test(line) || /\bdocker\s+(?:-\S+\s+)*context\s+(?:create|use|update|import)\b/.test(line)
-      || ["--builder", "--context", "-c", "-h", "--host"].some(flag => words.includes(flag));
-    if (docker && selects) out.push(`${where}: a run step selects a builder or Docker endpoint (${JSON.stringify(line.trim().slice(0, 60))}); the runner's default Docker and the setup-buildx-action builder are the only ones`);
-    if (words.includes("docker-compose") || (words.includes("docker") && words.includes("compose"))) out.push(...composeFileViolations(where, line, composeFiles));
-    return out;
+  return shellCommands(script).flatMap(words => {
+    const reason = commandViolation(words, composeFiles);
+    return reason ? [`${where}: ${reason} (${JSON.stringify(words.map(w => w.text).join(" ").slice(0, 60))}); an image is built only in a pinned job`] : [];
   });
 }
 
-// A Compose invocation may name only Compose files this file checks (-f/--file, as a literal).
-export function composeFileViolations(where, line, composeFiles) {
-  const out = [];
-  for (const m of line.matchAll(/(?:^|\s)(?:-f|--file)(?:=|\s+)("[^"]*"|'[^']*'|\S+)/g)) {
-    const path = m[1].replace(/^["']|["']$/g, "");
-    if (path.includes("$") || !composeFiles.has(posix.normalize(path))) out.push(`${where}: Compose file '${path}' is not one of the checked Compose files (repoComposeFiles)`);
-  }
-  if (/(?:^|\s)--project-directory\b/.test(line)) out.push(`${where}: --project-directory moves where the Compose files are read from`);
-  return out;
+// The DOCKER_ENV names a run script mentions, after the shell removes quotes.
+function dockerEnvViolations(where, script) {
+  const words = shellCommands(script).flat().map(w => w.text).join(" ");
+  const names = new Set([...(`${script} ${words}`.match(/[A-Z][A-Z0-9_]*/g) ?? [])].filter(name => DOCKER_ENV.test(name)));
+  return [...names].map(name => `${where}: ${name} selects a builder or changes the Docker client; only a pinned job may set it`);
 }
 
-// The environment names a run script mentions that DOCKER_ENV covers.
-export function dockerEnvViolations(where, script) {
-  const allowed = RUN_DOCKER_ENV.has(where) ? "DOCKER_CONFIG" : null;
-  return [...new Set(script.match(/[A-Z][A-Z0-9_]*/g) ?? [])].filter(name => DOCKER_ENV.test(name) && name !== allowed)
-    .map(name => `${where}: ${name} selects a builder or changes the Docker client; it may not be set or written by a workflow`);
-}
-
-export function envMappingViolations(where, env) {
+function envMappingViolations(where, env) {
   if (env === undefined) return [];
-  if (!isMapping(env)) return [`${where}: env must be a literal mapping (an expression could set ${DOCKER_ENV.source})`];
+  if (!isMapping(env)) return [`${where}: env must be a literal mapping`];
   return Object.keys(env).filter(name => DOCKER_ENV.test(name)).map(name => `${where}: env ${name} selects a builder or changes the Docker client`);
 }
 
-export function imageBuildViolations(file, data, approved = IMAGE_BUILDS, seen = new Set(), { composeFiles = checkedComposeFiles() } = {}) {
-  const out = [...envMappingViolations(`${file}: workflow`, data?.env)];
-  for (const [name, job] of jobsOf(data)) out.push(...envMappingViolations(`${file}: job '${name}'`, job?.env));
-  for (const [where, step] of buildStepsOf(file, data)) {
+const shellViolation = (where, shell) => (shell === undefined || STEP_SHELLS.has(shell) ? [] : [`${where}: shell '${shell}' is not bash or sh, so the run-step checks cannot read the step`]);
+
+export function buildStepsOf(file, data) {
+  const steps = [];
+  for (const [name, job] of jobsOf(data)) stepsOf(job).forEach(step => steps.push([`${file}: job '${name}'`, step, job]));
+  stepsOf(isMapping(data?.runs) ? data.runs : null).forEach(step => steps.push([`${file}: runs`, step, null]));
+  return steps;
+}
+
+// Every step of every workflow and local action: the build-step and Buildx rules everywhere;
+// for jobs that are not pinned, also the run-step, env and shell checks.
+export function imageBuildViolations(file, data, { composeFiles = checkedComposeFiles(), pinned = pinnedJobKeys() } = {}) {
+  const out = [...envMappingViolations(`${file}: workflow`, data?.env), ...shellViolation(`${file}: workflow defaults`, data?.defaults?.run?.shell)];
+  for (const [name, job] of jobsOf(data)) {
+    out.push(...envMappingViolations(`${file}: job '${name}'`, job?.env));
+    if (!pinned.has(`${file}: job '${name}'`)) out.push(...shellViolation(`${file}: job '${name}' defaults`, job?.defaults?.run?.shell));
+  }
+  for (const [where, step, job] of buildStepsOf(file, data)) {
+    const isPinned = pinned.has(where);
     out.push(...envMappingViolations(where, step.env));
-    if (typeof step.run === "string") out.push(...runBuildViolations(where, step.run, composeFiles), ...dockerEnvViolations(where, step.run));
-    if (typeof step.uses !== "string") continue;
-    const action = actionName(step.uses);
-    if ((action === "docker/setup-buildx-action" || action === "docker/build-push-action") && RUN_DOCKER_ENV.has(where)) out.push(`${where}: RUN_DOCKER_ENV lets this job set DOCKER_CONFIG, so it may not set up Buildx or build`);
-    if (action === "docker/setup-buildx-action") {
-      if (!isMapping(step.with) || JSON.stringify(Object.entries(step.with).sort()) !== JSON.stringify(Object.entries(BUILDX_INPUTS))) out.push(`${where}: setup-buildx-action: with: must be exactly driver-opts: image=${BUILDKIT_IMAGE}`);
-      continue;
+    if (!isPinned) {
+      out.push(...shellViolation(where, step.shell));
+      if (typeof step.run === "string") out.push(...runBuildViolations(where, step.run, composeFiles), ...dockerEnvViolations(where, step.run));
+    }
+    const action = actionName(step.uses ?? "");
+    if (action === "docker/setup-buildx-action" && (!isMapping(step.with) || JSON.stringify(Object.entries(step.with).sort()) !== JSON.stringify(Object.entries(BUILDX_INPUTS)))) {
+      out.push(`${where}: setup-buildx-action: with: must be exactly driver-opts: image=${BUILDKIT_IMAGE}`);
     }
     if (action !== "docker/build-push-action") continue;
-    const inputs = step.with;
-    if (!isMapping(inputs)) { out.push(`${where}: a build step needs a literal with: mapping`); continue; }
-    if ("build-contexts" in inputs) out.push(`${where}: build-contexts can replace a stage or base image of the Dockerfile; it is not allowed`);
-    if ("build-args" in inputs) {
-      if (typeof inputs["build-args"] !== "string") out.push(`${where}: build-args must be a literal string`);
-      else for (const line of inputs["build-args"].split("\n")) if (/^\s*BUILDKIT_/i.test(line)) out.push(`${where}: build argument '${line.trim()}' changes how BuildKit builds (BUILDKIT_SYNTAX loads another frontend); it is not allowed`);
-    }
-    const context = buildPath(inputs.context);
-    if (context.refused) out.push(`${where}: context ${context.refused}`);
-    if ("file" in inputs) {
-      const dockerfile = buildPath(inputs.file);
-      if (dockerfile.refused) out.push(`${where}: file ${dockerfile.refused}`);
-      else if (!KNOWN_DOCKERFILES.includes(dockerfile.path)) out.push(`${where}: file '${inputs.file}' is not one of the known Dockerfiles (${KNOWN_DOCKERFILES.join(", ")})`);
-    } else if (context.path && !KNOWN_DOCKERFILES.includes(posix.join(context.path, "Dockerfile"))) {
-      out.push(`${where}: the default Dockerfile '${posix.join(context.path, "Dockerfile")}' is not one of the known Dockerfiles`);
-    }
-    const expected = approved.get(where);
-    if ("target" in inputs && expected?.target === undefined) out.push(`${where}: target '${inputs.target}' builds another stage than the runtime image; it is not listed in IMAGE_BUILDS`);
-    if (!expected) { out.push(`${where}: an image build step that is not listed in IMAGE_BUILDS`); continue; }
-    if (seen.has(where)) { out.push(`${where}: more than one image build step`); continue; }
-    seen.add(where);
-    const keys = Object.keys(inputs).sort(), listed = Object.keys(expected).sort();
-    if (JSON.stringify(keys) !== JSON.stringify(listed)) out.push(`${where}: with: keys ${keys.join(", ")}; IMAGE_BUILDS lists ${listed.join(", ")}`);
-    for (const input of new Set([...keys, ...listed])) if (inputs[input] !== expected[input]) out.push(`${where}: ${input} is ${JSON.stringify(inputs[input])}; IMAGE_BUILDS lists ${JSON.stringify(expected[input])}`);
+    if (!isPinned) out.push(`${where}: an image build step outside the pinned jobs (PINNED_WORKFLOWS)`);
+    out.push(...buildStepViolations(where, step.with, job));
   }
   return out;
 }
 
-// Compose `build:` sections (#488): a build of a service takes only an explicit `context`
-// (relative to the Compose file, in the checkout, outside the skipped directories) and an
-// optional `dockerfile` (relative to the context, one of KNOWN_DOCKERFILES). Every other key
-// is refused, among them `target` (another stage), `additional_contexts` (replaces a stage or
-// base image, as build-contexts does), `args` (BUILDKIT_SYNTAX), `dockerfile_inline`, `ssh`
-// and `secrets`. Each Compose file is checked on its own, so an override file cannot add one.
+// ---- Compose files (#488) ----
+
+// A Compose `build:` takes only an explicit `context` (relative to the Compose file, in the
+// checkout, outside the skipped directories) and an optional `dockerfile` (relative to the
+// context, one of KNOWN_DOCKERFILES): no `target`, `additional_contexts`, `args`,
+// `dockerfile_inline`, `ssh` or `secrets`. No Compose file may `include` another or `extends`
+// a service. Each file is checked on its own, so an override file cannot add one of these.
 export const COMPOSE_BUILD_KEYS = ["context", "dockerfile"];
 export const COMPOSE_FILE = /^(docker-)?compose(\.[^/]+)?\.ya?ml$/i;
 
@@ -252,9 +487,9 @@ export function composeBuildViolations(file, data, builds = []) {
   return out;
 }
 
-// Every Compose file of the repository (#488 review): a YAML file named like one, or any YAML
-// file with a top-level `services:` key, anywhere outside the skipped directories and
-// .github. Only these may be passed to `docker compose -f`.
+// Every Compose file of the repository: a YAML file named like one, or any YAML file with a
+// top-level `services:` key, anywhere outside the skipped directories and .github. Only these
+// may be passed to `docker compose -f`.
 export function repoComposeFiles(dir = root) {
   const base = dir.endsWith("/") ? dir : `${dir}/`;
   const visit = d => readdirSync(d, { withFileTypes: true }).flatMap(e => {
@@ -265,26 +500,31 @@ export function repoComposeFiles(dir = root) {
   });
   return visit(dir).sort();
 }
-export let composeFilesCache;
-export const checkedComposeFiles = () => (composeFilesCache ??= new Set(repoComposeFiles()));
 
+// Compose reads `.env` from the project directory (that of the first file) and takes
+// COMPOSE_FILE and other settings from it. A tracked `.env` next to a checked Compose file is
+// refused unless listed here with the reason; none is. (A developer's untracked `.env` is
+// not read: CI never has one.)
+export const COMPOSE_DOTENV_ALLOWED = new Map([]);
+const trackedFiles = () => new Set(spawnSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8" }).stdout.split("\0").filter(Boolean));
+export function composeDotenvViolations(composeFiles, exists = path => trackedFiles().has(path)) {
+  const dirs = new Set([...composeFiles].map(file => posix.dirname(file)));
+  return [...dirs].map(dir => (dir === "." ? ".env" : `${dir}/.env`)).filter(path => exists(path) && !COMPOSE_DOTENV_ALLOWED.has(path))
+    .map(path => `${path} sets Compose variables (COMPOSE_FILE and others) for the Compose files beside it; it is not allowed unless listed in COMPOSE_DOTENV_ALLOWED`);
+}
 
+// ---- actions (#488) ----
 
-
-
-// ---- review of #488: bypasses of the build checks ----
-
-// Every action a workflow or local action uses (#488 review). A new third-party action is a
-// change to this list. Names, not commits: the pin check above requires a full SHA and
-// Dependabot moves it; the two Docker actions, whose inputs the build checks interpret, are
-// also pinned to their commit, so a new version is read before it is approved.
+// Every action a workflow or local action uses. A new third-party action is a change to this
+// list. Names, not commits: the pin check requires a full SHA and Dependabot moves it; the
+// jobs that build or publish pin every action's commit in pinned-jobs.yaml.
 export const APPROVED_ACTIONS = new Map([
   ["actions/checkout", "GitHub-owned; checks out the repository"],
   ["actions/upload-artifact", "GitHub-owned; hands files between jobs"],
   ["actions/download-artifact", "GitHub-owned; hands files between jobs"],
-  ["docker/setup-buildx-action", "starts the pinned BuildKit image (BUILDX_INPUTS)"],
-  ["docker/build-push-action", "the only image builder (IMAGE_BUILDS)"],
-  ["docker/metadata-action", "computes tags and labels in the read-only meta job"],
+  ["docker/setup-buildx-action", "starts the pinned BuildKit image (BUILDX_INPUTS); only in pinned jobs"],
+  ["docker/build-push-action", "the only image builder; only in pinned jobs"],
+  ["docker/metadata-action", "computes tags and labels in the read-only meta job (pinned)"],
   ["dtolnay/rust-toolchain", "installs the pinned Rust toolchain (#354)"],
   ["Swatinem/rust-cache", "caches Cargo build output in read-only jobs"],
   ["taiki-e/install-action", "installs cargo-deny at an exact version with its checksum check"],
@@ -292,16 +532,16 @@ export const APPROVED_ACTIONS = new Map([
   ["github/codeql-action/analyze", "CodeQL, in the read-only analyze job"],
   ["github/codeql-action/upload-sarif", "uploads the SARIF file in the upload job"],
 ].map(([name, reason]) => [name.toLowerCase(), reason]));
-export const PINNED_ACTION_SHAS = new Map([
-  ["docker/build-push-action", "c3c9e263c25d99ce0380d002d59b67737d91b0dc"],
-  ["docker/setup-buildx-action", "f87e5991a6d7451dcb8d9637bfbc97413f497069"],
-]);
+// Any other action whose name looks like an image builder is refused, even when listed.
 export const IMAGE_BUILDER_NAME = /build-?push|buildx|bake|buildah|kaniko|podman|(^|[/-])img([/-]|$)|build-?image/i;
+const DOCKER_ACTIONS = new Set(["docker/build-push-action", "docker/setup-buildx-action"]);
 
-// Local actions are read only under .github/actions, and local reusable workflows only in
-// .github/workflows: a `uses:` of any other path runs code no check here reads.
+// Local actions are read only under .github/actions and local reusable workflows only in
+// .github/workflows: a `uses:` of any other path runs code no check reads. A Docker container
+// action, local or `docker://`, runs an image outside the approved actions.
 export function actionPolicyViolations(file, data, { approved = APPROVED_ACTIONS, used = new Set() } = {}) {
   const out = [];
+  if (isMapping(data?.runs) && String(data.runs.using).toLowerCase() === "docker") out.push(`${file}: a Docker container action runs an image outside the approved actions`);
   for (const [name, job] of jobsOf(data)) {
     if (job?.uses === undefined) continue;
     const m = typeof job.uses === "string" ? job.uses.match(/^\.\/\.github\/workflows\/([A-Za-z0-9_-][A-Za-z0-9._-]*\.ya?ml)$/) : null;
@@ -317,59 +557,18 @@ export function actionPolicyViolations(file, data, { approved = APPROVED_ACTIONS
       continue;
     }
     if (uses.startsWith("docker://")) { out.push(`${where}: a docker:// step runs an image outside the approved actions`); continue; }
-    const name = actionName(uses), sha = uses.split("@")[1];
-    if (!approved.has(name)) out.push(`${where}: ${name} is not an approved action (APPROVED_ACTIONS in tests/supply-chain.test.mjs)`);
+    const name = actionName(uses);
+    if (!approved.has(name)) out.push(`${where}: ${name} is not an approved action (APPROVED_ACTIONS in tests/supply-chain/policy.mjs)`);
     else used.add(name);
-    if (IMAGE_BUILDER_NAME.test(name) && !PINNED_ACTION_SHAS.has(name)) out.push(`${where}: ${name} looks like an image builder; only docker/build-push-action builds images`);
-    if (PINNED_ACTION_SHAS.has(name) && sha !== PINNED_ACTION_SHAS.get(name)) out.push(`${where}: ${name} must be pinned to ${PINNED_ACTION_SHAS.get(name)}, the commit whose inputs these checks were written for`);
+    if (IMAGE_BUILDER_NAME.test(name) && !DOCKER_ACTIONS.has(name)) out.push(`${where}: ${name} looks like an image builder; only docker/build-push-action builds images`);
   }
   return out;
 }
 
+// ---- fixture helpers ----
 
-// The checks of one workflow after adding a job, a step or env to the real parsed file.
-export const buildChecks = (name, data) => imageBuildViolations(`.github/workflows/${name}.yml`, data, IMAGE_BUILDS, new Set(), { composeFiles: new Set(repoComposeFiles()) });
+// The checks of one workflow after an edit to the real parsed file.
+export const buildChecks = (name, data) => imageBuildViolations(`.github/workflows/${name}.yml`, data);
 export const actionChecks = (name, data, options) => actionPolicyViolations(`.github/workflows/${name}.yml`, data, options);
 export const withStep = (name, job, step) => { const data = structuredClone(loadWorkflow(name)); data.jobs[job].steps.push(step); return data; };
-
-
-
-
-
-
-
-
-
-// ---- pinned image jobs (#488) ----
-
-// Every job that builds, publishes, signs, attests, imports or tests an image is pinned in
-// full in pinned-jobs.yaml: a run step can do anything (check out other code over the
-// Dockerfile, put a wrapper first on PATH, retag the image under test), so the only reliable
-// tripwire is that any change to such a job is a visible change to that file, which a
-// reviewer must read. `"*"` pins every job of the workflow; the workflow's own keys (name, on,
-// permissions, env, concurrency, defaults) are pinned with it.
-export const PINNED_WORKFLOWS = new Map([
-  [".github/workflows/image.yml", "*"],
-  [".github/workflows/branch-images.yml", "*"],
-  [".github/workflows/loadtest-image.yml", "*"],
-  [".github/workflows/oci-import.yml", "*"],
-  [".github/workflows/ci.yml", ["staging-image", "image"]],
-]);
-export const PINNED_JOBS_FILE = "tests/supply-chain/pinned-jobs.yaml";
-
-// The pins as the workflows define them today.
-export function currentPins(read = file => toData(parseStrict(readLocalFromRepo(file), file))) {
-  const workflows = {}, jobs = [];
-  for (const [file, which] of PINNED_WORKFLOWS) {
-    const { jobs: all, ...rest } = read(file);
-    workflows[file] = rest;
-    for (const job of which === "*" ? Object.keys(all) : which) jobs.push({ file, job, definition: all[job] ?? null });
-  }
-  return { workflows, jobs };
-}
-
-export const readPinnedJobs = () => toData(parseStrict(readLocalFromRepo(PINNED_JOBS_FILE), PINNED_JOBS_FILE));
-
-// Implemented in the next commit; the fixtures show what it must refuse.
-export function pinnedJobViolations() { return []; }
-export function composeDotenvViolations() { return []; }
+export const stepOf = (job, action) => stepsOf(job).find(s => actionName(s.uses ?? "") === action);

@@ -60,6 +60,14 @@ updates:
     open-pull-requests-limit: 5
     labels: [dependencies, github_actions]
     groups:
+      # The two actions whose inputs the image-build checks interpret arrive in a
+      # PR of their own (Dependabot puts an update in the first group that
+      # matches), so the routine group is not held up while their new version
+      # is read. Any action used by an image job also changes
+      # tests/supply-chain/pinned-jobs.yaml: regenerate it in the PR and read
+      # the diff (docs/verification.md, "Pinned image jobs").
+      docker-build:
+        patterns: ["docker/build-push-action", "docker/setup-buildx-action"]
       actions:
         patterns: ["*"]
         update-types: [minor, patch]

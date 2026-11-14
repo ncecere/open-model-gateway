@@ -372,9 +372,13 @@ jobs:
       fail-fast: true
       matrix:
         include:
+          # pair is the cache scope: from the matrix, which no step can rewrite
+          # (a scope from env could be redirected through $GITHUB_ENV, #488).
           - platform: linux/amd64
+            pair: linux-amd64
             runner: ubuntu-24.04
           - platform: linux/arm64
+            pair: linux-arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 75
@@ -413,8 +417,8 @@ jobs:
           outputs: type=oci,dest=${{ runner.temp }}/image.tar,oci-mediatypes=true
           attests: type=sbom,generator=mirror.gcr.io/docker/buildkit-syft-scanner:stable-1@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9
           provenance: mode=max
-          cache-from: type=gha,scope=image-${{ env.PLATFORM_PAIR }}
-          cache-to: type=gha,mode=max,scope=image-${{ env.PLATFORM_PAIR }}
+          cache-from: type=gha,scope=image-${{ matrix.pair }}
+          cache-to: type=gha,mode=max,scope=image-${{ matrix.pair }}
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: upload

@@ -1,4 +1,5 @@
-// Job containers, service containers and Docker action images are pinned by digest (#493).
+// Job and service containers are pinned by digest and may not reach the host (#493, #488).
+// Docker container actions are refused outright (actions.test.mjs).
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -55,13 +56,6 @@ test("fixtures: floating, computed and malformed container and service images ar
   assert.deepEqual(check("    container: ${{ inputs.image }}\n", allowed), []);
   assert.equal(check("    container:\n      image: ${{ inputs.image }}\n", allowed).length, 1, "the allowlist names the exact location");
   assert.equal(check("    container: node:22\n", allowed).length, 1, "an allowlisted location still needs a digest when written literally");
-  // A Docker container action declares its image too.
-  const action = runs => containerPinViolations("action.yml", { runs });
-  assert.deepEqual(action({ using: "docker", image: `docker://${pinned}` }), []);
-  assert.deepEqual(action({ using: "composite", steps: [] }), []);
-  assert.match(action({ using: "docker", image: "docker://alpine:3" }).join(), /runs\.image: alpine:3 is not pinned by digest/);
-  assert.match(action({ using: "docker", image: "Dockerfile" }).join(), /must name a digest-pinned docker:\/\/ image/);
-  assert.match(action({ using: "docker" }).join(), /the image must be one literal string/);
 });
 
 test("container and service options that reach the host, and registry credentials, are refused", () => {
@@ -72,7 +66,7 @@ test("container and service options that reach the host, and registry credential
     ["a host path volume", d => { services(d).options += " --volume=/:/host"; }],
     ["a bind mount", d => { services(d).options += " --mount type=bind,src=/,dst=/host"; }],
     ["--cap-add", d => { services(d).options += " --cap-add SYS_ADMIN"; }],
-    ["--entrypoint", d => { services(d).options += " --entrypoint /bin/sh"; }],
+    ["--entrypoint", d => { services(d).options += " --entrypoint /entrypoint"; }],
     ["--pull", d => { services(d).options += " --pull always"; }],
     ["--network host", d => { services(d).options += " --network host"; }],
     ["--network=host", d => { services(d).options += " --network=host"; }],
