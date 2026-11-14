@@ -16,12 +16,18 @@ const loadWorkflow = () => {
 };
 const dependencies = ["gateway-lint", "gateway-tests", "gateway-special"];
 const runs = job => job.steps.filter(s => s.run).map(s => s.run);
+// A required job's steps must run as written: a step or job that is skipped, allowed to
+// fail, or run by a no-op interpreter or in another directory (`defaults.run`) could
+// keep a pinned command line and never run it (#502).
 function required(job) {
   assert.equal(job.if, undefined);
   assert.equal(job["continue-on-error"], undefined);
+  assert.equal(job.defaults, undefined);
   for (const step of job.steps) {
     assert.equal(step.if, undefined);
     assert.equal(step["continue-on-error"], undefined);
+    assert.equal(step.shell, undefined);
+    assert.equal(step["working-directory"], undefined);
   }
 }
 
@@ -51,6 +57,24 @@ function validateGraph(data) {
     "cargo clippy -p open-model-gateway --bins --lib --locked -- -D warnings",
   ]);
 }
+
+test("a required job step cannot keep its command and not run it (#502)", () => {
+  const lint = data => data.jobs["gateway-lint"];
+  const clippy = data => lint(data).steps.find(step => step.run?.includes("--bins --lib"));
+  const mutations = [
+    ["a no-op shell", data => { clippy(data).shell = "true {0}"; }],
+    ["another working directory", data => { clippy(data)["working-directory"] = "tools/loadgen"; }],
+    ["job-level run defaults", data => { lint(data).defaults = { run: { shell: "true {0}" } }; }],
+    ["a skipped step", data => { clippy(data).if = "false"; }],
+    ["a step allowed to fail", data => { clippy(data)["continue-on-error"] = true; }],
+  ];
+  for (const [what, mutate] of mutations) {
+    const data = loadWorkflow();
+    mutate(data);
+    assert.throws(() => validateGraph(data), assert.AssertionError, what);
+  }
+  validateGraph(loadWorkflow());
+});
 
 const ociPolicyCommands = [
   "node --test tests/oci-tool.test.mjs",
