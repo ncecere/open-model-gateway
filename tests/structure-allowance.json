@@ -8,7 +8,7 @@
     "apps/gateway/src/billing/v3.rs": 966,
     "apps/gateway/src/filestore/files.rs": 1012,
     "apps/gateway/src/inference/mod.rs": 875,
-    "apps/gateway/src/jobs/schedule.rs": 1003,
+    "apps/gateway/src/jobs/schedule.rs": 970,
     "apps/gateway/src/management/access_reviews.rs": 954,
     "apps/gateway/src/management/alerts.rs": 1006,
     "apps/gateway/src/management/catalogs.rs": 983,

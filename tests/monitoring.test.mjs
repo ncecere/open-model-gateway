@@ -79,10 +79,14 @@ test("rule names are unique and every rule has a severity and a summary", () => 
 
 test("accounting failures alert, split by settlement stage (#528)", () => {
   const all = stages();
+  // A new stage must be placed in one rule on purpose (#497): the critical one if
+  // a failure there leaves money held until reconciliation.
   assert.deepEqual(all.toSorted(), [
-    "cancellation_settlement", "explicit_settlement", "governance_storage", "pool_acquire_and_begin", "route_lookup",
+    "cancellation_settlement", "explicit_settlement", "governance_storage", "job_settlement", "job_storage",
+    "key_authentication", "maintenance", "pool_acquire_and_begin", "realtime_admission", "realtime_settlement",
+    "route_lookup",
   ]);
-  const settlement = "explicit_settlement|cancellation_settlement";
+  const settlement = "explicit_settlement|cancellation_settlement|realtime_settlement|job_settlement";
   // increase() plus the series that did not exist 10 minutes ago: a series
   // exists only after a failure, so a new one is the first failure, which
   // rate() and increase() cannot see.
@@ -108,7 +112,7 @@ test("accounting failures alert, split by settlement stage (#528)", () => {
   }
   // The two rules split the stages: every stage is covered exactly once.
   const re = new RegExp(`^(?:${settlement})$`);
-  assert.deepEqual(all.filter(stage => re.test(stage)).toSorted(), ["cancellation_settlement", "explicit_settlement"]);
+  assert.deepEqual(all.filter(stage => re.test(stage)).toSorted(), ["cancellation_settlement", "explicit_settlement", "job_settlement", "realtime_settlement"]);
   // Runbook links resolve to a heading in docs/operations.md.
   assert.match(read("docs/operations.md"), /^### Accounting failures$/m);
 });

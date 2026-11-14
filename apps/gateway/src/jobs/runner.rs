@@ -163,7 +163,8 @@ impl Runner {
     async fn observe_queue(&self) {
         let rows: Result<Vec<(String, i64)>, _> = sqlx::query_as("SELECT coalesce(batch_mode,'native'),count(*) FROM async_jobs WHERE kind='batch' AND settled_at IS NULL GROUP BY 1")
             .fetch_all(&self.jobs.store.pool)
-            .await;
+            .await
+            .map_err(store::job_storage);
         if let Ok(rows) = rows {
             for mode in ["native", "gateway"] {
                 let n = rows.iter().find(|r| r.0 == mode).map_or(0, |r| r.1);
@@ -479,7 +480,8 @@ impl Runner {
         let (completed, failed): (i64, i64) = sqlx::query_as("SELECT count(*) FILTER(WHERE state='succeeded'),count(*) FILTER(WHERE state IN('failed','interrupted')) FROM batch_lines WHERE job_id=$1")
             .bind(job.id)
             .fetch_one(&store.pool)
-            .await?;
+            .await
+            .map_err(store::job_storage)?;
         let final_state = match stop {
             None => JobState::Completed,
             Some(Stop::Cancelled) => JobState::Cancelled,

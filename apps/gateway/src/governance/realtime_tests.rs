@@ -644,3 +644,272 @@ async fn context_sized_windows_settle_known_and_flag_usage_above_them(pool: PgPo
         )
     );
 }
+
+/// #497: an adapter that connects a realtime session with an idle upstream.
+struct IdleRealtime;
+#[async_trait::async_trait]
+impl crate::providers::ProviderAdapter for IdleRealtime {
+    fn id(&self) -> &'static str {
+        "openai"
+    }
+    fn capabilities(&self) -> crate::inference::types::Capabilities {
+        crate::inference::types::Capabilities {
+            text_chat: false,
+            streaming: false,
+            tools: false,
+        }
+    }
+    fn supports_protocol(&self, protocol: ApiProtocol) -> bool {
+        protocol == ApiProtocol::Realtime
+    }
+    async fn execute(
+        &self,
+        _: &Deployment,
+        _: ChatRequest,
+    ) -> Result<crate::inference::types::ProviderOutput, InferenceError> {
+        Err(InferenceError::Unsupported)
+    }
+    async fn connect_realtime(
+        &self,
+        _: &Deployment,
+        _: &crate::inference::realtime::RealtimeSetup,
+    ) -> Result<crate::inference::realtime::RealtimeUpstream, InferenceError> {
+        use futures_util::SinkExt;
+        Ok(crate::inference::realtime::RealtimeUpstream {
+            sink: Box::pin(
+                futures_util::sink::drain::<String>()
+                    .sink_map_err(|never: std::convert::Infallible| match never {}),
+            ),
+            events: Box::pin(futures_util::stream::pending()),
+            config: Default::default(),
+        })
+    }
+}
+
+/// The exported count of one (stage, cause) series of the process-wide metrics.
+async fn exported(stage: &str, cause: &str) -> u64 {
+    let exposition = crate::metrics::METRICS.render(None).await;
+    crate::db::accounting_failure::tests::exported_series(&exposition)
+        .into_iter()
+        .find(|(s, c, _)| (s.as_str(), c.as_str()) == (stage, cause))
+        .map_or(0, |(_, _, n)| n)
+}
+
+/// A store of two connections whose acquire timeout outlasts every realtime
+/// deadline, and an engine on it with the idle realtime adapter.
+async fn realtime_engine(pool: &PgPool) -> (Store, crate::inference::Engine) {
+    use crate::inference::{Engine, EngineLimits, realtime::RealtimeLimits};
+    use std::time::Duration;
+    let store = Store::new(
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .acquire_timeout(Duration::from_secs(20))
+            .connect_with((*pool.connect_options()).clone())
+            .await
+            .unwrap(),
+    );
+    let mut registry = crate::providers::ProviderRegistry::default();
+    registry
+        .register(std::sync::Arc::new(IdleRealtime))
+        .unwrap();
+    let engine = Engine::new(
+        std::sync::Arc::new(store.clone()),
+        registry,
+        EngineLimits::default(),
+    )
+    .unwrap()
+    .with_realtime_limits(RealtimeLimits {
+        max_output_tokens: 100,
+        ..RealtimeLimits::default()
+    })
+    .unwrap();
+    (store, engine)
+}
+
+/// #497: each realtime accounting step whose own deadline elapses (window
+/// reservation 5 s; response open, response settlement and session finish
+/// 3 s; the detached finish of a dropped session 3 s) is counted once, at
+/// `realtime_admission` (the window reservation) or `realtime_settlement`
+/// (the others), naming what it waited on: the in-process gate,
+/// a pooled connection, or the database. Before, none was counted.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn elapsed_realtime_accounting_deadlines_name_what_they_waited_on(pool: PgPool) {
+    use crate::db::{
+        accounting_failure::tests::{labels, signal_lines},
+        diagnostics::{self, Handle},
+    };
+    use sqlx::Connection;
+    use std::time::Duration;
+    let f = fixture(pool.clone()).await;
+    realtime_model(&f, Some(lines())).await;
+    let (store, engine) = realtime_engine(&pool).await;
+    let open = || engine.open_realtime(f.principal, "company/smart", Uuid::new_v4());
+    let lock = || async {
+        let mut blocker = sqlx::PgConnection::connect_with(&pool.connect_options())
+            .await
+            .unwrap();
+        sqlx::raw_sql("BEGIN; LOCK TABLE governance_reservations IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut blocker)
+            .await
+            .unwrap();
+        blocker
+    };
+    let unlock = |mut blocker: sqlx::PgConnection| async move {
+        sqlx::query("ROLLBACK").execute(&mut blocker).await.unwrap();
+        blocker.close().await.unwrap();
+    };
+    let gate = &store.lock_gates.settlement;
+    let mut session = open().await.unwrap();
+
+    // Opening a response waits for its session's reservation row.
+    let blocker = lock().await;
+    let handle = Handle::new();
+    let opened = diagnostics::scope(handle.clone(), session.open_response("r1".into())).await;
+    unlock(blocker).await;
+    assert_eq!(opened, Err(InferenceError::Storage));
+    assert_eq!(
+        labels(&handle.signals()),
+        [("realtime_settlement", "deadline_in_database")],
+        "the response open"
+    );
+    session.open_response("r1".into()).await.unwrap();
+
+    // Settling it waits at the settlement gate (every permit taken).
+    let permits = gate.acquire_many(gate.available_permits() as u32).await;
+    let handle = Handle::new();
+    let settled = diagnostics::scope(
+        handle.clone(),
+        session.settle_response("r1", Some(ResponseStatus::Completed), None),
+    )
+    .await;
+    drop(permits);
+    assert_eq!(settled, Err(InferenceError::Storage));
+    assert_eq!(
+        labels(&handle.signals()),
+        [("realtime_settlement", "deadline_in_queue")],
+        "the response settlement"
+    );
+    session
+        .settle_response("r1", Some(ResponseStatus::Completed), None)
+        .await
+        .unwrap();
+
+    // The next window waits for a pooled connection (both are busy).
+    let held = [
+        store.pool.acquire().await.unwrap(),
+        store.pool.acquire().await.unwrap(),
+    ];
+    let handle = Handle::new();
+    let reserved = diagnostics::scope(handle.clone(), session.reserve_window(50)).await;
+    drop(held);
+    assert_eq!(reserved, Err(InferenceError::Storage));
+    assert_eq!(
+        labels(&handle.signals()),
+        [("realtime_admission", "deadline_acquiring_connection")],
+        "the window reservation"
+    );
+
+    // The session finish waits for its reservation row.
+    let blocker = lock().await;
+    let handle = Handle::new();
+    let finished = diagnostics::scope(
+        handle.clone(),
+        session.finish(Outcome::Cancelled, None, None),
+    )
+    .await;
+    unlock(blocker).await;
+    assert_eq!(finished, Err(InferenceError::Storage));
+    assert_eq!(
+        labels(&handle.signals()),
+        [("realtime_settlement", "deadline_in_database")],
+        "the session finish"
+    );
+
+    // A dropped session finishes in a detached task: no request capture
+    // reaches it, so the process-wide counter and the log show it. No other
+    // test produces this pair.
+    let dropped = open().await.unwrap();
+    let capture = crate::log_capture_test::Capture::start();
+    let pair = ("realtime_settlement", "deadline_in_queue");
+    let before = exported(pair.0, pair.1).await;
+    let permits = gate.acquire_many(gate.available_permits() as u32).await;
+    drop(dropped);
+    // The recorder counts before it logs: wait (bounded) for both.
+    let logged = || {
+        signal_lines(&capture.text())
+            .into_iter()
+            .filter(|(s, c)| (s.as_str(), c.as_str()) == pair)
+            .count()
+    };
+    let mut after = before;
+    for _ in 0..200 {
+        after = exported(pair.0, pair.1).await;
+        if after > before && logged() > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    drop(permits);
+    assert_eq!(after, before + 1, "the detached finish is counted once");
+    assert_eq!(logged(), 1, "and logged once");
+}
+
+/// #497: what an elapsed realtime deadline leaves held once the session ends
+/// as the relay ends it (failed, `accounting_unavailable`), read from the
+/// reservation row after the finish. This decides the stage: a deadline that
+/// leaves money held until reconciliation is `realtime_settlement`.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn what_an_elapsed_realtime_deadline_leaves_held(pool: PgPool) {
+    use sqlx::Connection;
+    let f = fixture(pool.clone()).await;
+    realtime_model(&f, Some(lines())).await;
+    let (store, engine) = realtime_engine(&pool).await;
+    let open = || engine.open_realtime(f.principal, "company/smart", Uuid::new_v4());
+    let failed = Some(InferenceError::Storage);
+
+    // The window reservation before `response.create` (both connections busy).
+    let mut session = open().await.unwrap();
+    let id = session.id();
+    let held = [
+        store.pool.acquire().await.unwrap(),
+        store.pool.acquire().await.unwrap(),
+    ];
+    assert_eq!(
+        session.reserve_window(50).await,
+        Err(InferenceError::Storage)
+    );
+    drop(held);
+    session.finish(Outcome::Failed, failed, None).await.unwrap();
+    let reserve = amounts(&f, id).await;
+
+    // The response open after the reserved `response.create` went upstream.
+    let mut session = open().await.unwrap();
+    let id = session.id();
+    session.reserve_window(50).await.unwrap();
+    let mut blocker = sqlx::PgConnection::connect_with(&pool.connect_options())
+        .await
+        .unwrap();
+    sqlx::raw_sql("BEGIN; LOCK TABLE governance_reservations IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut blocker)
+        .await
+        .unwrap();
+    assert_eq!(
+        session.open_response("r1".into()).await,
+        Err(InferenceError::Storage)
+    );
+    sqlx::query("ROLLBACK").execute(&mut blocker).await.unwrap();
+    blocker.close().await.unwrap();
+    session.finish(Outcome::Failed, failed, None).await.unwrap();
+    let opened = amounts(&f, id).await;
+    eprintln!("#497 after the deadline and the finish: reserve={reserve:?} open={opened:?}");
+    // The window reservation rolled back and was never forwarded: the finish
+    // settles the session and nothing stays held (`realtime_admission`).
+    assert_eq!(reserve.0, "settled", "a reservation deadline holds nothing");
+    // The forwarded request is unopened: its window stays held as unknown
+    // cost until reconciliation (`realtime_settlement`).
+    assert_eq!(
+        opened.0, "unknown",
+        "an open deadline leaves the window held"
+    );
+    assert!(opened.1.is_some_and(|held| held > 0), "with a held amount");
+}

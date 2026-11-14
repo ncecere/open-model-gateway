@@ -768,3 +768,105 @@ async fn object_visibility_matrix_for_video_jobs(pool: PgPool) {
         }
     }
 }
+
+/// #497 on real PostgreSQL: the job poller's claim with every pooled
+/// connection busy, or timing out on a lock, is counted once at the
+/// `job_storage` stage with its cause; a claim that runs records nothing.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_failed_job_claim_names_its_cause(pool: PgPool) {
+    use crate::db::{
+        accounting_failure::tests::labels,
+        diagnostics::{self, Handle},
+    };
+    use sqlx::Connection;
+    let store = Store::new(
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(std::time::Duration::from_millis(300))
+            .after_connect(|connection, _| {
+                Box::pin(async move {
+                    sqlx::query("SET lock_timeout = '200ms'")
+                        .execute(connection)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect_with((*pool.connect_options()).clone())
+            .await
+            .unwrap(),
+    );
+    let jobs = Jobs::with(store, ProviderRegistry::default(), JobLimits::default());
+    let poll = || async {
+        let handle = Handle::new();
+        let polled = diagnostics::scope(handle.clone(), jobs.poll_once()).await;
+        (polled, labels(&handle.signals()))
+    };
+    let (polled, signals) = poll().await;
+    assert_eq!(polled, Ok(0));
+    assert!(signals.is_empty(), "nothing is recorded on success");
+
+    let held = jobs.store.pool.acquire().await.unwrap();
+    let (polled, signals) = poll().await;
+    drop(held);
+    assert_eq!(polled, Err(InferenceError::Storage));
+    assert_eq!(signals, [("job_storage", "pool_timeout")]);
+
+    let mut blocker = sqlx::PgConnection::connect_with(&pool.connect_options())
+        .await
+        .unwrap();
+    sqlx::raw_sql("BEGIN; LOCK TABLE async_jobs IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut blocker)
+        .await
+        .unwrap();
+    let (polled, signals) = poll().await;
+    sqlx::query("ROLLBACK").execute(&mut blocker).await.unwrap();
+    blocker.close().await.unwrap();
+    assert_eq!(polled, Err(InferenceError::Storage));
+    assert_eq!(signals, [("job_storage", "lock_timeout")]);
+}
+
+/// #497: a job record that fails after admission and the provider's
+/// acceptance leaves the reservation pending with no job to settle it (only
+/// reconciliation does): counted at `job_settlement`, not `job_storage`.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_job_record_failing_after_acceptance_is_a_settlement_failure(pool: PgPool) {
+    use crate::db::{
+        accounting_failure::tests::labels,
+        diagnostics::{self, Handle},
+    };
+    let f = fixture(pool).await;
+    video_setup(&f).await;
+    let fake = Fake::default();
+    let j = jobs(&f, &fake, false);
+    sqlx::raw_sql(
+        r#"CREATE FUNCTION job_record_fault_497() RETURNS trigger LANGUAGE plpgsql AS
+             $$ BEGIN RAISE EXCEPTION 'job record fault'; END $$;
+           CREATE TRIGGER job_record_fault_497 BEFORE INSERT ON async_jobs
+             FOR EACH ROW EXECUTE FUNCTION job_record_fault_497();"#,
+    )
+    .execute(&f.store.pool)
+    .await
+    .unwrap();
+    fake.push_video(upstream_video(JobState::Queued, Some(8)));
+    let request_id = Uuid::new_v4();
+    let handle = Handle::new();
+    let created = diagnostics::scope(
+        handle.clone(),
+        j.create_video(f.principal, video_request(), request_id),
+    )
+    .await;
+    assert!(matches!(
+        created,
+        Err(JobError::Inference(InferenceError::Storage))
+    ));
+    assert_eq!(fake.calls(), ["create_video"], "the provider accepted it");
+    assert_eq!(
+        amounts(&f, request_id).await.0,
+        "pending",
+        "the hold stays until reconciliation"
+    );
+    assert_eq!(
+        labels(&handle.signals()),
+        [("job_settlement", "other_database")]
+    );
+}

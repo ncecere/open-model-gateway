@@ -1,6 +1,7 @@
 //! Pure scheduling rules: time windows (overnight spans, DST boundaries),
 //! the Prometheus reader, load thresholds and settings validation.
 use chrono::TimeZone;
+use serde_json::json;
 
 use super::*;
 

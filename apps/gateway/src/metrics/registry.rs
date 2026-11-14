@@ -186,7 +186,7 @@ impl Metrics {
         );
         registry.register(
             "accounting_failures",
-            "Failed accounting operations (the cause of 503 accounting_unavailable), by stage (route_lookup, pool_acquire_and_begin, governance_storage, explicit_settlement, cancellation_settlement) and cause (pool_timeout, pool_closed, lock_timeout, statement_timeout, backend_terminated, deadlock, read_only_transaction, other_database, io, tls, protocol, worker_crashed, other; for the two settlement stages what the settlement waited on when its deadline elapsed: deadline_in_queue, deadline_acquiring_connection, deadline_in_database). Fixed values only (5 stages and 16 causes, at most 80 label combinations): no SQL, SQLSTATE, message or identifier",
+            "Failed accounting operations (the cause of 503 accounting_unavailable) and other counted storage failures, by stage (route_lookup, pool_acquire_and_begin, governance_storage, explicit_settlement, cancellation_settlement, realtime_admission, realtime_settlement, job_storage, job_settlement, maintenance, key_authentication) and cause (pool_timeout, pool_closed, lock_timeout, statement_timeout, backend_terminated, deadlock, read_only_transaction, other_database, io, tls, protocol, worker_crashed, other; for the four deadline stages what the operation waited on when its deadline elapsed: deadline_in_queue, deadline_acquiring_connection, deadline_in_database). Fixed values only (11 stages and 16 causes, at most 176 label combinations, at most 103 produced): no SQL, SQLSTATE, message or identifier",
             self.accounting_failures.clone(),
         );
         registry.register(
