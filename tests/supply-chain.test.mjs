@@ -1130,6 +1130,20 @@ export function rustVersionViolations(stages, channel) {
   return out;
 }
 
+// The approved Rust build image (#488). `rustVersionViolations` checks the version and that every
+// reference agrees, whatever the registry and repository path of an image named `rust`
+// (`ghcr.io/<anyone>/rust:<version>@sha256:...` in every Dockerfile would agree). This pins the
+// whole reference, as APPROVED_RUNTIME pins the runtime base; a Rust or digest bump changes it
+// here in the same pull request.
+const APPROVED_RUST = "mirror.gcr.io/library/rust:1.99.1-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c";
+export function rustReferenceViolations(stages, channel, approved = APPROVED_RUST) {
+  const out = [];
+  const version = extractRustImageRef(approved)?.version;
+  if (version !== channel) out.push(`APPROVED_RUST names rust ${version}, rust-toolchain.toml pins ${channel}`);
+  for (const s of stages) if (s.ref !== approved) out.push(`${s.file}:${s.line}: ${s.ref} is not the approved Rust image ${approved}`);
+  return out;
+}
+
 // Every `dtolnay/rust-toolchain` step anywhere (workflow jobs and composite action `runs`),
 // with the `toolchain:` input it sets (undefined if absent).
 function dtolnayToolchainSteps() {
@@ -1160,6 +1174,7 @@ test("rust-toolchain.toml, every Dockerfile's Rust build stage and every dtolnay
   const stages = allRustImageStages();
   assert.ok(stages.length >= 2, "expected a rust:<version>-bookworm stage in both the root and deploy/loadtest Dockerfiles");
   assert.deepEqual(rustVersionViolations(stages, channel), []);
+  assert.deepEqual(rustReferenceViolations(stages, channel), []);
 
   const steps = dtolnayToolchainSteps();
   assert.ok(steps.length > 0, "expected at least one dtolnay/rust-toolchain step in the workflows");
@@ -1264,6 +1279,27 @@ test("fixtures: mismatched Rust build-stage versions and digests across Dockerfi
   assert.equal(rustVersionViolations([...a, ...wrongVersion], "1.99.1").length, 1, "wrong version must be caught");
   assert.equal(rustVersionViolations([...a], "1.99.1").length, 0, "one matching stage passes");
   assert.equal(rustVersionViolations([...a, ...stageIn("B/Dockerfile", `1.99.1-bookworm@sha256:${"a".repeat(64)}`)], "1.99.1").length, 0, "two Dockerfiles pinning the identical tag and digest pass");
+});
+
+test("fixtures: a Rust image from another registry or repository, or another digest, is refused even when every reference agrees (#488)", () => {
+  const channel = readRustToolchainChannel();
+  const digest = APPROVED_RUST.split("@sha256:")[1];
+  const both = ref => ["Dockerfile", "deploy/loadtest/Dockerfile"].flatMap(file => parseDockerfileRustStages(file, `FROM ${ref} AS build\nFROM ${APPROVED_RUNTIME}\n`));
+  assert.deepEqual(rustReferenceViolations(both(APPROVED_RUST), channel), []);
+  for (const [label, ref] of [
+    ["another registry", `ghcr.io/someone/rust:${channel}-bookworm@sha256:${digest}`],
+    ["Docker Hub instead of the mirror", `docker.io/library/rust:${channel}-bookworm@sha256:${digest}`],
+    ["the bare name", `rust:${channel}-bookworm@sha256:${digest}`],
+    ["another repository path on the mirror", `mirror.gcr.io/someone/rust:${channel}-bookworm@sha256:${digest}`],
+    ["another digest", `mirror.gcr.io/library/rust:${channel}-bookworm@sha256:${"c".repeat(64)}`],
+    ["another variant", `mirror.gcr.io/library/rust:${channel}-slim-bookworm@sha256:${digest}`],
+    ["an upper-case name", `mirror.gcr.io/library/RUST:${channel}-bookworm@sha256:${digest}`],
+  ]) {
+    const stages = both(ref);
+    assert.deepEqual(rustVersionViolations(stages, channel), [], `${label}: the version check alone accepts it`);
+    assert.equal(rustReferenceViolations(stages, channel).length, 2, label);
+  }
+  assert.match(rustReferenceViolations([], "0.0.1").join(), /^APPROVED_RUST names rust \d+\.\d+\.\d+, rust-toolchain\.toml pins 0\.0\.1$/);
 });
 
 test("fixtures: a Rust image reference in any form (bare, floating tag, undigested, --platform) is caught, and an ARG-substituted one is refused", () => {
