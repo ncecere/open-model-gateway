@@ -346,16 +346,25 @@ const ALLOWED = {
   // RegExp.prototype.exec, not child_process.
   "browser/alert-webhooks.spec.ts": ["const match = /^t=(\\d+),v1=([0-9a-f]{64})$/.exec(signature);"],
 };
+// ALLOWED is a multiset: each listing excuses one occurrence, so a line that appears twice
+// must be listed twice. Appearing more or fewer times than listed fails the rule (#498).
 function startsAShell(name, text, allowed = []) {
   const found = [];
-  const used = new Set();
+  const listed = new Map();
+  for (const line of allowed) listed.set(line, (listed.get(line) ?? 0) + 1);
+  const seen = new Map();
   text.split("\n").forEach((line, index) => {
     const broken = STARTS_A_SHELL.filter(([, pattern]) => pattern.test(line)).map(([what]) => what);
     if (broken.length === 0) return;
-    if (allowed.includes(line.trim())) used.add(line.trim());
+    if (listed.has(line.trim())) seen.set(line.trim(), (seen.get(line.trim()) ?? 0) + 1);
     else found.push(`${name}:${index + 1} ${broken.join(", ")}: ${line.trim()}`);
   });
-  for (const line of allowed) if (!used.has(line)) found.push(`${name}: an allowed line is gone, remove it from ALLOWED: ${line}`);
+  const times = n => `${n} ${n === 1 ? "time" : "times"}`;
+  for (const [line, count] of listed) {
+    const appears = seen.get(line) ?? 0;
+    if (appears === 0) found.push(`${name}: an allowed line is gone, remove it from ALLOWED: ${line}`);
+    else if (appears !== count) found.push(`${name}: an allowed line appears ${times(appears)} but is listed ${times(count)}: ${line}`);
+  }
   return found;
 }
 
