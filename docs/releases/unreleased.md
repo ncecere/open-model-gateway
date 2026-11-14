@@ -2,6 +2,10 @@
 
 Notes for changes on `main` after [v0.16.0](v0.16.0.md). They become the next release's notes.
 
+## Fixes
+
+- **`serve` releases its job leases when start-up fails after taking them** (#527). A start-up failure after the background-job leases were taken (a busy public or metrics port, a later configuration refusal such as `GATEWAY_PARTITIONS_AHEAD_MONTHS=99`, or the audit export state check) used to exit with every lease still held, so another replica could not run those jobs until the terms expired (up to 30 seconds). Every such failure now stops renewing and releases the leases this process holds, as graceful shutdown does, then returns the original error. The release is bounded to 5 seconds on both paths; a release that fails or times out is logged and the term still ends at its expiry.
+
 ## Internal restructuring
 
 For contributors; no gateway behaviour changes.

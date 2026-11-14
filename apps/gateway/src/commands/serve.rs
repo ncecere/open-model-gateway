@@ -45,39 +45,33 @@ pub(crate) async fn serve(
         build_engine(&config, store, provider_secrets, local_approvals).await?;
     let Prepared {
         identity,
-        retention,
         files,
-        alert_interval,
-        leases,
-        lease_task,
+        settings,
+    } = prepare(store.clone()).await?;
+    let (leases, lease_task) = take_leases(&settings.audit_setting, pool).await;
+    // The leases are held from here on: a failure of any later start-up
+    // step hands them back before its error is returned (#527).
+    let Started {
         store,
-        audit_exporter,
-    } = prepare(store, pool).await?;
-    let (notifications, listener, metrics) = listen(&config, &store, &web, &leases).await?;
-    let background = start_background(
+        listener,
+        tasks,
+    } = match start(
         &config,
-        &store,
-        retention,
-        &files,
+        store,
+        &web,
         &engine,
-        alert_interval,
-        audit_exporter,
-    )?;
-    let history = spawn_history(&store, &leases)?;
-    let (history_verify, lifecycle) = spawn_history_verify_and_lifecycle(&store, &leases);
-    // Independent of the Prometheus listener and traces; the Store
-    // already carries leases and all configured listeners are bound.
-    let metrics_export = open_model_gateway::metrics_export::Runtime::start(
-        config.metrics_export,
-        config.environment,
+        settings,
+        &leases,
         process_start_unix_nano,
-        store.clone(),
-    );
-    // Optional, disabled-by-default OTLP operational logs (#294):
-    // typed events only, independent of traces/metrics/the Prometheus
-    // listener. A collector failure never gates readiness.
-    let logs_export =
-        open_model_gateway::ops_log::Runtime::start(config.logs_export, config.environment);
+    )
+    .await
+    {
+        Ok(started) => started,
+        Err(error) => {
+            release_leases(lease_task, &leases, pool).await;
+            return Err(error);
+        }
+    };
     let served = axum::serve(
         listener,
         http::router_with_identity(store, web, engine, identity)
@@ -88,23 +82,7 @@ pub(crate) async fn serve(
     )
     .with_graceful_shutdown(shutdown_signal())
     .await;
-    shutdown(
-        Tasks {
-            traces,
-            metrics_export,
-            logs_export,
-            background,
-            metrics,
-            history,
-            history_verify,
-            lifecycle,
-            notifications,
-            lease_task,
-        },
-        &leases,
-        pool,
-    )
-    .await;
+    shutdown(traces, tasks, lease_task, &leases, pool).await;
     served?;
     Ok(())
 }
@@ -167,19 +145,22 @@ async fn build_engine(
 /// What [`prepare`] configured.
 struct Prepared {
     identity: IdentityState,
+    files: FileStoreRuntime,
+    settings: Settings,
+}
+
+/// The configuration [`start`] consumes.
+struct Settings {
     retention: Option<i32>,
     files: FileStoreRuntime,
     alert_interval: Option<std::time::Duration>,
-    leases: Arc<Leases>,
-    lease_task: JoinHandle<()>,
-    store: Store,
-    audit_exporter: Option<Arc<Exporter>>,
+    audit_setting: open_model_gateway::audit_export::Setting,
 }
 
-/// Identity, retention, the file store, job and upload limits, audit
-/// export and the background work leases.
-async fn prepare(store: Store, pool: &PgPool) -> Result<Prepared> {
-    let identity = IdentityState::new(store.clone(), IdentityConfig::from_env()?)
+/// Identity, retention, the file store, job and upload limits and the audit
+/// export setting. Takes no lease.
+async fn prepare(store: Store) -> Result<Prepared> {
+    let identity = IdentityState::new(store, IdentityConfig::from_env()?)
         .await?
         .with_scim(open_model_gateway::scim::ScimConfig::from_env()?)?;
     let retention = open_model_gateway::maintenance::retention_from_env()?;
@@ -206,9 +187,27 @@ async fn prepare(store: Store, pool: &PgPool) -> Result<Prepared> {
     // turns it off; a replica without the setting leaves it alone and
     // never takes the export lease.
     let audit_setting = open_model_gateway::audit_export::Setting::from_env()?;
-    // Background work leases (P5): singleton jobs run on one replica.
+    Ok(Prepared {
+        identity,
+        files: files.clone(),
+        settings: Settings {
+            retention,
+            files,
+            alert_interval,
+            audit_setting,
+        },
+    })
+}
+
+/// Background work leases (P5): singleton jobs run on one replica. Takes
+/// them once, then renews them in the returned task. Infallible: every step
+/// after this one runs inside [`start`], whose failure releases them.
+async fn take_leases(
+    audit_setting: &open_model_gateway::audit_export::Setting,
+    pool: &PgPool,
+) -> (Arc<Leases>, JoinHandle<()>) {
     let leases = open_model_gateway::leases::Leases::new();
-    let leases = Arc::new(match &audit_setting {
+    let leases = Arc::new(match audit_setting {
         open_model_gateway::audit_export::Setting::On(_) => leases,
         _ => leases.without(open_model_gateway::leases::Lease::AuditExport),
     });
@@ -216,6 +215,33 @@ async fn prepare(store: Store, pool: &PgPool) -> Result<Prepared> {
     let lease_task = leases
         .clone()
         .start(pool.clone(), open_model_gateway::leases::RENEW);
+    (leases, lease_task)
+}
+
+/// What [`start`] started.
+struct Started {
+    store: Store,
+    listener: tokio::net::TcpListener,
+    tasks: Tasks,
+}
+
+/// Every start-up step that runs while the leases are held: the audit export
+/// state, the listeners, background tasks, history jobs and the exporters.
+async fn start(
+    config: &Config,
+    store: Store,
+    web: &Option<WebAssets>,
+    engine: &Engine,
+    settings: Settings,
+    leases: &Arc<Leases>,
+    process_start_unix_nano: u64,
+) -> Result<Started> {
+    let Settings {
+        retention,
+        files,
+        alert_interval,
+        audit_setting,
+    } = settings;
     let store = store.with_leases(leases.clone());
     open_model_gateway::audit_export::sync_state(&store, &audit_setting).await?;
     let audit_exporter = audit_setting.exporter().map(Arc::new);
@@ -223,15 +249,44 @@ async fn prepare(store: Store, pool: &PgPool) -> Result<Prepared> {
         Some(exporter) => store.with_audit_export(exporter.clone()),
         None => store,
     };
-    Ok(Prepared {
-        identity,
+    let (notifications, listener, metrics) = listen(config, &store, web, leases).await?;
+    let background = start_background(
+        config,
+        &store,
         retention,
-        files,
+        &files,
+        engine,
         alert_interval,
-        leases,
-        lease_task,
-        store,
         audit_exporter,
+    )?;
+    let history = spawn_history(&store, leases)?;
+    let (history_verify, lifecycle) = spawn_history_verify_and_lifecycle(&store, leases);
+    // Independent of the Prometheus listener and traces; the Store
+    // already carries leases and all configured listeners are bound.
+    let metrics_export = open_model_gateway::metrics_export::Runtime::start(
+        config.metrics_export.clone(),
+        config.environment,
+        process_start_unix_nano,
+        store.clone(),
+    );
+    // Optional, disabled-by-default OTLP operational logs (#294):
+    // typed events only, independent of traces/metrics/the Prometheus
+    // listener. A collector failure never gates readiness.
+    let logs_export =
+        open_model_gateway::ops_log::Runtime::start(config.logs_export.clone(), config.environment);
+    Ok(Started {
+        store,
+        listener,
+        tasks: Tasks {
+            metrics_export,
+            logs_export,
+            background,
+            metrics,
+            history,
+            history_verify,
+            lifecycle,
+            notifications,
+        },
     })
 }
 
@@ -452,7 +507,6 @@ fn spawn_history_verify_and_lifecycle(
 
 /// Everything [`shutdown`] stops.
 struct Tasks {
-    traces: Option<telemetry::Runtime>,
     metrics_export: Option<open_model_gateway::metrics_export::Runtime>,
     logs_export: Option<open_model_gateway::ops_log::Runtime>,
     background: Background,
@@ -461,13 +515,17 @@ struct Tasks {
     history_verify: JoinHandle<()>,
     lifecycle: JoinHandle<()>,
     notifications: Option<JoinHandle<()>>,
-    lease_task: JoinHandle<()>,
 }
 
 /// Drain the exporters together, stop every task, then release the leases.
-async fn shutdown(tasks: Tasks, leases: &Arc<Leases>, pool: &PgPool) {
+async fn shutdown(
+    traces: Option<telemetry::Runtime>,
+    tasks: Tasks,
+    lease_task: JoinHandle<()>,
+    leases: &Arc<Leases>,
+    pool: &PgPool,
+) {
     let Tasks {
-        traces,
         metrics_export,
         logs_export,
         background,
@@ -476,7 +534,6 @@ async fn shutdown(tasks: Tasks, leases: &Arc<Leases>, pool: &PgPool) {
         history_verify,
         lifecycle,
         notifications,
-        lease_task,
     } = tasks;
     let Background {
         maintenance,
@@ -543,8 +600,26 @@ async fn shutdown(tasks: Tasks, leases: &Arc<Leases>, pool: &PgPool) {
         notifications.abort();
         let _ = notifications.await;
     }
-    // Hand singleton work to another replica now instead of at expiry.
+    release_leases(lease_task, leases, pool).await;
+}
+
+/// Stop renewing, then end every term this replica holds, so another replica
+/// takes the singleton work now instead of at expiry: on shutdown and on
+/// every start-up failure after [`take_leases`]. Bounded, and never fails
+/// the caller: an unreleased term still ends at its expiry.
+async fn release_leases(lease_task: JoinHandle<()>, leases: &Arc<Leases>, pool: &PgPool) {
     lease_task.abort();
     let _ = lease_task.await;
-    leases.release_all(pool).await;
+    if tokio::time::timeout(RELEASE_TIMEOUT, leases.release_all(pool))
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            timeout_seconds = RELEASE_TIMEOUT.as_secs(),
+            "work leases not released in time; they end at expiry"
+        );
+    }
 }
+
+/// Upper bound on [`release_leases`]' database work.
+const RELEASE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
