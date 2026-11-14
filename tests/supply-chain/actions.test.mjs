@@ -45,3 +45,11 @@ test("fixtures: a local action or reusable workflow the suite does not read is r
     assert.match(actionChecks("ci", data).join(), /job 'called': .*not a workflow file of this checkout/, label);
   }
 });
+
+test("a local Docker container action is refused like a docker:// step", () => {
+  const file = ".github/actions/setup-node/action.yml";
+  const data = toData(parseStrict(readLocalFromRepo(file), file));
+  for (const image of [`docker://mirror.gcr.io/library/alpine@sha256:${"a".repeat(64)}`, "docker://alpine:latest", "Dockerfile"]) {
+    assert.match(actionPolicyViolations(file, { ...data, runs: { using: "docker", image } }).join(), /a Docker container action runs an image outside the approved actions/, image);
+  }
+});

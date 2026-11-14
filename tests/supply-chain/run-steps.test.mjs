@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
 import { loadWorkflow } from "./lib.mjs";
-import { COMPOSE_FILE, buildChecks, withStep } from "./policy.mjs";
+import { COMPOSE_FILE, buildChecks, composeDotenvViolations, runBuildViolations, withStep } from "./policy.mjs";
 
 test("fixtures: a run step that selects another builder or Docker endpoint is refused (#488 review 4)", () => {
   for (const run of ["docker buildx create --use --driver remote tcp://evil:1234", "docker buildx use evil", "docker buildx create --name x --driver kubernetes", "docker context create evil --docker host=tcp://evil:2375",
@@ -30,4 +30,109 @@ test("fixtures: env that selects a builder or changes the Docker client is refus
     mutate(data);
     assert.match(buildChecks("ci", data).join(), /selects a builder or changes the Docker client/, label);
   }
+});
+
+// ---- the run-command parser (#488) ----
+
+const CHECKED = new Set(["compose.yaml", "deploy/staging/compose.yaml", "deploy/staging/compose.openai.yaml"]);
+const runCheck = script => runBuildViolations("ci.yml: job 'web'", script, CHECKED);
+
+const RUN_LINES_THAT_PASS = [
+  'docker exec gateway sh -c "exit 0"',
+  "docker compose -f deploy/staging/compose.yaml logs -f gateway",
+  "jq -c . report.json",
+  'curl -H "Accept: application/json" https://example.org',
+  "docker run --rm -h gateway open-model-gateway:staging --version",
+  'docker buildx imagetools create --tag "${tag}" b',
+  "docker cp gateway:/app/build ./out",
+  "docker run --rm mirror.gcr.io/library/rust cargo build",
+  "docker buildx version",
+  "docker buildx imagetools inspect --raw x",
+  "docker compose -p omg -f deploy/staging/compose.yaml --profile ops up -d",
+  "docker --log-level warn ps",
+  "cargo build --locked",
+  "npm run build:web",
+  "python3 scripts/staging.py up",
+];
+const RUN_LINES_THAT_ARE_REFUSED = [
+  "docker build .",
+  "sudo docker build .",
+  "FOO=1 docker build .",
+  "docker image build .",
+  "docker builder build .",
+  "docker buildx build .",
+  "docker buildx b .",
+  "docker buildx bake",
+  "docker buildx --builder evil build .",
+  "docker buildx create --use --driver remote tcp://evil:1234",
+  "docker buildx use evil",
+  "docker context create evil --docker host=tcp://evil:2375",
+  "docker context use evil",
+  "docker context update default --docker host=tcp://evil:2375",
+  "docker context import evil evil.tar",
+  "docker -c evil ps",
+  "docker -cevil ps",
+  "docker --context evil ps",
+  "docker --context=evil ps",
+  "docker -H tcp://evil:2375 ps",
+  "docker -Htcp://evil:2375 ps",
+  "docker --host=tcp://evil:2375 ps",
+  "docker --config /tmp/evil ps",
+  "docker --config=/tmp/evil ps",
+  "docker --unknown-global ps",
+  "docker compose build",
+  "docker compose up --build -d",
+  "docker compose run --build gateway",
+  "docker compose create --build",
+  "docker compose -fevil.yml up -d",
+  "docker compose -f evil.yml up -d",
+  "docker compose --file=evil.yml up -d",
+  'docker compose --file "$F" up -d',
+  "docker compose -f - up -d",
+  "docker compose --env-file evil.env up -d",
+  "docker compose --env-file=evil.env up -d",
+  "docker compose --project-directory /tmp up -d",
+  "docker-compose -f evil.yaml up",
+  "podman build .",
+  "nerdctl build .",
+  "buildah bud .",
+  "buildah build .",
+  "buildctl build --frontend dockerfile.v0",
+  "kaniko --context .",
+  "python3 scripts/staging.py build",
+  "./scripts/staging.py build",
+  "d=docker; $d build .",
+  '"$d" build .',
+  "${DOCKER} build .",
+  "x=$(docker build -q .)",
+  "x=`docker build -q .`",
+  "echo FROM alpine | docker build -",
+  "true && docker build .",
+  "docker \\\n  build .",
+];
+
+test("the run-command parser accepts ordinary commands that only look like builds", () => {
+  for (const line of RUN_LINES_THAT_PASS) assert.deepEqual(runCheck(line), [], line);
+});
+
+test("the run-command parser refuses builds, builder and endpoint switches and unchecked Compose files", () => {
+  for (const line of RUN_LINES_THAT_ARE_REFUSED) assert.ok(runCheck(line).length > 0, line);
+});
+
+test("a step outside the pinned jobs may use only the bash or sh shell", () => {
+  const refused = [
+    { shell: "python", run: "import subprocess; subprocess.run(['docker', 'build', '.'])" },
+    { shell: "docker build -t x . && bash {0}", run: "true" },
+    { shell: "pwsh", run: "docker build ." },
+  ];
+  for (const step of refused) assert.match(buildChecks("ci", withStep("ci", "web", step)).join(), /shell .* is not bash or sh/, step.shell);
+  const data = withStep("ci", "web", { run: "true" });
+  data.jobs.web.defaults = { run: { shell: "python {0}" } };
+  assert.match(buildChecks("ci", data).join(), /shell .* is not bash or sh/, "a job default shell");
+  for (const shell of ["bash", "sh"]) assert.deepEqual(buildChecks("ci", withStep("ci", "web", { shell, run: "true" })), [], shell);
+});
+
+test("a .env file next to a checked Compose file is refused", () => {
+  assert.match(composeDotenvViolations(["deploy/staging/compose.yaml"], path => path === "deploy/staging/.env").join(), /deploy\/staging\/\.env sets Compose variables/);
+  assert.deepEqual(composeDotenvViolations(["deploy/staging/compose.yaml"], () => false), []);
 });

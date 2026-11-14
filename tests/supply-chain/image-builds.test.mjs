@@ -144,3 +144,17 @@ test("fixtures: cache, output and every other build input is pinned (#488 review
     assert.match(buildChecks(name, data).join(), /IMAGE_BUILDS lists/, label);
   }
 });
+
+test("an expression in a build input must come from the job's pinned matrix or the runner", () => {
+  const withBuild = mutate => { const data = structuredClone(loadWorkflow("image")); mutate(stepsOf(data.jobs.build).find(s => actionName(s.uses ?? "") === "docker/build-push-action").with); return buildChecks("image", data); };
+  const refused = [
+    ["a cache scope from env, which an earlier step can write", w => { w["cache-from"] = "type=gha,scope=image-${{ env.PLATFORM_PAIR }}"; }],
+    ["a cache target from env", w => { w["cache-to"] = "type=gha,mode=max,scope=image-${{ env.PLATFORM_PAIR }}"; }],
+    ["an output from a step", w => { w.outputs = "type=oci,dest=${{ steps.x.outputs.path }}"; }],
+    ["a build argument from another job", w => { w["build-args"] = "V=${{ needs.meta.outputs.v }}"; }],
+    ["a matrix key the job does not define", w => { w.platforms = "${{ matrix.nokey }}"; }],
+    ["an input", w => { w.platforms = "${{ inputs.platform }}"; }],
+  ];
+  for (const [label, mutate] of refused) assert.match(withBuild(mutate).join(), /is not a pinned value/, label);
+  assert.doesNotMatch(withBuild(w => { w.platforms = "${{ matrix.platform }}"; w.outputs = "type=oci,dest=${{ runner.temp }}/image.tar"; }).join(), /is not a pinned value/, "the job's matrix and the runner's temporary directory");
+});

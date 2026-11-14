@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
-import { containerImagesIn, parseStrict, repoFiles, toData, wf } from "./lib.mjs";
+import { containerImagesIn, parseStrict, repoFiles, toData, wf, loadWorkflow } from "./lib.mjs";
 import { CONTAINER_IMAGE_EXPRESSIONS, containerPinViolations } from "./policy.mjs";
 
 test("every workflow container and service image is pinned by digest (#493)", () => {
@@ -62,4 +62,28 @@ test("fixtures: floating, computed and malformed container and service images ar
   assert.match(action({ using: "docker", image: "docker://alpine:3" }).join(), /runs\.image: alpine:3 is not pinned by digest/);
   assert.match(action({ using: "docker", image: "Dockerfile" }).join(), /must name a digest-pinned docker:\/\/ image/);
   assert.match(action({ using: "docker" }).join(), /the image must be one literal string/);
+});
+
+test("container and service options that reach the host, and registry credentials, are refused", () => {
+  const services = d => d.jobs["gateway-tests"].services.postgres;
+  const refused = [
+    ["--privileged", d => { services(d).options += " --privileged"; }],
+    ["the Docker socket", d => { services(d).options += " -v /var/run/docker.sock:/var/run/docker.sock"; }],
+    ["a host path volume", d => { services(d).options += " --volume=/:/host"; }],
+    ["a bind mount", d => { services(d).options += " --mount type=bind,src=/,dst=/host"; }],
+    ["--cap-add", d => { services(d).options += " --cap-add SYS_ADMIN"; }],
+    ["--entrypoint", d => { services(d).options += " --entrypoint /bin/sh"; }],
+    ["--pull", d => { services(d).options += " --pull always"; }],
+    ["--network host", d => { services(d).options += " --network host"; }],
+    ["--network=host", d => { services(d).options += " --network=host"; }],
+    ["--pid host", d => { services(d).options += " --pid host"; }],
+    ["service credentials", d => { services(d).credentials = { username: "x", password: "${{ secrets.X }}" }; }],
+    ["job container options", d => { d.jobs.web.container = { image: `mirror.gcr.io/library/node@sha256:${"a".repeat(64)}`, options: "--privileged" }; }],
+    ["job container credentials", d => { d.jobs.web.container = { image: `mirror.gcr.io/library/node@sha256:${"a".repeat(64)}`, credentials: { username: "x", password: "y" } }; }],
+  ];
+  for (const [label, mutate] of refused) {
+    const data = structuredClone(loadWorkflow("ci"));
+    mutate(data);
+    assert.match(containerPinViolations(".github/workflows/ci.yml", data).join(), /is not allowed on a job or service container/, label);
+  }
 });

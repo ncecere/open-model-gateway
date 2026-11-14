@@ -339,3 +339,37 @@ export const withStep = (name, job, step) => { const data = structuredClone(load
 
 
 
+
+// ---- pinned image jobs (#488) ----
+
+// Every job that builds, publishes, signs, attests, imports or tests an image is pinned in
+// full in pinned-jobs.yaml: a run step can do anything (check out other code over the
+// Dockerfile, put a wrapper first on PATH, retag the image under test), so the only reliable
+// tripwire is that any change to such a job is a visible change to that file, which a
+// reviewer must read. `"*"` pins every job of the workflow; the workflow's own keys (name, on,
+// permissions, env, concurrency, defaults) are pinned with it.
+export const PINNED_WORKFLOWS = new Map([
+  [".github/workflows/image.yml", "*"],
+  [".github/workflows/branch-images.yml", "*"],
+  [".github/workflows/loadtest-image.yml", "*"],
+  [".github/workflows/oci-import.yml", "*"],
+  [".github/workflows/ci.yml", ["staging-image", "image"]],
+]);
+export const PINNED_JOBS_FILE = "tests/supply-chain/pinned-jobs.yaml";
+
+// The pins as the workflows define them today.
+export function currentPins(read = file => toData(parseStrict(readLocalFromRepo(file), file))) {
+  const workflows = {}, jobs = [];
+  for (const [file, which] of PINNED_WORKFLOWS) {
+    const { jobs: all, ...rest } = read(file);
+    workflows[file] = rest;
+    for (const job of which === "*" ? Object.keys(all) : which) jobs.push({ file, job, definition: all[job] ?? null });
+  }
+  return { workflows, jobs };
+}
+
+export const readPinnedJobs = () => toData(parseStrict(readLocalFromRepo(PINNED_JOBS_FILE), PINNED_JOBS_FILE));
+
+// Implemented in the next commit; the fixtures show what it must refuse.
+export function pinnedJobViolations() { return []; }
+export function composeDotenvViolations() { return []; }
