@@ -56,11 +56,13 @@ use crate::{
     },
 };
 
+mod dispatch;
 mod lanes;
 mod line;
 mod repository;
 mod segments;
-use lanes::{Lane, Pin, Planned, note, permits, spawn_line, wait_reason_without_permits};
+use dispatch::Dispatch;
+use lanes::{Head, Lane, Pin, Planned, note, permits, spawn_line, wait_reason_without_permits};
 use line::{LineRun, Record, RunState, Stop};
 use repository::LineRepository;
 use segments::write_segments;
@@ -242,7 +244,6 @@ impl Runner {
         result
     }
 
-    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     async fn run_claimed(
         &self,
         job: &JobRow,
@@ -258,6 +259,53 @@ impl Runner {
             // settling: only the settlement and cleanup remain.
             return self.settle_finished(job, files).await;
         }
+        let claimed = self.resume(job, &state).await?;
+        let line = self.line_run(job, engine, endpoint, &state);
+        let (records, receiver) = mpsc::channel::<Record>(64);
+        let writer = tokio::spawn(write_segments(
+            store.clone(),
+            files.clone(),
+            job.clone(),
+            receiver,
+        ));
+        let per_batch = Arc::new(Semaphore::new(self.jobs.limits.batch_concurrency));
+        let mut tasks = tokio::task::JoinSet::new();
+        let principal = job.principal();
+        let run = Dispatch {
+            job,
+            files,
+            work,
+            endpoint,
+            state: &state,
+            principal: &principal,
+            per_batch: &per_batch,
+            line: &line,
+            records: &records,
+        };
+        // Capacity-aware dispatch: lanes (one per model) take turns; a lane's
+        // next line starts only when its route's gates are open and the
+        // fair-share claim succeeds. Nothing starts after a stop.
+        let dispatched = self.dispatch(&run, &mut tasks, &claimed).await;
+        // Running lines always finish (cancel semantics); nothing is dropped.
+        while tasks.join_next().await.is_some() {}
+        drop(records);
+        drop(line);
+        let segments = writer.await.map_err(|_| InferenceError::Storage)?;
+        dispatched?;
+        segments?;
+        if state.lost.load(Ordering::SeqCst) {
+            // Another runner owns the batch now; it finalizes.
+            return Ok(());
+        }
+        let stop = state.stop_reason(job);
+        self.finalize(job, files, work, stop).await
+    }
+
+    /// Resume a claimed batch: observe a recorded cancel, interrupt (and
+    /// count) the lines a crashed runner left running, mark it running and
+    /// return the lines already claimed.
+    async fn resume(&self, job: &JobRow, state: &RunState) -> JobResult<HashSet<i32>> {
+        let store = &self.jobs.store;
         if job.cancel_requested_at.is_some() {
             state.cancel.store(true, Ordering::SeqCst);
         }
@@ -272,6 +320,19 @@ impl Runner {
             .into_iter()
             .map(|(n, _, _)| n)
             .collect();
+        Ok(claimed)
+    }
+
+    /// The shared per-line runner: the engine bound to the batch's line
+    /// repository (lease, admission and pins).
+    fn line_run(
+        &self,
+        job: &JobRow,
+        engine: Engine,
+        endpoint: BatchEndpoint,
+        state: &Arc<RunState>,
+    ) -> Arc<LineRun> {
+        let store = &self.jobs.store;
         let repository = Arc::new(LineRepository {
             store: store.clone(),
             batch: LineContext {
@@ -281,7 +342,7 @@ impl Runner {
             pins: Mutex::default(),
             claimed: Mutex::default(),
         });
-        let line = Arc::new(LineRun {
+        Arc::new(LineRun {
             store: store.clone(),
             engine: engine.with_repository(repository.clone(), self.jobs.limits.batch_concurrency),
             repository,
@@ -289,201 +350,36 @@ impl Runner {
             job: job.clone(),
             endpoint,
             state: state.clone(),
-        });
-        let (records, receiver) = mpsc::channel::<Record>(64);
-        let writer = tokio::spawn(write_segments(
-            store.clone(),
-            files.clone(),
-            job.clone(),
-            receiver,
-        ));
-        let per_batch = Arc::new(Semaphore::new(self.jobs.limits.batch_concurrency));
-        let mut tasks = tokio::task::JoinSet::new();
-        let principal = job.principal();
-        // Capacity-aware dispatch: lanes (one per model) take turns; a lane's
-        // next line starts only when its route's gates are open and the
-        // fair-share claim succeeds. Nothing starts after a stop.
-        let dispatched = async {
-            let mut lanes = Lane::scan(files, work, job.workspace_id, endpoint, &claimed).await?;
-            let mut published: Option<(Instant, Vec<WaitRow>)> = None;
-            let mut turn = 0usize;
-            loop {
-                while tasks.try_join_next().is_some() {}
-                lanes.retain(|l| !l.lines.is_empty());
-                if lanes.is_empty() || state.should_stop(job) {
-                    break;
-                }
-                let mut started = false;
-                let mut report: BTreeMap<Uuid, WaitRow> = BTreeMap::new();
-                let count = lanes.len();
-                for k in 0..count {
-                    if state.should_stop(job) {
-                        break;
-                    }
-                    let lane = &mut lanes[(turn + k) % count];
-                    lane.load(files, work, job.workspace_id, endpoint).await?;
-                    let waiting = lane.lines.len() as i32;
-                    let Some(head) = lane.head.as_mut() else {
-                        continue;
-                    };
-                    if head.planned.is_none_or(|t| t.elapsed() >= REPLAN) {
-                        (head.route, head.cooling) = match &head.request {
-                            Some(request) => {
-                                match self
-                                    .plan_route(
-                                        &principal,
-                                        endpoint,
-                                        request,
-                                        head.execution,
-                                        head.plan.map(|p| p.deployment),
-                                    )
-                                    .await
-                                {
-                                    Planned::Route(d) => (Some(d), false),
-                                    Planned::CoolingDown => (None, true),
-                                    Planned::Nothing => (None, false),
-                                }
-                            }
-                            None => (None, false),
-                        };
-                        head.planned = Some(Instant::now());
-                    }
-                    if head.cooling {
-                        // Every route is in its circuit-breaker cooldown: the
-                        // line waits (nothing is sent) and is planned again,
-                        // instead of failing like an interactive request.
-                        continue;
-                    }
-                    let (n, execution) = (head.n, head.execution);
-                    let route = head.route.as_ref().map(|d| d.id);
-                    let Some(route) = route else {
-                        // No route serves the line right now: it runs ungated
-                        // and fails in the engine exactly like an interactive
-                        // request would (nothing reaches a provider).
-                        let Some(permits) = permits(&per_batch, &self.pool) else {
-                            continue;
-                        };
-                        match store::claim_line(store, job.id, job.workspace_id, n, execution).await
-                        {
-                            Ok(true) => {
-                                let head = lane.take().ok_or(InferenceError::Storage)?;
-                                spawn_line(&mut tasks, &line, &records, head, None, permits);
-                                started = true;
-                            }
-                            Ok(false) => {
-                                lane.take();
-                            }
-                            Err(_) => {}
-                        }
-                        continue;
-                    };
-                    if state.paused() {
-                        note(&mut report, route, waiting, Some(Pause::RateLimited), false);
-                        continue;
-                    }
-                    let gate = match self.scheduler.gate(route).await {
-                        Ok(g) => g,
-                        Err(_) => {
-                            note(&mut report, route, waiting, None, false);
-                            continue;
-                        }
-                    };
-                    if let Some(pause) = gate.pause {
-                        note(&mut report, route, waiting, Some(pause), false);
-                        continue;
-                    }
-                    let settings = &gate.settings.settings;
-                    let Some(permits) = permits(&per_batch, &self.pool) else {
-                        // Report the binding limit: with the defaults the
-                        // route's batch limit equals the per-batch cap, so a
-                        // full route must not read as "workers busy".
-                        let running = self.scheduler.running_lines(route).await.ok();
-                        let reason = wait_reason_without_permits(running, settings.max_concurrency);
-                        note(
-                            &mut report,
-                            route,
-                            waiting,
-                            Some(reason),
-                            reason == Pause::Concurrency,
-                        );
-                        continue;
-                    };
-                    match self
-                        .scheduler
-                        .claim(job, n, execution, route, settings.max_concurrency)
-                        .await
-                    {
-                        Ok(Claim::Claimed) => {
-                            let head = lane.take().ok_or(InferenceError::Storage)?;
-                            let pin = Pin {
-                                deployment: route,
-                                priority: settings.priority,
-                                max_concurrency: settings.max_concurrency,
-                            };
-                            spawn_line(&mut tasks, &line, &records, head, Some(pin), permits);
-                            started = true;
-                            note(&mut report, route, waiting - 1, None, true);
-                        }
-                        Ok(Claim::Taken) => {
-                            // Claimed elsewhere: never run it again.
-                            lane.take();
-                        }
-                        Ok(Claim::Full) => {
-                            note(&mut report, route, waiting, Some(Pause::Concurrency), true)
-                        }
-                        Ok(Claim::Wait) => {
-                            note(&mut report, route, waiting, Some(Pause::FairShare), true)
-                        }
-                        Err(_) => note(&mut report, route, waiting, None, false),
-                    }
-                }
-                turn = turn.wrapping_add(1);
-                let rows: Vec<WaitRow> = report
-                    .into_values()
-                    .filter(|r| r.waiting_lines > 0)
-                    .collect();
-                let due = published
-                    .as_ref()
-                    .is_none_or(|(at, last)| *last != rows || at.elapsed() >= HEARTBEAT);
-                if due {
-                    let legit = rows.iter().any(|r| r.reason.is_some_and(Pause::legitimate));
-                    if self
-                        .scheduler
-                        .publish_waits(job, &rows, legit)
-                        .await
-                        .is_err()
-                    {
-                        tracing::warn!(job_id = %job.id, "batch demand not recorded");
-                    }
-                    published = Some((Instant::now(), rows));
-                }
-                if !started {
-                    if tasks.is_empty() {
-                        tokio::time::sleep(self.poll).await;
-                    } else {
-                        tokio::select! {
-                            _ = tasks.join_next() => {}
-                            _ = tokio::time::sleep(self.poll) => {}
-                        }
-                    }
-                }
+        })
+    }
+
+    /// Publish the pass's demand rows when they changed or the last
+    /// publication is older than [`HEARTBEAT`].
+    async fn publish_demand(
+        &self,
+        job: &JobRow,
+        report: BTreeMap<Uuid, WaitRow>,
+        published: &mut Option<(Instant, Vec<WaitRow>)>,
+    ) {
+        let rows: Vec<WaitRow> = report
+            .into_values()
+            .filter(|r| r.waiting_lines > 0)
+            .collect();
+        let due = published
+            .as_ref()
+            .is_none_or(|(at, last)| *last != rows || at.elapsed() >= HEARTBEAT);
+        if due {
+            let legit = rows.iter().any(|r| r.reason.is_some_and(Pause::legitimate));
+            if self
+                .scheduler
+                .publish_waits(job, &rows, legit)
+                .await
+                .is_err()
+            {
+                tracing::warn!(job_id = %job.id, "batch demand not recorded");
             }
-            Ok::<_, InferenceError>(())
+            *published = Some((Instant::now(), rows));
         }
-        .await;
-        // Running lines always finish (cancel semantics); nothing is dropped.
-        while tasks.join_next().await.is_some() {}
-        drop(records);
-        drop(line);
-        let segments = writer.await.map_err(|_| InferenceError::Storage)?;
-        dispatched?;
-        segments?;
-        if state.lost.load(Ordering::SeqCst) {
-            // Another runner owns the batch now; it finalizes.
-            return Ok(());
-        }
-        let stop = state.stop_reason(job);
-        self.finalize(job, files, work, stop).await
     }
 
     #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
