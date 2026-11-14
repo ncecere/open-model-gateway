@@ -112,3 +112,31 @@ export const KNOWN_DOCKERFILES = RUNTIME_DOCKERFILES;
 export const isMapping = v => v !== null && typeof v === "object" && !Array.isArray(v);
 // A digest-pinned base image that is not an approved one, for fixtures.
 export const OTHER_BASE = `mirror.gcr.io/library/debian:13-slim@sha256:${"b".repeat(64)}`;
+
+// ---- permissions ----
+
+// What a job's GITHUB_TOKEN may do. Without a permissions block anywhere the repository
+// default applies, which these checks take as write-all (docs/verification.md).
+export const DEFAULT_PERMISSIONS = "write-all";
+
+export function hasWrite(perms) {
+  if (typeof perms === "string") return perms !== "read-all";
+  if (perms && typeof perms === "object" && !Array.isArray(perms)) {
+    return Object.values(perms).some(v => !["read", "none"].includes(v));
+  }
+  return true; // null, a list or a number: cannot be shown read-only
+}
+
+// A job's own block replaces the workflow's. Without either, a called workflow
+// inherits the caller's permissions and a top-level one the repository default.
+export function jobPermissions(data, job, callerPerms) {
+  if (job.permissions !== undefined) return job.permissions;
+  if (data.permissions !== undefined) return data.permissions;
+  return callerPerms !== undefined ? callerPerms : DEFAULT_PERMISSIONS;
+}
+
+// A caller's permissions cap the called workflow's jobs.
+export function jobCanWrite(data, job, callerPerms) {
+  if (callerPerms !== undefined && !hasWrite(callerPerms)) return false;
+  return hasWrite(jobPermissions(data, job, callerPerms));
+}

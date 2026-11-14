@@ -3,7 +3,9 @@
 # actions/setup-node, which downloads a floating "22" release without any checksum
 # (#194). Needs the repository checked out first (for the script). Used by read-only
 # jobs; tests/supply-chain.test.mjs opens local composite actions and checks them
-# wherever they are used.
+# wherever they are used. staging-image uses it, so this file is pinned with that job
+# in tests/supply-chain/pinned-jobs.yaml: after a change, run
+# node tests/supply-chain/update-pinned-jobs.mjs and review the diff (#488).
 #
 # The version matches the Dockerfile's node image. To bump it, take the checksums from
 # https://nodejs.org/dist/v<version>/SHASUMS256.txt (linux-x64 and linux-arm64 .tar.xz)

@@ -10,7 +10,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, posix } from "node:path";
 import {
-  DOCKERFILE_SKIP_DIRS, KNOWN_DOCKERFILES, actionName, actionsDir, isMapping, jobsOf, loadWorkflow, parseStrict, readLocalFromRepo, root, stepsOf, toData, workflowsDir,
+  DOCKERFILE_SKIP_DIRS, KNOWN_DOCKERFILES, actionName, jobPermissions, actionsDir, isMapping, jobsOf, loadWorkflow, parseStrict, readLocalFromRepo, root, stepsOf, toData, workflowsDir,
 } from "./lib.mjs";
 
 // ---- job and service containers (#493) ----
@@ -174,14 +174,29 @@ const UPDATE = `update the pinned job in ${PINNED_JOBS_FILE}, which a reviewer m
 const readWorkflow = file => toData(parseStrict(readLocalFromRepo(file), file));
 
 // The pins as the workflows define them now.
+// Local actions (`uses: ./.github/actions/<name>`) that a pinned job or pinned local action uses
+// are pinned too, as their parsed action.yml.
 export function currentPins(read = readWorkflow) {
-  const workflows = {}, jobs = [];
+  const workflows = {}, jobs = [], local_actions = {};
+  const addLocalActions = steps => {
+    for (const step of steps) {
+      const m = typeof step.uses === "string" && step.uses.match(/^\.\/(\.github\/actions\/[A-Za-z0-9._-]+)\/?$/);
+      if (!m) continue;
+      const file = [`${m[1]}/action.yml`, `${m[1]}/action.yaml`].find(f => existsSync(join(root, f))) ?? `${m[1]}/action.yml`;
+      if (file in local_actions) continue;
+      local_actions[file] = existsSync(join(root, file)) || read !== readWorkflow ? read(file) ?? null : null;
+      addLocalActions(stepsOf(local_actions[file]?.runs));
+    }
+  };
   for (const [file, which] of PINNED_WORKFLOWS) {
     const { jobs: all, ...rest } = read(file);
     workflows[file] = rest;
-    for (const job of which === "*" ? Object.keys(all) : which) jobs.push({ file, job, definition: all[job] ?? null });
+    for (const job of which === "*" ? Object.keys(all) : which) {
+      jobs.push({ file, job, definition: all[job] ?? null });
+      addLocalActions(stepsOf(all[job]));
+    }
   }
-  return { workflows, jobs };
+  return { workflows, local_actions, jobs };
 }
 
 export const readPinnedJobs = () => toData(parseStrict(readLocalFromRepo(PINNED_JOBS_FILE), PINNED_JOBS_FILE));
@@ -216,6 +231,10 @@ export function pinnedJobViolations(current, pinned) {
     const at = firstDifference(current.workflows?.[file], pinned?.workflows?.[file]);
     if (at !== null) out.push(`${file}: the workflow's own keys differ from the pin at ${at.slice(1) || "the top"}; ${UPDATE}`);
   }
+  for (const file of new Set([...Object.keys(current.local_actions ?? {}), ...Object.keys(pinned?.local_actions ?? {})])) {
+    const at = firstDifference(current.local_actions?.[file], pinned?.local_actions?.[file]);
+    if (at !== null) out.push(`${file}: the local action used by a pinned job differs from the pin at ${at.slice(1) || "the whole action"}; ${UPDATE}`);
+  }
   const byKey = list => new Map((Array.isArray(list) ? list : []).map(entry => [`${entry.file}: job '${entry.job}'`, entry.definition]));
   const now = byKey(current.jobs), then = byKey(pinned?.jobs);
   for (const key of new Set([...now.keys(), ...then.keys()])) {
@@ -229,16 +248,109 @@ export function pinnedJobViolations(current, pinned) {
   return out;
 }
 
+// The repository files the pinned jobs and their local actions run or read by name: a word of
+// a `run:` command that is a tracked file (or looks like a script path), each local action, and
+// each npm script they run (`package.json: <name>`) with the files that script names. Their
+// contents are not pinned (no source hashing or copies, AGENTS.md); a change to one of them is
+// a change to the image jobs and is reviewed as one. A new or renamed file is a change here.
+export const PINNED_JOB_INPUTS = [
+  ".github/actions/setup-node/action.yml",
+  ".github/scripts/build-oras.sh",
+  ".github/scripts/fetch-verified.sh",
+  ".github/scripts/oci-index.py",
+  ".github/scripts/oci-layout.py",
+  ".github/scripts/oci-stage.py",
+  ".github/scripts/publication-tags.py",
+  ".github/tools/oras.json",
+  ".github/workflows/image.yml",
+  "apps/gateway/Cargo.toml",
+  "package.json: test:container",
+  "scripts/github-release.sh",
+  "scripts/staging.py",
+  "tests/container-image.test.mjs",
+];
+const SCRIPT_PATH = /^(\.github|scripts|tests|deploy|tools|apps)\/[\w./-]+\.(sh|bash|py|mjs|js|cjs|ts)$/;
+let trackedCache;
+const tracked = () => (trackedCache ??= new Set(spawnSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8" }).stdout.split("\0").filter(Boolean)));
+const packageScripts = () => JSON.parse(readLocalFromRepo("package.json")).scripts ?? {};
+
+export function pinnedJobInputs(pins = currentPins(), scripts = packageScripts()) {
+  const found = new Set(Object.keys(pins.local_actions ?? {}));
+  const read = (script, depth = 0) => {
+    // A path anywhere in the text, also under a checkout directory (control/.github/...) or
+    // inside a quoted program.
+    const code = script.replace(/^[ \t]*#.*$/gm, "");
+    for (const [, path] of code.matchAll(/(?<![\w.-])(?:[\w-]+\/)?((?:\.github|scripts|tests|deploy|tools|apps)\/[\w./-]*\w)/g)) {
+      if (tracked().has(path) || SCRIPT_PATH.test(path)) found.add(path);
+    }
+    for (const words of shellCommands(script)) {
+      const texts = words.map(w => w.text);
+      for (const text of texts) {
+        const path = text.replace(/^\.\//, "");
+        if (tracked().has(path) || SCRIPT_PATH.test(path)) found.add(path);
+      }
+      const npm = texts.indexOf("npm");
+      if (npm === -1) continue;
+      const [sub, name] = texts.slice(npm + 1).filter(t => !t.startsWith("-"));
+      const script = sub === "test" ? "test" : ["run", "run-script"].includes(sub) ? name : null;
+      if (script === null || script === undefined) continue;
+      found.add(`package.json: ${script}`);
+      if (typeof scripts[script] === "string" && depth < 5) read(scripts[script], depth + 1);
+    }
+  };
+  const steps = [...pins.jobs.flatMap(({ definition }) => stepsOf(definition)), ...Object.values(pins.local_actions ?? {}).flatMap(action => stepsOf(action?.runs))];
+  for (const step of steps) if (typeof step.run === "string") read(step.run);
+  return [...found].sort();
+}
+
+export function pinnedJobInputViolations(pins = currentPins(), listed = PINNED_JOB_INPUTS) {
+  const found = pinnedJobInputs(pins);
+  return [
+    ...found.filter(path => !listed.includes(path)).map(path => `${path} is run by a pinned job but not listed in PINNED_JOB_INPUTS (tests/supply-chain/policy.mjs and docs/verification.md); a change to it is a change to the image jobs`),
+    ...listed.filter(path => !found.includes(path)).map(path => `${path} is listed in PINNED_JOB_INPUTS but no pinned job runs it`),
+  ];
+}
+
+// The staging rehearsal in ci.yml's staging-image runs the image that job built: the tag its
+// build step loads. Every service of deploy/staging/compose.yaml that is built from the
+// gateway's Dockerfile (the gateway and the ops services that share its definition) must
+// default to it, and so must deploy/staging/staging.env.example, from which staging.py init
+// writes the environment. image.yml's rehearsal replaces the value with the digest it tests.
+export function stagingCandidateViolations(compose, envExample, ci) {
+  const out = [];
+  const candidate = stepOf(ci?.jobs?.["staging-image"], "docker/build-push-action")?.with?.tags;
+  if (typeof candidate !== "string" || candidate.includes("${{") || candidate.includes("\n")) return ["ci.yml: staging-image must load one literal candidate tag"];
+  const expected = `\${GATEWAY_IMAGE:-${candidate}}`;
+  const services = isMapping(compose?.services) ? compose.services : {};
+  if (!isMapping(services.gateway)) out.push("deploy/staging/compose.yaml: there is no gateway service");
+  for (const [name, service] of Object.entries(services)) {
+    if (!isMapping(service) || (name !== "gateway" && service.build === undefined)) continue;
+    if (service.image !== expected) out.push(`deploy/staging/compose.yaml: service '${name}' image '${service.image}' is not the candidate under test (${expected})`);
+  }
+  const lines = String(envExample ?? "").split("\n").filter(line => line.startsWith("GATEWAY_IMAGE="));
+  if (JSON.stringify(lines) !== JSON.stringify([`GATEWAY_IMAGE=${candidate}`])) out.push(`deploy/staging/staging.env.example: GATEWAY_IMAGE must be exactly the candidate ${candidate}`);
+  return out;
+}
+
 // A job outside the pinned set that builds, logs in, publishes or calls another workflow.
 const IMAGE_ACTIONS = new Set(["docker/build-push-action", "docker/setup-buildx-action", "docker/metadata-action", "docker/login-action"]);
-const IMAGE_WRITE_SCOPES = ["packages", "id-token", "attestations"];
+const IMAGE_WRITE_SCOPES = ["packages", "id-token", "attestations", "contents"];
+// What a job may write among IMAGE_WRITE_SCOPES, from its effective permissions (its own, else
+// the workflow's, else the repository default, taken as write-all), or null.
+function imageWrites(data, job) {
+  const perms = jobPermissions(data, job ?? {});
+  if (perms === "read-all") return null;
+  if (typeof perms === "string") return `everything (${perms})`;
+  if (!isMapping(perms)) return "unknown permissions";
+  return IMAGE_WRITE_SCOPES.find(scope => perms[scope] === "write") ?? null;
+}
 export function unpinnedImageJobViolations(file, data, pinned = pinnedJobKeys()) {
   const out = [];
   for (const [name, job] of jobsOf(data)) {
     const key = `${file}: job '${name}'`;
     if (pinned.has(key)) continue;
     const action = stepsOf(job).map(s => actionName(s.uses ?? "")).find(a => IMAGE_ACTIONS.has(a));
-    const writes = isMapping(job?.permissions) && IMAGE_WRITE_SCOPES.find(scope => job.permissions[scope] === "write");
+    const writes = job?.uses === undefined && imageWrites(data, job);
     const why = action ? `uses ${action}` : writes ? `can write ${writes}` : job?.uses !== undefined ? "calls another workflow" : null;
     if (why) out.push(`${key} ${why}, so it must be pinned: add it to PINNED_WORKFLOWS and ${UPDATE}`);
   }
@@ -367,8 +479,23 @@ function dockerCommand(args, composeFiles) {
   }
   if (sub === "context" && ["create", "use", "update", "import"].includes(rest[0])) return `docker context ${rest[0]} selects another Docker endpoint`;
   if (sub === "compose") return composeCommand(rest, composeFiles);
+  const positional = rest.filter(a => !a.startsWith("-"));
+  if (sub === "login" || sub === "push" || (sub === "image" && positional[0] === "push")) return PUBLISHES;
+  if (sub === "tag" && isRegistryRef(positional[1])) return PUBLISHES;
+  if (sub === "image" && positional[0] === "tag" && isRegistryRef(positional[2])) return PUBLISHES;
+  if (sub === "buildx" && positional[0] === "imagetools" && positional[1] === "create") return PUBLISHES;
   return null;
 }
+
+const PUBLISHES = "publishes, signs or retags an image or release; only a pinned job may";
+// A reference whose first part names a registry host (`ghcr.io/...`, `localhost:5000/...`).
+const isRegistryRef = ref => typeof ref === "string" && ref.includes("/") && /[.:]|^localhost$/.test(ref.split("/")[0]);
+const PUBLISHING_TOOLS = {
+  oras: ["push", "copy", "cp", "attach", "tag"],
+  cosign: ["sign", "attest", "copy", "sign-blob", "attest-blob"],
+  skopeo: ["copy", "sync"],
+  crane: ["push", "copy", "cp", "tag", "append", "mutate"],
+};
 
 // The reason one simple command is refused, or null.
 function commandViolation(words, composeFiles) {
@@ -395,6 +522,9 @@ function commandViolation(words, composeFiles) {
   }
   if (name === "buildah") return ["bud", "build"].includes(args.find(a => !a.startsWith("-"))) ? "buildah builds an image" : null;
   if (["buildctl", "kaniko", "executor"].includes(name)) return `${name} builds an image`;
+  const positional = args.filter(a => !a.startsWith("-"));
+  if (PUBLISHING_TOOLS[name]?.includes(positional[0])) return PUBLISHES;
+  if (name === "gh" && positional[0] === "release" && ["create", "upload", "edit"].includes(positional[1])) return PUBLISHES;
   return null;
 }
 
@@ -404,12 +534,15 @@ export const checkedComposeFiles = () => (composeFilesCache ??= new Set(repoComp
 export function runBuildViolations(where, script, composeFiles = checkedComposeFiles()) {
   return shellCommands(script).flatMap(words => {
     const reason = commandViolation(words, composeFiles);
-    return reason ? [`${where}: ${reason} (${JSON.stringify(words.map(w => w.text).join(" ").slice(0, 60))}); an image is built only in a pinned job`] : [];
+    return reason ? [`${where}: ${reason} (${JSON.stringify(words.map(w => w.text).join(" ").slice(0, 60))}); only a pinned job builds or publishes an image`] : [];
   });
 }
 
 // The DOCKER_ENV names a run script mentions, after the shell removes quotes.
+// printf and echo -e escapes (\xHH, \uHHHH, \NNN) are decoded first.
+const decodeEscapes = text => text.replace(/\\x([0-9a-fA-F]{2})|\\u([0-9a-fA-F]{4})|\\0?([0-7]{1,3})/g, (_, x, u, o) => String.fromCharCode(parseInt(x ?? u ?? o, x || u ? 16 : 8)));
 function dockerEnvViolations(where, script) {
+  script = decodeEscapes(script);
   const words = shellCommands(script).flat().map(w => w.text).join(" ");
   const names = new Set([...(`${script} ${words}`.match(/[A-Z][A-Z0-9_]*/g) ?? [])].filter(name => DOCKER_ENV.test(name)));
   return [...names].map(name => `${where}: ${name} selects a builder or changes the Docker client; only a pinned job may set it`);
@@ -572,8 +705,3 @@ export const buildChecks = (name, data) => imageBuildViolations(`.github/workflo
 export const actionChecks = (name, data, options) => actionPolicyViolations(`.github/workflows/${name}.yml`, data, options);
 export const withStep = (name, job, step) => { const data = structuredClone(loadWorkflow(name)); data.jobs[job].steps.push(step); return data; };
 export const stepOf = (job, action) => stepsOf(job).find(s => actionName(s.uses ?? "") === action);
-
-// Implemented in the next commit; the fixtures show what each must refuse.
-export const PINNED_JOB_INPUTS = [];
-export function pinnedJobInputViolations() { return []; }
-export function stagingCandidateViolations() { return []; }

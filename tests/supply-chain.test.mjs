@@ -23,7 +23,7 @@ import { test } from "node:test";
 import { runInNewContext } from "node:vm";
 import { isMap, isScalar, parseDocument, visit } from "yaml";
 import { bashPath, runBash } from "./bash-preflight.mjs";
-import { APPROVED_RUNTIME, OTHER_BASE, APPROVED_RUST, KNOWN_DOCKERFILES, RUNTIME_DOCKERFILES, SHA, actionName, containerImagesIn, findDockerfiles, jobsOf, parseStrict, readLocalFromRepo, repoFiles, root, stepsOf, toData, unknownDockerfileViolations, walk, wf, workflowsDir } from "./supply-chain/lib.mjs";
+import { APPROVED_RUNTIME, OTHER_BASE, hasWrite, jobCanWrite, jobPermissions, APPROVED_RUST, KNOWN_DOCKERFILES, RUNTIME_DOCKERFILES, SHA, actionName, containerImagesIn, findDockerfiles, jobsOf, parseStrict, readLocalFromRepo, repoFiles, root, stepsOf, toData, unknownDockerfileViolations, walk, wf, workflowsDir } from "./supply-chain/lib.mjs";
 
 // An unsupported shell fails this file here, before any test or fixture runs (#380).
 bashPath();
@@ -91,30 +91,6 @@ export function pinViolations(text, file) {
 
 // With no `permissions` anywhere the job gets the repository's default token,
 // which can be read/write.
-const DEFAULT_PERMISSIONS = "write-all";
-
-export function hasWrite(perms) {
-  if (typeof perms === "string") return perms !== "read-all";
-  if (perms && typeof perms === "object" && !Array.isArray(perms)) {
-    return Object.values(perms).some(v => !["read", "none"].includes(v));
-  }
-  return true; // null, a list or a number: cannot be shown read-only
-}
-
-// A job's own block replaces the workflow's. Without either, a called workflow
-// inherits the caller's permissions and a top-level one the repository default.
-export function jobPermissions(data, job, callerPerms) {
-  if (job.permissions !== undefined) return job.permissions;
-  if (data.permissions !== undefined) return data.permissions;
-  return callerPerms !== undefined ? callerPerms : DEFAULT_PERMISSIONS;
-}
-
-// A caller's permissions cap the called workflow's jobs.
-export function jobCanWrite(data, job, callerPerms) {
-  if (callerPerms !== undefined && !hasWrite(callerPerms)) return false;
-  return hasWrite(jobPermissions(data, job, callerPerms));
-}
-
 const isLocal = ref => ref.startsWith("./") || ref.startsWith("../");
 const normalizeLocal = ref => ref.replace(/^\.\//, "").replace(/\/+$/, "");
 

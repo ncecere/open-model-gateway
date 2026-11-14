@@ -62,10 +62,12 @@ updates:
     groups:
       # The two actions whose inputs the image-build checks interpret arrive in a
       # PR of their own (Dependabot puts an update in the first group that
-      # matches), so the routine group is not held up while their new version
-      # is read. Any action used by an image job also changes
-      # tests/supply-chain/pinned-jobs.yaml: regenerate it in the PR and read
-      # the diff (docs/verification.md, "Pinned image jobs").
+      # matches). That does not keep the routine group green: any bump of an
+      # action a pinned image job uses (checkout, upload-artifact,
+      # download-artifact, metadata-action, ...) fails the supply-chain test
+      # until `node tests/supply-chain/update-pinned-jobs.mjs` is run in the
+      # same PR and the diff of tests/supply-chain/pinned-jobs.yaml is read.
+      # That is the intended tripwire (docs/verification.md, "Pinned image jobs").
       docker-build:
         patterns: ["docker/build-push-action", "docker/setup-buildx-action"]
       actions:

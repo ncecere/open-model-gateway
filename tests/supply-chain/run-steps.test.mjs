@@ -64,7 +64,7 @@ const RUN_LINES_THAT_PASS = [
   "jq -c . report.json",
   'curl -H "Accept: application/json" https://example.org',
   "docker run --rm -h gateway open-model-gateway:staging --version",
-  'docker buildx imagetools create --tag "${tag}" b',
+  'docker buildx imagetools inspect --raw "${tag}" b',
   "docker cp gateway:/app/build ./out",
   "docker run --rm mirror.gcr.io/library/rust cargo build",
   "docker buildx version",
