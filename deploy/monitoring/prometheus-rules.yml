@@ -42,6 +42,35 @@ groups:
 
   - name: open-model-gateway.accounting
     rules:
+      # Accounting failures (#389, docs/operations.md#accounting-failures): each
+      # one is a `503 accounting_unavailable` or a settlement that did not finish.
+      # No series exists before the first failure; a rate over a missing series
+      # is empty, so `> 0` yields nothing and the alert stays silent without any
+      # `absent()` or `or vector(0)` that could fire on missing data. (The very
+      # first increment of a new series is not seen by rate(); a sustained
+      # failure is.) `for: 5m` asks for failures in every 5-minute window for
+      # 5 minutes: a sustained failure, not one blip. Admission, route lookup and
+      # storage failures refuse requests but leave no money held: warning. A
+      # settlement that misses its deadline leaves its reservation held until
+      # reconciliation, which can block budgeted admission: critical.
+      - alert: GatewayAccountingFailures
+        expr: |
+          sum by (stage, cause) (rate(gateway_accounting_failures_total{stage!~"explicit_settlement|cancellation_settlement"}[5m])) > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Accounting failing at {{ $labels.stage }} ({{ $labels.cause }}); requests get 503 accounting_unavailable"
+          description: "Sustained for 5 minutes. Check database health, pool saturation (gateway_db_pool_connections) and lock waits; the WARN log line `accounting unavailable` carries the same stage and cause."
+          runbook_url: docs/operations.md#accounting-failures
+      - alert: GatewaySettlementAccountingFailures
+        expr: |
+          sum by (stage, cause) (rate(gateway_accounting_failures_total{stage=~"explicit_settlement|cancellation_settlement"}[5m])) > 0
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "Settlements missing their deadline at {{ $labels.stage }} ({{ $labels.cause }}); reservations stay held"
+          description: "Sustained for 5 minutes. Holds are retained, never refunded as zero, and can block budgeted admission. deadline_in_queue or deadline_acquiring_connection point to a starved pool, deadline_in_database to lock or statement waits."
+          runbook_url: docs/operations.md#accounting-failures
       - alert: GatewaySettlementHeld
         expr: increase(gateway_settlements_total{outcome="held"}[15m]) > 0
         labels: {severity: warning}

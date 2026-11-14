@@ -20,6 +20,10 @@ Notes for changes on `main` after [v0.16.0](v0.16.0.md). They become the next re
 
 - **The threat model describes today's management authentication** (#514). `docs/threat-model.md` named `require_session`, a function that no longer exists, and said management reads only the session cookie. It now describes `identity::authenticate_management`: one credential family per request (a browser session with Origin and CSRF checks, or an admin token as a bearer credential), refusal of both together, and refusal of inference keys. It also cites the test that sends a real inference key to every management route.
 
+## Operations and documentation
+
+- **The example monitoring files cover accounting failures** (#528). `deploy/monitoring/prometheus-rules.yml` did not use `gateway_accounting_failures_total{stage,cause}` (added in v0.16.0, #389). It now has `GatewayAccountingFailures` (warning: route lookup, pool acquire and storage stages) and `GatewaySettlementAccountingFailures` (critical: the two settlement stages, whose reservations stay held), each `sum by (stage, cause) (rate(...[5m])) > 0` for 5 minutes and linking to [Accounting failures](../operations.md#accounting-failures); with no series before the first failure the rate is empty and nothing fires. `grafana-dashboard.json` gains an "Accounting failures by stage and cause" panel in the accounting row. A new `npm run test:monitoring` (run in CI) checks that the rules and dashboard name only exported metric families and labels, that panel ids are unique and panels do not overlap, and that the alerts and panel stay in place. No gateway behaviour changes.
+
 ## Internal restructuring
 
 For contributors; no gateway behaviour changes.
