@@ -24,11 +24,12 @@ cnpg:
     # The demo commands refuse any other database name.
     database: gateway_enterprise_demo
     additionalPodAntiAffinity: false
-    # CI and deploy/staging use PostgreSQL 17.
-    image: ghcr.io/cloudnative-pg/postgresql:17.6
+    # PostgreSQL 17.6, like CI and deploy/staging: the multi-arch index (amd64 and arm64) pinned by digest.
+    image: ghcr.io/cloudnative-pg/postgresql:17.6@sha256:30b304a2e300ed80b6d1b740e4369e9b0f25599fb518de78c01fd9f25531791b
     resources:
       requests: {cpu: 200m, memory: 512Mi}
-      limits: {memory: 1Gi}
+      # The chart's own default limit is 2 CPU: three environments must fit the 8 CPU limit quota.
+      limits: {cpu: "1", memory: 1Gi}
     roles:
       migrator: {existingSecret: omg-migrator-role}
       runtime: {existingSecret: omg-runtime-role}

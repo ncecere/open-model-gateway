@@ -32,7 +32,7 @@ spec:
           command: [node, /scripts/pg-forward.mjs]
           resources: &small
             requests: {cpu: 20m, memory: 48Mi}
-            limits: {memory: 128Mi}
+            limits: {cpu: 100m, memory: 128Mi}
           securityContext: &locked
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -58,7 +58,7 @@ spec:
             - {name: GATEWAY_LISTEN, value: "127.0.0.1:3000"}
           resources: &gateway-resources
             requests: {cpu: 100m, memory: 128Mi}
-            limits: {memory: 512Mi}
+            limits: {cpu: "1", memory: 512Mi}
           securityContext: *locked
       containers:
         - name: gateway
@@ -87,7 +87,7 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
           livenessProbe:
-            exec: {command: [/usr/local/bin/open-model-gateway, healthcheck, --timeout, 3s]}
+            exec: {command: [/usr/local/bin/open-model-gateway, healthcheck, --url, "http://127.0.0.1:3000/health/live", --timeout, 3s]}
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
