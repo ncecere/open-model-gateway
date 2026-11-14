@@ -214,10 +214,32 @@ struct Input {
     tools: Option<aws::ToolConfiguration>,
 }
 
-#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 fn encode(request: &ChatRequest) -> Result<Input> {
     super::messages::validate(request, super::messages::ProviderClass::Bedrock)?;
-    let invalid = || InferenceError::InvalidRequest;
+    check_request(request)?;
+    let mut size = 0usize;
+    let (names, tools) = tool_specs(request, &mut size)?;
+    let choice = tool_choice(request, &names, tools.is_empty())?;
+    let tools = tool_config(tools, choice)?;
+    let mut turns = Turns {
+        messages: Vec::new(),
+        system: Vec::new(),
+        pending: BTreeSet::new(),
+        seen_ids: BTreeSet::new(),
+        size,
+    };
+    for message in &request.messages {
+        turns.push(message)?;
+    }
+    turns.finish(request, tools)
+}
+
+fn invalid() -> InferenceError {
+    InferenceError::InvalidRequest
+}
+
+/// Request-wide bounds checked before any tool or message is converted.
+fn check_request(request: &ChatRequest) -> Result<()> {
     if request.messages.is_empty()
         || request.messages.len() > 1024
         || request.tools.len() > MAX_TOOLS
@@ -230,9 +252,17 @@ fn encode(request: &ChatRequest) -> Result<Input> {
     {
         return Err(invalid());
     }
+    Ok(())
+}
+
+/// Converts the tool definitions in order, returning their names and specs and adding
+/// their encoded size to `size`.
+fn tool_specs(
+    request: &ChatRequest,
+    size: &mut usize,
+) -> Result<(BTreeSet<String>, Vec<aws::Tool>)> {
     let mut names = BTreeSet::new();
     let mut tools = Vec::new();
-    let mut size = 0usize;
     for tool in &request.tools {
         // Bedrock's strict support is model-specific; never silently weaken a strict schema.
         if tool.strict == Some(true) {
@@ -245,12 +275,12 @@ fn encode(request: &ChatRequest) -> Result<Input> {
         {
             return Err(invalid());
         }
-        size += tool.name.len()
+        *size += tool.name.len()
             + tool.description.as_ref().map_or(0, String::len)
             + serde_json::to_vec(&tool.parameters)
                 .map_err(|_| invalid())?
                 .len();
-        if size > OUTPUT_LIMIT {
+        if *size > OUTPUT_LIMIT {
             return Err(invalid());
         }
         tools.push(aws::Tool::ToolSpec(
@@ -262,9 +292,17 @@ fn encode(request: &ChatRequest) -> Result<Input> {
                 .map_err(|_| invalid())?,
         ));
     }
-    let choice = match &request.tool_choice {
+    Ok((names, tools))
+}
+
+fn tool_choice(
+    request: &ChatRequest,
+    names: &BTreeSet<String>,
+    no_tools: bool,
+) -> Result<Option<aws::ToolChoice>> {
+    Ok(match &request.tool_choice {
         None => None,
-        Some(_) if tools.is_empty() => return Err(invalid()),
+        Some(_) if no_tools => return Err(invalid()),
         Some(ToolChoice::None) => return Err(InferenceError::Unsupported),
         Some(ToolChoice::Auto) => Some(aws::ToolChoice::Auto(
             aws::AutoToolChoice::builder().build(),
@@ -283,8 +321,14 @@ fn encode(request: &ChatRequest) -> Result<Input> {
                     .map_err(|_| invalid())?,
             ))
         }
-    };
-    let tools = if tools.is_empty() {
+    })
+}
+
+fn tool_config(
+    tools: Vec<aws::Tool>,
+    choice: Option<aws::ToolChoice>,
+) -> Result<Option<aws::ToolConfiguration>> {
+    Ok(if tools.is_empty() {
         None
     } else {
         Some(
@@ -294,37 +338,35 @@ fn encode(request: &ChatRequest) -> Result<Input> {
                 .build()
                 .map_err(|_| invalid())?,
         )
-    };
-    let mut messages: Vec<aws::Message> = Vec::new();
-    let mut system = Vec::new();
-    let mut pending = BTreeSet::new();
-    let mut seen_ids = BTreeSet::new();
-    for message in &request.messages {
-        size = size
+    })
+}
+
+/// The conversation as converted so far: Bedrock messages, system blocks, tool calls
+/// still awaiting a result, every tool call id seen and the running encoded size.
+struct Turns {
+    messages: Vec<aws::Message>,
+    system: Vec<aws::SystemContentBlock>,
+    pending: BTreeSet<String>,
+    seen_ids: BTreeSet<String>,
+    size: usize,
+}
+
+impl Turns {
+    fn push(&mut self, message: &Message) -> Result<()> {
+        self.size = self
+            .size
             .checked_add(message.content.as_ref().map_or(0, String::len))
             .ok_or_else(invalid)?;
-        if size > OUTPUT_LIMIT {
+        if self.size > OUTPUT_LIMIT {
             return Err(invalid());
         }
         if message.role == Role::Developer {
             return Err(InferenceError::Unsupported);
         }
         if message.role == Role::System {
-            if !messages.is_empty()
-                || !message.tool_calls.is_empty()
-                || message.tool_call_id.is_some()
-            {
-                return Err(invalid());
-            }
-            let text = message
-                .content
-                .as_ref()
-                .filter(|s| !s.is_empty())
-                .ok_or_else(invalid)?;
-            system.push(aws::SystemContentBlock::Text(text.clone()));
-            continue;
+            return self.push_system(message);
         }
-        if message.role != Role::Tool && !pending.is_empty() {
+        if message.role != Role::Tool && !self.pending.is_empty() {
             return Err(invalid());
         }
         if message.role != Role::Tool && message.tool_call_id.is_some() {
@@ -338,70 +380,114 @@ fn encode(request: &ChatRequest) -> Result<Input> {
         } else {
             aws::ConversationRole::User
         };
-        let mut content = Vec::new();
-        if message.role == Role::Tool {
-            let id = message.tool_call_id.as_ref().ok_or_else(invalid)?;
-            if !pending.remove(id) {
-                return Err(invalid());
-            }
-            // Canonical tool result content is a string. Preserve it verbatim, including JSON
-            // strings; parsing/re-emitting would alter its semantics. Tool-use input is JSON.
-            let text = message.content.as_ref().ok_or_else(invalid)?;
-            content.push(aws::ContentBlock::ToolResult(
-                aws::ToolResultBlock::builder()
-                    .tool_use_id(id)
-                    .content(aws::ToolResultContentBlock::Text(text.clone()))
-                    .build()
-                    .map_err(|_| invalid())?,
-            ));
+        let content = if message.role == Role::Tool {
+            self.tool_result(message)?
         } else {
-            if let Some(text) = &message.content
-                && !text.is_empty()
-            {
-                content.push(aws::ContentBlock::Text(text.clone()));
-            }
-            if message.tool_calls.len() > MAX_TOOLS {
-                return Err(invalid());
-            }
-            for call in &message.tool_calls {
-                if !identifier(&call.id)
-                    || !identifier(&call.name)
-                    || !seen_ids.insert(call.id.clone())
-                {
-                    return Err(invalid());
-                }
-                let args: Value = serde_json::from_str(&call.arguments).map_err(|_| invalid())?;
-                if !args.is_object() {
-                    return Err(invalid());
-                }
-                size = size.checked_add(call.arguments.len()).ok_or_else(invalid)?;
-                pending.insert(call.id.clone());
-                content.push(aws::ContentBlock::ToolUse(
-                    aws::ToolUseBlock::builder()
-                        .tool_use_id(&call.id)
-                        .name(&call.name)
-                        .input(document(&args)?)
-                        .build()
-                        .map_err(|_| invalid())?,
-                ));
-            }
-        }
+            self.text_and_calls(message)?
+        };
         if content.is_empty() {
             return Err(invalid());
         }
+        self.append(message, role, content)
+    }
+
+    fn push_system(&mut self, message: &Message) -> Result<()> {
+        if !self.messages.is_empty()
+            || !message.tool_calls.is_empty()
+            || message.tool_call_id.is_some()
+        {
+            return Err(invalid());
+        }
+        let text = message
+            .content
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(invalid)?;
+        self.system
+            .push(aws::SystemContentBlock::Text(text.clone()));
+        Ok(())
+    }
+
+    fn tool_result(&mut self, message: &Message) -> Result<Vec<aws::ContentBlock>> {
+        let mut content = Vec::new();
+        let id = message.tool_call_id.as_ref().ok_or_else(invalid)?;
+        if !self.pending.remove(id) {
+            return Err(invalid());
+        }
+        // Canonical tool result content is a string. Preserve it verbatim, including JSON
+        // strings; parsing/re-emitting would alter its semantics. Tool-use input is JSON.
+        let text = message.content.as_ref().ok_or_else(invalid)?;
+        content.push(aws::ContentBlock::ToolResult(
+            aws::ToolResultBlock::builder()
+                .tool_use_id(id)
+                .content(aws::ToolResultContentBlock::Text(text.clone()))
+                .build()
+                .map_err(|_| invalid())?,
+        ));
+        Ok(content)
+    }
+
+    fn text_and_calls(&mut self, message: &Message) -> Result<Vec<aws::ContentBlock>> {
+        let mut content = Vec::new();
+        if let Some(text) = &message.content
+            && !text.is_empty()
+        {
+            content.push(aws::ContentBlock::Text(text.clone()));
+        }
+        if message.tool_calls.len() > MAX_TOOLS {
+            return Err(invalid());
+        }
+        for call in &message.tool_calls {
+            content.push(self.tool_use(call)?);
+        }
+        Ok(content)
+    }
+
+    fn tool_use(&mut self, call: &ToolCall) -> Result<aws::ContentBlock> {
+        if !identifier(&call.id)
+            || !identifier(&call.name)
+            || !self.seen_ids.insert(call.id.clone())
+        {
+            return Err(invalid());
+        }
+        let args: Value = serde_json::from_str(&call.arguments).map_err(|_| invalid())?;
+        if !args.is_object() {
+            return Err(invalid());
+        }
+        self.size = self
+            .size
+            .checked_add(call.arguments.len())
+            .ok_or_else(invalid)?;
+        self.pending.insert(call.id.clone());
+        Ok(aws::ContentBlock::ToolUse(
+            aws::ToolUseBlock::builder()
+                .tool_use_id(&call.id)
+                .name(&call.name)
+                .input(document(&args)?)
+                .build()
+                .map_err(|_| invalid())?,
+        ))
+    }
+
+    fn append(
+        &mut self,
+        message: &Message,
+        role: aws::ConversationRole,
+        content: Vec<aws::ContentBlock>,
+    ) -> Result<()> {
         // Tool results from one assistant turn must be sent together as one user message.
         // Do not otherwise collapse user/assistant boundaries or alter turn ordering.
         if message.role == Role::Tool
-            && messages.last().is_some_and(|m| {
+            && self.messages.last().is_some_and(|m| {
                 m.role == aws::ConversationRole::User
                     && m.content
                         .iter()
                         .all(|b| matches!(b, aws::ContentBlock::ToolResult(_)))
             })
         {
-            messages.last_mut().unwrap().content.extend(content);
+            self.messages.last_mut().unwrap().content.extend(content);
         } else {
-            messages.push(
+            self.messages.push(
                 aws::Message::builder()
                     .role(role)
                     .set_content(Some(content))
@@ -409,39 +495,54 @@ fn encode(request: &ChatRequest) -> Result<Input> {
                     .map_err(|_| invalid())?,
             );
         }
+        Ok(())
     }
-    if !pending.is_empty()
-        || messages.is_empty()
-        || messages[0].role != aws::ConversationRole::User
-        || messages
-            .last()
-            .is_some_and(|m| m.role != aws::ConversationRole::User)
-        || size > OUTPUT_LIMIT
-    {
-        return Err(invalid());
+
+    fn finish(self, request: &ChatRequest, tools: Option<aws::ToolConfiguration>) -> Result<Input> {
+        let Self {
+            messages,
+            system,
+            pending,
+            size,
+            ..
+        } = self;
+        if !pending.is_empty()
+            || messages.is_empty()
+            || messages[0].role != aws::ConversationRole::User
+            || messages
+                .last()
+                .is_some_and(|m| m.role != aws::ConversationRole::User)
+            || size > OUTPUT_LIMIT
+        {
+            return Err(invalid());
+        }
+        Ok(Input {
+            messages,
+            system: (!system.is_empty()).then_some(system),
+            tools,
+            inference: inference_config(request),
+        })
     }
-    Ok(Input {
-        messages,
-        system: (!system.is_empty()).then_some(system),
-        tools,
-        inference: aws::InferenceConfiguration::builder()
-            .set_temperature(request.temperature.map(|n| n as f32))
-            .set_top_p(
-                request
-                    .messages_options
-                    .as_ref()
-                    .and_then(|o| o.top_p)
-                    .map(|p| p as f32),
-            )
-            .set_stop_sequences(
-                request
-                    .messages_options
-                    .as_ref()
-                    .and_then(|o| o.stop_sequences.clone()),
-            )
-            .set_max_tokens(request.max_output_tokens.map(|n| n as i32))
-            .build(),
-    })
+}
+
+fn inference_config(request: &ChatRequest) -> aws::InferenceConfiguration {
+    aws::InferenceConfiguration::builder()
+        .set_temperature(request.temperature.map(|n| n as f32))
+        .set_top_p(
+            request
+                .messages_options
+                .as_ref()
+                .and_then(|o| o.top_p)
+                .map(|p| p as f32),
+        )
+        .set_stop_sequences(
+            request
+                .messages_options
+                .as_ref()
+                .and_then(|o| o.stop_sequences.clone()),
+        )
+        .set_max_tokens(request.max_output_tokens.map(|n| n as i32))
+        .build()
 }
 
 fn identifier(value: &str) -> bool {
