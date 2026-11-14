@@ -13,7 +13,7 @@
 // from the environment but PATH, and they run the very file that was checked.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import test from "node:test";
@@ -268,8 +268,9 @@ test("every bash lookup inside a fixture finds the checked shell, whatever its P
 });
 
 // Every test file that runs Bash must do it through the preflight module, and the rule is
-// kept simple enough to hold without parsing JavaScript. In every .mjs, .js, .cjs and .ts
-// file under tests/ (all directories), except the preflight and this file, no line may:
+// kept simple enough to hold without parsing JavaScript. In every JavaScript and
+// TypeScript file under tests/ (.js .mjs .cjs .jsx .ts .mts .cts .tsx, all directories),
+// except the preflight and this file, no line may:
 // - name a shell at the end of a string literal ("bash", "/bin/sh", [..., "bash"],
 //   "env bash", shell: "/bin/zsh") or as a /bin path anywhere (a `#!/bin/bash` line).
 //   However the call is spelled (spawnSync, an alias, a variable, through `env`), a shell
@@ -278,7 +279,15 @@ test("every bash lookup inside a fixture finds the checked shell, whatever its P
 // - call exec() or execSync(), which always run their command line with /bin/sh.
 // A line that does one of these for another reason is listed in ALLOWED with that reason,
 // by its exact text, so a changed or new line is looked at again. Comments are held to
-// the same rule. What the rule cannot see: a name put together at run time ("ba" + "sh").
+// the same rule. Lines are read as the engine reads them (logicalLines): a backslash line
+// continuation is joined and a string escape is decoded first, so neither hides a name
+// (#576). Decoding was chosen over refusing every escape next to a shell-name character
+// because the escapes have so many spellings (\x, \u, \u{}, octal, a backslash before a
+// plain letter, in a key as well as a value) that a refusal rule would be a second parser
+// with its own gaps, and would flag lines that only mention a name. Other files under
+// tests/ are Python tests and data (.py .json .yaml .yml), which are not read; any other
+// extension, or any file under node_modules, fails (sortTestFiles). What the rule cannot
+// see: a name put together at run time ("ba" + "sh", a variable, a decoded base64 string).
 const SHELL = "(?:ba|z|da|k|c|a|tc|fi)?sh";
 const STARTS_A_SHELL = [
   ["names a shell at the end of a string literal", new RegExp(`(?<![\\w.])${SHELL}["'\`]`)],
@@ -352,19 +361,64 @@ const ALLOWED = {
   ],
   "browser/alert-webhooks.spec.ts": ["const match = /^t=(\\d+),v1=([0-9a-f]{64})$/.exec(signature);"],
 };
+// Source text as the JavaScript engine reads a string, so that no spelling of a name gets
+// past the patterns (#576):
+// - a backslash before a line break continues a string on the next line, so the physical
+//   lines are joined (reported at the first one). A comment that ends in a backslash does
+//   not continue, so each physical line of a joined one is judged on its own as well, and
+//   the joined text only when none of them is caught (`parts`, startsAShell);
+// - \xHH, \uHHHH, \u{H...} and octal escapes stand for the character they name;
+// - a backslash before any other character that has no escape meaning is dropped ("ba\sh"
+//   is "bash"). Quotes, \b \f \n \r \t \v, digits and \\ itself stay as written.
+// Read this way, nothing is refused for being an escape: a line with escapes is judged on
+// what it says. The names are still found only where they stand as text; one built at run
+// time ("ba" + "sh", a variable) is not seen.
+const ESCAPE = /\\(?:(\\)|x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|u\{([0-9a-fA-F]+)\}|([0-3][0-7]{0,2}|[4-7][0-7]?)|([^bfnrtv'"`0-9xu\\\n]))/g;
+function unescapeSource(line) {
+  return line.replace(ESCAPE, (escape, backslash, hex, unit, braced, octal, plain) => {
+    if (backslash !== undefined) return escape;
+    if (plain !== undefined) return plain;
+    const code = hex !== undefined ? parseInt(hex, 16) : unit !== undefined ? parseInt(unit, 16) : braced !== undefined ? parseInt(braced, 16) : parseInt(octal, 8);
+    return code <= 0x10ffff ? String.fromCodePoint(code) : escape;
+  });
+}
+function logicalLines(text) {
+  const lines = [];
+  let parts = [];
+  const flush = () => {
+    if (parts.length === 0) return;
+    const raw = parts.map((part, index) => (index < parts.length - 1 ? part.source.slice(0, -1) : part.source)).join("");
+    lines.push({ number: parts[0].number, raw: raw.trim(), text: unescapeSource(raw), parts: parts.length > 1 ? parts.map(({ number, source }) => ({ number, raw: source.trim(), text: unescapeSource(source) })) : [] });
+    parts = [];
+  };
+  text.replace(/\r\n?|[\u2028\u2029]/g, "\n").split("\n").forEach((source, index) => {
+    parts.push({ number: index + 1, source });
+    // An odd number of trailing backslashes: the last one escapes the line break.
+    if (!/(?<!\\)(?:\\\\)*\\$/.test(source)) flush();
+  });
+  flush();
+  return lines;
+}
+
 // ALLOWED is a multiset: each listing excuses one occurrence, so a line that appears twice
 // must be listed twice. Appearing more or fewer times than listed fails the rule (#498).
+// An allowed line is matched by its source text: a physical line as written, or, for a
+// line that is caught only once its continuations are joined, the joined text.
 function startsAShell(name, text, allowed = []) {
   const found = [];
   const listed = new Map();
   for (const line of allowed) listed.set(line, (listed.get(line) ?? 0) + 1);
   const seen = new Map();
-  text.split("\n").forEach((line, index) => {
+  const judge = ({ number, raw, text: line }) => {
     const broken = STARTS_A_SHELL.filter(([, pattern]) => pattern.test(line)).map(([what]) => what);
-    if (broken.length === 0) return;
-    if (listed.has(line.trim())) seen.set(line.trim(), (seen.get(line.trim()) ?? 0) + 1);
-    else found.push(`${name}:${index + 1} ${broken.join(", ")}: ${line.trim()}`);
-  });
+    if (broken.length === 0) return false;
+    if (listed.has(raw)) seen.set(raw, (seen.get(raw) ?? 0) + 1);
+    else found.push(`${name}:${number} ${broken.join(", ")}: ${raw}`);
+    return true;
+  };
+  for (const line of logicalLines(text)) {
+    if (!line.parts.map(judge).some(Boolean)) judge(line);
+  }
   const times = n => `${n} ${n === 1 ? "time" : "times"}`;
   for (const [line, count] of listed) {
     const appears = seen.get(line) ?? 0;
@@ -374,9 +428,49 @@ function startsAShell(name, text, allowed = []) {
   return found;
 }
 
+// Which files under tests/ the rule reads. `names` are paths below tests/ with "/".
+// - Every JavaScript or TypeScript spelling Node or a bundler loads is read: .js .mjs .cjs
+//   .jsx .ts .mts .cts .tsx (Node 22 runs an .mts file without flags).
+// - Python tests and data files are not read, as before: .py, .json, .yaml, .yml.
+// - Any other extension, or none, is refused: a script in another language, or one with a
+//   shebang, could start a shell the rule never sees. Add a data extension here on purpose.
+// - A path through node_modules is refused: a dependency is not a test file, and a file
+//   force-added there is read by nothing.
+const SCANNED_FILE = /\.[cm]?[jt]sx?$/i;
+const UNREAD_FILE = /\.(?:py|json|ya?ml)$/i;
+function sortTestFiles(names) {
+  const sorted = { scanned: [], refused: [] };
+  for (const name of names) {
+    if (/^bash-preflight\.(?:test\.)?mjs$/.test(name)) continue;
+    if (name.split("/").includes("node_modules")) sorted.refused.push(`tests/${name}: a file under node_modules would be committed inside tests/`);
+    else if (SCANNED_FILE.test(name)) sorted.scanned.push(name);
+    else if (!UNREAD_FILE.test(name)) sorted.refused.push(`tests/${name}: an extension the shell rule neither reads nor knows as data; add it to SCANNED_FILE or UNREAD_FILE on purpose`);
+  }
+  return sorted;
+}
+
+// Every path under tests/ that git would commit: the tracked ones (a force-added file
+// included) and the untracked ones that are not ignored. A build artefact or a
+// dependency directory that .gitignore keeps out is not listed; a file that is listed
+// but gone from the work tree (deleted, not yet staged) is dropped. A directory in the
+// list is a submodule, whose files git does not list: refused. Git is asked about the
+// repository at `repository` only: GIT_DIR, GIT_INDEX_FILE and the like, which git sets
+// when it runs a hook, would point it (and the fixture below) at another one.
+const gitEnv = () => Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
+function committableTestFiles(repository = root) {
+  const git = spawnSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "tests"], { cwd: repository, encoding: "utf8", env: gitEnv() });
+  assert.equal(git.status, 0, `git ls-files failed: ${git.error ?? git.stderr}`);
+  return git.stdout.split("\0").filter(Boolean).map(name => name.replace(/^tests\//, "")).filter(name => {
+    const entry = statSync(join(repository, "tests", name), { throwIfNoEntry: false });
+    assert.ok(!entry?.isDirectory(), `tests/${name} is a directory git lists as one entry (a submodule); its files cannot be scanned`);
+    return entry !== undefined;
+  });
+}
+
 test("no test file starts bash on its own (#380)", () => {
-  const files = readdirSync(join(root, "tests"), { recursive: true }).map(name => name.split("\\").join("/"))
-    .filter(name => /\.(?:mjs|js|cjs|ts)$/.test(name) && !name.split("/").includes("node_modules") && !/^bash-preflight\.(?:test\.)?mjs$/.test(name));
+  const sorted = sortTestFiles(committableTestFiles());
+  assert.deepEqual(sorted.refused, [], "files under tests/ that cannot be scanned");
+  const files = sorted.scanned;
   assert.ok(files.includes("supply-chain.test.mjs") && files.includes("oci-tool.test.mjs") && files.includes("browser/stack.mjs") && files.includes("browser/helpers.ts"));
   assert.deepEqual(Object.keys(ALLOWED).filter(name => !files.includes(name)), [], "ALLOWED names a file that is gone");
   const users = [];
@@ -432,6 +526,142 @@ test("an allowed shell line may appear only as often as it is listed (#498)", ()
   assert.deepEqual(startsAShell("x.mjs", `${line}\n${line}\n${line}`, [line, line]), [`x.mjs: an allowed line appears 3 times but is listed 2 times: ${line}`], "listed twice, appearing three times");
   assert.deepEqual(startsAShell("x.mjs", line, [line, line]), [`x.mjs: an allowed line appears 1 time but is listed 2 times: ${line}`], "listed twice, appearing once");
   assert.deepEqual(startsAShell("x.mjs", "a();", [line]), [`x.mjs: an allowed line is gone, remove it from ALLOWED: ${line}`], "listed, gone");
+});
+
+// The rule reads source the way the engine does (#576). Each line below really starts a
+// shell, or sets the `shell` option, and passed the rule when it only looked at the
+// characters in the file. They are handed to the scanner as strings: a file holding them
+// would have to be allowlisted, which is the point of the rule.
+test("a shell name hidden by a line continuation or an escape is still found (#576)", () => {
+  for (const [label, source] of [
+    ["a continuation inside the name", 'spawnSync("bas\\\nh", ["-c", script]);'],
+    ["a continuation with CRLF", 'spawnSync("bas\\\r\nh", ["-c", script]);'],
+    ["a continuation with a lone CR", 'spawnSync("bas\\\rh", ["-c", script]);'],
+    ["a continuation with U+2028", 'spawnSync("bas\\\u2028h", ["-c", script]);'],
+    ["a continuation before the closing quote", 'spawnSync("bash\\\n");'],
+    ["a continuation in a template literal", "execFileSync(`bas\\\nh`, []);"],
+    ["a continuation and an escape together", 'spawnSync("b\\\n\\x61sh");'],
+    ["a continuation in a quoted shell option key", 'spawnSync(f, { "she\\\nll": true });'],
+    ["a \\x escape", 'spawnSync("\\x62ash", ["-c", script]);'],
+    ["a \\x escape in the middle", 'spawnSync("ba\\x73h");'],
+    ["a \\u escape", 'spawnSync("ba\\u0073h", ["-c", script]);'],
+    ["a \\u{} escape", 'spawnSync("ba\\u{73}h");'],
+    ["a long \\u{} escape", 'spawnSync("ba\\u{000073}h");'],
+    ["a \\u{} escape with more than eight digits", 'spawnSync("ba\\u{0000000073}h");'],
+    ["an upper-case hex escape", 'spawnSync("\\x62\\x61\\x73\\x68");'],
+    ["an octal escape", 'spawnSync("\\142ash");'],
+    ["an escape in the /bin path", 'spawnSync("/bin/\\x62ash");'],
+    ["an escaped slash in the /bin path", 'spawnSync("env", ["\\/bin\\/sh -c true"]);'],
+    ["a shell option key spelled with \\u", "spawnSync(file, { sh\\u0065ll: true });"],
+    ["a shell option key spelled with \\x", 'spawnSync(file, { "\\x73hell": true });'],
+    ["a shell option set on a variable", 'options["sh\\u{65}ll"] = true;'],
+    ["SHELL spelled with an escape", "const s = process.env.SH\\u0045LL;"],
+    ["execSync spelled with an escape", 'cp.\\u0065xecSync("true");'],
+    ["a backslash before a plain letter", 'spawnSync(file, { "s\\hell": true });'],
+    ["a backslash before most letters", 'spawnSync("b\\a\\s\\h");'],
+    ["env and a hidden shell", "spawnSync('env', ['b\\x61sh']);"],
+    ["a shebang with an escape", '"#!/usr/bin/env b\\u0061sh",'],
+  ]) assert.equal(startsAShell("x.mjs", source).length, 1, `${label}: ${JSON.stringify(source)}`);
+});
+
+test("a continuation is joined and an escape decoded without false findings, and the line is reported where it starts (#576)", () => {
+  const joined = startsAShell("x.mjs", 'a();\nspawnSync("bas\\\nh");\nb();');
+  assert.equal(joined.length, 1);
+  assert.ok(joined[0].startsWith("x.mjs:2 names a shell at the end of a string literal: "), joined[0]);
+  assert.ok(startsAShell("x.mjs", 'a();\nb();\nspawnSync("\\x62ash");')[0].startsWith("x.mjs:3 "));
+  // An escaped backslash before a line break is not a continuation: the next line stands alone.
+  const separate = startsAShell("x.mjs", 'const a = "end\\\\";\nspawnSync("bash");');
+  assert.equal(separate.length, 1);
+  assert.ok(separate[0].startsWith("x.mjs:2 "), separate[0]);
+  // A last line ending in a backslash is still read.
+  assert.equal(startsAShell("x.mjs", 'spawnSync("bash");\\').length, 1);
+  // An allowed line is matched by its source text: the joined lines, escapes as written.
+  const allowedLine = 'const shell = docker(["run", "--entrypoint", "/bin/\\x73h", image]);';
+  assert.equal(startsAShell("x.mjs", allowedLine).length, 1);
+  assert.deepEqual(startsAShell("x.mjs", allowedLine, [allowedLine]), []);
+  assert.deepEqual(startsAShell("x.mjs", 'const path = "/bin/s\\\nh";', ['const path = "/bin/sh";']), [], "caught only when joined: listed as joined");
+  // A comment that ends in a backslash does not continue: the next line is code, and is
+  // judged (and allowed) as the line it is. The rule before #576 saw these too.
+  const comment = startsAShell("x.mjs", '// see C:\\dir\\\nexecSync("true");');
+  assert.equal(comment.length, 1);
+  assert.ok(comment[0].startsWith("x.mjs:2 calls exec() or execSync(): execSync("), comment[0]);
+  assert.equal(startsAShell("x.mjs", 'spawnSync(file, { encoding: "utf8", // note\\\nshell: !0,\n});').length, 1);
+  const listedLine = "while ((m = invocationRe.exec(script))) {";
+  assert.deepEqual(startsAShell("x.mjs", `// see C:\\temp\\\n${listedLine}`, [listedLine]), []);
+  assert.equal(unescapeSource('"\\u{' + "f".repeat(400) + '}"').length, 406, "an escape beyond Unicode stays as written");
+  for (const line of [
+    'const text = "\\x41\\u0042\\u{43}\\104\\n\\t";',
+    'const note = "push\\x20here";',
+    'const word = "\\x70ush";',
+    'const word = "pu\\sh";',
+    'const say = "say \\"bash\\" now";',
+    "const say = 'it\\'s a \\'sh\\' script';",
+    // A literal backslash followed by the text of an escape: the string is `\x62ash`.
+    'const literal = "\\\\x62ash";',
+    'const literal = "\\\\u0073h";',
+    "const re = /\\.mjs$/;",
+    "const re = /\\bpush\\b/;",
+    'const long = "one \\\ntwo";',
+    'const nul = "\\0";',
+    'const big = "\\u{110000}";',
+    'runBash(["-c", "echo \\x68i"]);',
+  ]) assert.deepEqual(startsAShell("x.mjs", line), [], line);
+});
+
+test("every JavaScript and TypeScript spelling is read, other scripts are refused, and so is node_modules (#576)", () => {
+  const scanned = ["a.mjs", "b.js", "c.cjs", "d.mts", "e.cts", "f.ts", "g.tsx", "h.jsx", "sub/i.MTS", "sub/deeper/j.Jsx", "k.d.ts", "l.test.mts"];
+  const sorted = sortTestFiles(scanned);
+  assert.deepEqual(sorted.scanned, scanned);
+  assert.deepEqual(sorted.refused, []);
+  // Python tests and data files are not read, as before.
+  const unread = ["a.py", "oci_index_test.py", "b.json", "browser/package.json", "c.yaml", "d.yml", "sub/E.YAML"];
+  assert.deepEqual(sortTestFiles(unread), { scanned: [], refused: [] });
+  // The preflight's own files are the rule's subject, not its object.
+  assert.deepEqual(sortTestFiles(["bash-preflight.mjs", "bash-preflight.test.mjs"]), { scanned: [], refused: [] });
+  assert.equal(sortTestFiles(["sub/bash-preflight.mjs"]).scanned.length, 1, "only the top-level files are exempt");
+  for (const name of ["x.sh", "x.bash", "x.zsh", "x.ksh", "x.fish", "x.pl", "x.rb", "x.php", "x.lua", "x.ps1", "x.bat", "x.cmd", "x.coffee", "x.mjs.sh", "x.sh.json.sh", "x.wasm", "x.node", "x.md", "x.txt", "x.mjs.map", "x.mjsx.bak", "run", "sub/run", "sub/.hidden", ".env", "trailing.mjs.", "x.py.sh"]) {
+    const refused = sortTestFiles([name]);
+    assert.deepEqual(refused.scanned, [], name);
+    assert.equal(refused.refused.length, 1, name);
+    assert.ok(refused.refused[0].startsWith(`tests/${name}: `), refused.refused[0]);
+  }
+  for (const name of ["node_modules/x.mjs", "browser/node_modules/pkg/index.js", "a/node_modules/b.json", "node_modules/p/run.sh", "a/node_modules/x.py"]) {
+    const refused = sortTestFiles([name]);
+    assert.deepEqual(refused.scanned, [], name);
+    assert.equal(refused.refused.length, 1, name);
+    assert.match(refused.refused[0], /node_modules/, name);
+  }
+  assert.equal(sortTestFiles(["node_modules.mjs", "my_node_modules/x.mjs"]).refused.length, 0, "only a directory named node_modules");
+});
+
+// The list of files comes from git, so a file added with `git add -f` under an ignored
+// node_modules is listed, and an ignored one that was never added is not (#576).
+test("a force-added file under tests/node_modules is listed and refused, an ignored one is not (#576)", t => {
+  const repo = scratch(t);
+  const git = (...args) => {
+    const result = spawnSync("git", args, { cwd: repo, encoding: "utf8", env: gitEnv() });
+    assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.stderr}`);
+  };
+  git("init", "--quiet");
+  mkdirSync(join(repo, "tests/node_modules/pkg"), { recursive: true });
+  mkdirSync(join(repo, "tests/browser/node_modules"), { recursive: true });
+  mkdirSync(join(repo, "tests/browser/test-results"), { recursive: true });
+  writeFileSync(join(repo, ".gitignore"), "node_modules/\ntest-results/\n");
+  writeFileSync(join(repo, "tests/ok.test.mjs"), "export {};\n");
+  writeFileSync(join(repo, "tests/new.mts"), "export {};\n");
+  writeFileSync(join(repo, "tests/node_modules/pkg/index.mjs"), "export {};\n");
+  writeFileSync(join(repo, "tests/browser/node_modules/dep.js"), "export {};\n");
+  writeFileSync(join(repo, "tests/browser/test-results/trace.zip"), "x");
+  git("add", ".gitignore", "tests/ok.test.mjs");
+  assert.deepEqual(committableTestFiles(repo).sort(), ["new.mts", "ok.test.mjs"], "ignored files are not listed; an untracked file is");
+  assert.deepEqual(sortTestFiles(committableTestFiles(repo)).refused, []);
+  git("add", "-f", "tests/node_modules/pkg/index.mjs");
+  const listed = committableTestFiles(repo).sort();
+  assert.deepEqual(listed, ["new.mts", "node_modules/pkg/index.mjs", "ok.test.mjs"]);
+  assert.deepEqual(sortTestFiles(listed).refused, ["tests/node_modules/pkg/index.mjs: a file under node_modules would be committed inside tests/"]);
+  // Deleted from the work tree but still in the index: nothing to read.
+  rmSync(join(repo, "tests/ok.test.mjs"));
+  assert.deepEqual(committableTestFiles(repo).sort(), ["new.mts", "node_modules/pkg/index.mjs"]);
 });
 
 // The real path: each suite, started with an old bash first on PATH, must stop before
