@@ -406,6 +406,19 @@ test("no test file starts bash on its own (#380)", () => {
   assert.equal(startsAShell("x.mjs", "a();", ["b();"]).length, 1, "a stale allowed line is reported");
 });
 
+// An allowed line excuses one occurrence per listing, so a second copy of it (which could
+// feed a real spawn) is not excused by the first one's entry (#498).
+test("an allowed shell line may appear only as often as it is listed (#498)", () => {
+  const line = 'const shell = docker(["run", "--rm", "--entrypoint", "/bin/sh", image]);';
+  assert.equal(startsAShell("x.mjs", line).length, 1, "the line breaks the rule when it is not listed");
+  assert.deepEqual(startsAShell("x.mjs", line, [line]), [], "listed once, appearing once");
+  assert.deepEqual(startsAShell("x.mjs", `${line}\na();\n  ${line}`, [line]), [`x.mjs: an allowed line appears 2 times but is listed 1 time: ${line}`], "listed once, appearing twice");
+  assert.deepEqual(startsAShell("x.mjs", `${line}\n${line}`, [line, line]), [], "listing a line twice allows it twice");
+  assert.deepEqual(startsAShell("x.mjs", `${line}\n${line}\n${line}`, [line, line]), [`x.mjs: an allowed line appears 3 times but is listed 2 times: ${line}`], "listed twice, appearing three times");
+  assert.deepEqual(startsAShell("x.mjs", line, [line, line]), [`x.mjs: an allowed line appears 1 time but is listed 2 times: ${line}`], "listed twice, appearing once");
+  assert.deepEqual(startsAShell("x.mjs", "a();", [line]), [`x.mjs: an allowed line is gone, remove it from ALLOWED: ${line}`], "listed, gone");
+});
+
 // The real path: each suite, started with an old bash first on PATH, must stop before
 // its first test with the refusal on stderr. Not a skip, and no fixture has run.
 for (const suite of ["tests/supply-chain.test.mjs", "tests/oci-tool.test.mjs"]) {
