@@ -479,6 +479,88 @@ mod tests {
         }
     }
 
+    /// Library calls that draw randomness without naming a generator
+    /// (#511). Clippy resolves these paths through aliases, re-exports and
+    /// renamed imports, so `tokio_tungstenite::tungstenite::...` and
+    /// `aes_gcm::aead::Generate` are covered by the defining crate's path.
+    const CLIPPY_LIST: [&str; 20] = [
+        "tungstenite::handshake::client::generate_key",
+        "rustls::crypto::SecureRandom::fill",
+        "crypto_common::Generate::generate",
+        "crypto_common::Generate::try_generate",
+        "crypto_common::Generate::generate_from_rng",
+        "crypto_common::Generate::try_generate_from_rng",
+        "crypto_common::KeyInit::generate_key",
+        "crypto_common::KeyIvInit::generate_key",
+        "crypto_common::KeyIvInit::generate_iv",
+        "crypto_common::KeyIvInit::generate_key_iv",
+        "oauth2::CsrfToken::new_random",
+        "oauth2::CsrfToken::new_random_len",
+        "oauth2::PkceCodeChallenge::new_random_sha256",
+        "oauth2::PkceCodeChallenge::new_random_sha256_len",
+        "oauth2::PkceCodeChallenge::new_random_plain",
+        "openidconnect::Nonce::new_random",
+        "openidconnect::Nonce::new_random_len",
+        "std::hash::RandomState::new",
+        "std::collections::HashMap::hasher",
+        "std::collections::HashSet::hasher",
+    ];
+
+    /// Every call on [`CLIPPY_LIST`] is a `disallowed-methods` entry in
+    /// `clippy.toml` whose reason names this module (#511).
+    #[test]
+    fn clippy_disallows_randomness_that_names_no_generator() {
+        let config =
+            std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("clippy.toml"))
+                .unwrap();
+        for path in CLIPPY_LIST {
+            let entry = format!("{{ path = \"{path}\", reason = \"");
+            let line = config
+                .lines()
+                .find(|line| line.trim_start().starts_with(&entry))
+                .unwrap_or_else(|| panic!("clippy.toml must disallow {path} (#511)"));
+            assert!(
+                line.contains("crate::entropy"),
+                "clippy.toml: the reason for {path} must name crate::entropy (#511)"
+            );
+        }
+    }
+
+    /// What Clippy cannot name (a field, a type used through `Default`, a
+    /// device path) is named here instead (#511).
+    #[test]
+    fn sources_clippy_cannot_name_are_named() {
+        for (source, expected) in [
+            (
+                "fn a() { let _ = std::fs::read(\"/dev/urandom\"); }",
+                vec!["urandom"],
+            ),
+            ("const P: &[u8] = b\"/dev/urandom\";", vec!["urandom"]),
+            (
+                "fn a() { let _ = std::fs::File::open(\"/dev/random\"); }",
+                vec!["/dev/random"],
+            ),
+            (
+                "fn a(p: &rustls::crypto::CryptoProvider) { let _ = p.secure_random; }",
+                vec!["secure_random"],
+            ),
+            ("use std::collections::hash_map::RandomState;", vec!["RandomState"]),
+            (
+                "fn a() { let _ = <ahash::RandomState as Default>::default(); }",
+                vec!["RandomState"],
+            ),
+        ] {
+            assert_eq!(draws(source), expected, "{source}");
+        }
+        for source in [
+            "fn a() { let _ = std::fs::read(\"/dev/null\"); }",
+            "/// A random, opaque value.\nfn a() {}",
+            "fn a() { let _ = \"/dev/randomness\"; }",
+        ] {
+            assert!(draws(source).is_empty(), "{source}");
+        }
+    }
+
     #[test]
     fn generators_reached_through_other_crates_are_named() {
         for (source, expected) in [
