@@ -49,7 +49,7 @@ dotenvy = "0.15"
 hex = "0.4"
 # Batch scheduling time windows (IANA zones, DST): the bundled tz database, so
 # window evaluation never depends on the host's zoneinfo.
-jiff = { version = "=0.2.39", default-features = false, features = ["std", "tzdb-bundle-always"] }
+jiff = { version = "=0.2.43", default-features = false, features = ["std", "tzdb-bundle-always"] }
 # SMTP delivery (invitations, alerts): rustls, async, one connection per message (no pool).
 lettre = { version = "=0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 percent-encoding = "2"
@@ -76,7 +76,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal
 # explicit ring-backed rustls config with webpki roots; no proxies, redirects or retries.
 tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
-webpki-roots = "=1.0.11"
+webpki-roots = "=1.0.12"
 # Audit export over syslog/TLS (#107): the same ring-backed rustls, no new TLS stack.
 tokio-rustls = { version = "=0.26.6", default-features = false, features = ["ring", "tls12"] }
 tower = { version = "0.5", features = ["util"] }

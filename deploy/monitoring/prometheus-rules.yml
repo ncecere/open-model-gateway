@@ -50,20 +50,30 @@ groups:
       # real failure. Missing data yields nothing, so neither rule can fire
       # before the first failure. A scrape gap longer than 10 minutes makes every
       # existing series look new and can fire them once.
-      # Settlement stages are critical with no pending period: the reservation
-      # stays held until reconciliation and can block budgeted admission, so the
-      # first failure pages (GatewaySettlementHeld, a warning, sees the same
-      # events through gateway_settlements_total{outcome="held"}). The other
-      # stages refuse requests but hold no money: a warning after 5 minutes
-      # pending. A failure stays in the 10-minute window for 10 minutes, so any
+      # Critical exactly when a failure at that stage leaves money held until
+      # reconciliation (#497), with no pending period: the reservation stays
+      # held and can block budgeted admission, so the first failure pages.
+      # explicit_settlement and cancellation_settlement: an HTTP settlement
+      # missed its deadline. realtime_settlement: a realtime response open,
+      # response settlement or session finish missed its deadline (an opened
+      # or settling response keeps its window as unknown cost). job_settlement:
+      # a job record written after admission (or a native batch's upstream id)
+      # failed, so only reconciliation settles that reservation.
+      # GatewaySettlementHeld (a warning) sees only the HTTP settlement events
+      # through gateway_settlements_total{outcome="held"}, not the realtime or
+      # job settlement stages. Every other stage (route lookup, pool, governance
+      # storage, realtime_admission, job_storage, maintenance, key
+      # authentication) refuses, delays or retries work but holds no money
+      # beyond what its own settlement later releases: a warning after 5
+      # minutes pending. A failure stays in the 10-minute window for 10 minutes, so any
       # failure, the first on a new series included, fires it 5 minutes later
       # and it clears 10 minutes after the last failure.
       - alert: GatewayAccountingFailures
         expr: |
           sum by (stage, cause) (
-              increase(gateway_accounting_failures_total{stage!~"explicit_settlement|cancellation_settlement"}[10m])
+              increase(gateway_accounting_failures_total{stage!~"explicit_settlement|cancellation_settlement|realtime_settlement|job_settlement"}[10m])
             or
-              (gateway_accounting_failures_total{stage!~"explicit_settlement|cancellation_settlement"} unless gateway_accounting_failures_total{stage!~"explicit_settlement|cancellation_settlement"} offset 10m)
+              (gateway_accounting_failures_total{stage!~"explicit_settlement|cancellation_settlement|realtime_settlement|job_settlement"} unless gateway_accounting_failures_total{stage!~"explicit_settlement|cancellation_settlement|realtime_settlement|job_settlement"} offset 10m)
           ) > 0
         for: 5m
         labels: {severity: warning}
@@ -74,14 +84,14 @@ groups:
       - alert: GatewaySettlementAccountingFailures
         expr: |
           sum by (stage, cause) (
-              increase(gateway_accounting_failures_total{stage=~"explicit_settlement|cancellation_settlement"}[10m])
+              increase(gateway_accounting_failures_total{stage=~"explicit_settlement|cancellation_settlement|realtime_settlement|job_settlement"}[10m])
             or
-              (gateway_accounting_failures_total{stage=~"explicit_settlement|cancellation_settlement"} unless gateway_accounting_failures_total{stage=~"explicit_settlement|cancellation_settlement"} offset 10m)
+              (gateway_accounting_failures_total{stage=~"explicit_settlement|cancellation_settlement|realtime_settlement|job_settlement"} unless gateway_accounting_failures_total{stage=~"explicit_settlement|cancellation_settlement|realtime_settlement|job_settlement"} offset 10m)
           ) > 0
         labels: {severity: critical}
         annotations:
-          summary: "Settlement missed its deadline at {{ $labels.stage }} ({{ $labels.cause }}); reservations stay held"
-          description: "A settlement failure in the last 10 minutes. Holds are retained, never refunded as zero, and can block budgeted admission. deadline_in_queue or deadline_acquiring_connection point to a starved pool, deadline_in_database to lock or statement waits."
+          summary: "Settlement failed at {{ $labels.stage }} ({{ $labels.cause }}); reservations stay held"
+          description: "A settlement failure in the last 10 minutes. Holds are retained, never refunded as zero, and can block budgeted admission until reconciliation. deadline_in_queue or deadline_acquiring_connection point to a starved pool, deadline_in_database to lock or statement waits; for job_settlement the cause is the database error."
           runbook_url: docs/operations.md#accounting-failures
       - alert: GatewaySettlementHeld
         expr: increase(gateway_settlements_total{outcome="held"}[15m]) > 0
