@@ -1,8 +1,8 @@
 // Example monitoring files (deploy/monitoring): the Prometheus rules and the
 // Grafana dashboard parse, name only metric families and labels the gateway
 // exports (apps/gateway/src/metrics_export.rs), and cover the accounting
-// failure counter (#528). promtool is not required here; see
-// docs/operations.md#alerting-and-dashboards.
+// failure counter (#528). promtool is not run here or in CI (#TBD); check the
+// rules with `promtool check rules` before deploying them.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -83,24 +83,23 @@ test("accounting failures alert, split by settlement stage (#528)", () => {
     "cancellation_settlement", "explicit_settlement", "governance_storage", "pool_acquire_and_begin", "route_lookup",
   ]);
   const settlement = "explicit_settlement|cancellation_settlement";
+  // increase() plus the series that did not exist 10 minutes ago: a series
+  // exists only after a failure, so a new one is the first failure, which
+  // rate() and increase() cannot see.
+  const failures = matcher =>
+    `sum by (stage, cause) ( increase(gateway_accounting_failures_total{${matcher}}[10m]) or ` +
+    `(gateway_accounting_failures_total{${matcher}} unless gateway_accounting_failures_total{${matcher}} offset 10m) ) > 0`;
   const expected = {
-    GatewayAccountingFailures: {
-      expr: `sum by (stage, cause) (rate(gateway_accounting_failures_total{stage!~"${settlement}"}[5m])) > 0`,
-      severity: "warning",
-    },
-    GatewaySettlementAccountingFailures: {
-      expr: `sum by (stage, cause) (rate(gateway_accounting_failures_total{stage=~"${settlement}"}[5m])) > 0`,
-      severity: "critical",
-    },
+    GatewayAccountingFailures: { expr: failures(`stage!~"${settlement}"`), for: "5m", severity: "warning" },
+    GatewaySettlementAccountingFailures: { expr: failures(`stage=~"${settlement}"`), for: undefined, severity: "critical" },
   };
-  for (const [name, { expr, severity }] of Object.entries(expected)) {
+  for (const [name, { expr, for: pending, severity }] of Object.entries(expected)) {
     const rule = allRules.find(r => r.alert === name);
     assert.ok(rule, `${name} is missing`);
     assert.equal(rule.group, "open-model-gateway.accounting");
-    // A rate over a missing series is empty, so `> 0` yields nothing: no
-    // `absent`, `or vector(0)` or `unless` that could fire without data.
+    // No `absent` or `or vector(0)`: missing data yields nothing.
     assert.equal(squash(rule.expr), expr);
-    assert.equal(rule.for, "5m");
+    assert.equal(rule.for, pending, `${name} for`);
     assert.equal(rule.labels.severity, severity);
     assert.equal(rule.annotations.runbook_url, "docs/operations.md#accounting-failures");
     for (const label of ["{{ $labels.stage }}", "{{ $labels.cause }}"]) {
@@ -112,6 +111,12 @@ test("accounting failures alert, split by settlement stage (#528)", () => {
   assert.deepEqual(all.filter(stage => re.test(stage)).toSorted(), ["cancellation_settlement", "explicit_settlement"]);
   // Runbook links resolve to a heading in docs/operations.md.
   assert.match(read("docs/operations.md"), /^### Accounting failures$/m);
+});
+
+test("the docs do not claim CI validates the rules with promtool (#528)", () => {
+  const docs = read("docs/operations.md");
+  assert.doesNotMatch(docs, /validated with `promtool/);
+  assert.match(docs, /`promtool check rules` before deploying them; it is not run in CI \(#TBD\)/);
 });
 
 test("dashboard panel ids are unique and panels do not overlap", () => {
