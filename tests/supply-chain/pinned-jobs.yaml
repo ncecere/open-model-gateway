@@ -1001,8 +1001,18 @@ jobs:
             [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
             tag="${IMAGE}:dev-${SOURCE_REVISION:0:12}"
             docker buildx imagetools create --prefer-index=false --tag "${tag}" "${IMAGE}@${DIGEST_AMD64}"
-            got=$(docker buildx imagetools inspect "${tag}" --format '{{json .Manifest}}' | jq -er .digest)
-            [ "${got}" = "${DIGEST_AMD64}" ]
+            # Read back the raw manifest, as image.yml checks its tags: the registry can answer 404 for a
+            # tag a moment after the push, so only this read is repeated (never the push), a few times.
+            raw=$(mktemp "${RUNNER_TEMP}/tag.XXXXXXXX")
+            for attempt in 1 2 3 4 5; do
+              docker buildx imagetools inspect --raw "${tag}" > "${raw}" && break
+              [ "${attempt}" -lt 5 ] || { echo "::error::${tag} is not readable after the push"; exit 1; }
+              sleep 3
+            done
+            hashed=$(sha256sum "${raw}")
+            [ "sha256:${hashed%% *}" = "${DIGEST_AMD64}" ]
+            jq -e '.manifests | any(.platform.os == "linux" and .platform.architecture == "amd64")' "${raw}" > /dev/null
+            rm -f "${raw}"
             printf '`%s`\n\ndigest `%s`\n' "${tag}" "${DIGEST_AMD64}" >> "$GITHUB_STEP_SUMMARY"
         - name: Tag only the imported arm64 root as dev-SHA12-arm64
           run: |
@@ -1011,8 +1021,18 @@ jobs:
             [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
             tag="${IMAGE}:dev-${SOURCE_REVISION:0:12}-arm64"
             docker buildx imagetools create --prefer-index=false --tag "${tag}" "${IMAGE}@${DIGEST_ARM64}"
-            got=$(docker buildx imagetools inspect "${tag}" --format '{{json .Manifest}}' | jq -er .digest)
-            [ "${got}" = "${DIGEST_ARM64}" ]
+            # Read back the raw manifest, as image.yml checks its tags: the registry can answer 404 for a
+            # tag a moment after the push, so only this read is repeated (never the push), a few times.
+            raw=$(mktemp "${RUNNER_TEMP}/tag.XXXXXXXX")
+            for attempt in 1 2 3 4 5; do
+              docker buildx imagetools inspect --raw "${tag}" > "${raw}" && break
+              [ "${attempt}" -lt 5 ] || { echo "::error::${tag} is not readable after the push"; exit 1; }
+              sleep 3
+            done
+            hashed=$(sha256sum "${raw}")
+            [ "sha256:${hashed%% *}" = "${DIGEST_ARM64}" ]
+            jq -e '.manifests | any(.platform.os == "linux" and .platform.architecture == "arm64")' "${raw}" > /dev/null
+            rm -f "${raw}"
             printf '`%s`\n\ndigest `%s`\n' "${tag}" "${DIGEST_ARM64}" >> "$GITHUB_STEP_SUMMARY"
         - name: Remove registry credentials
           if: always()
