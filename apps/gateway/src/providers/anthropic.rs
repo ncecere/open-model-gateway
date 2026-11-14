@@ -378,7 +378,6 @@ enum BlockKind {
     Redacted,
 }
 impl State {
-    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     fn push(&mut self, value: Value) -> Result<Vec<ChatEvent>> {
         if self.done {
             return Err(InferenceError::InvalidUpstream);
@@ -393,181 +392,20 @@ impl State {
         }
         match value["type"].as_str() {
             Some("ping") => {}
-            Some("message_start") if !self.started => {
-                let message = &value["message"];
-                fields(
-                    message,
-                    &[
-                        "id",
-                        "type",
-                        "role",
-                        "model",
-                        "content",
-                        "stop_reason",
-                        "stop_sequence",
-                        "usage",
-                    ],
-                )?;
-                if message["type"] != "message"
-                    || message["role"] != "assistant"
-                    || message["content"].as_array().is_none_or(|v| !v.is_empty())
-                    || !message["stop_reason"].is_null()
-                {
-                    return Err(InferenceError::InvalidUpstream);
-                }
-                self.started = true;
-                self.usage =
-                    super::metering::with_model(usage(&message["usage"])?, &message["model"]);
-                // Start counts are preliminary; only cumulative message_delta usage
-                // is evidence of generated output. Do not settle a missing final
-                // output count (or its thinking breakdown) using a start-event zero.
-                self.usage.output_tokens = None;
-                self.usage.reasoning_tokens = None;
-            }
+            Some("message_start") if !self.started => self.message_start(&value["message"])?,
             Some("content_block_start")
                 if self.started && !self.finished && self.active.is_none() =>
             {
-                let index = value["index"]
-                    .as_u64()
-                    .ok_or(InferenceError::InvalidUpstream)?;
-                if index != self.blocks || index >= 256 {
-                    return Err(InferenceError::InvalidUpstream);
-                }
-                let block = &value["content_block"];
-                let kind = match block["type"].as_str() {
-                    Some("text") => {
-                        fields(block, &["type", "text"])?;
-                        let text = string(&block["text"])?;
-                        if !text.is_empty() {
-                            events.push(ChatEvent::Delta {
-                                text: Some(text.into()),
-                                tool_calls: vec![],
-                            });
-                        }
-                        BlockKind::Text
-                    }
-                    Some("tool_use") => {
-                        fields(block, &["type", "id", "name", "input"])?;
-                        if self.tools >= 128
-                            || block["input"].as_object().is_none_or(|v| !v.is_empty())
-                        {
-                            return Err(InferenceError::InvalidUpstream);
-                        }
-                        events.push(ChatEvent::Delta {
-                            text: None,
-                            tool_calls: vec![ToolCallDelta {
-                                index: self.tools,
-                                id: Some(nonempty(&block["id"])?),
-                                name: Some(nonempty(&block["name"])?),
-                                arguments: None,
-                            }],
-                        });
-                        self.tools += 1;
-                        BlockKind::Tool
-                    }
-                    Some("thinking") if self.messages => {
-                        fields(block, &["type", "thinking", "signature"])?;
-                        string(&block["thinking"])?;
-                        string(&block["signature"])?;
-                        BlockKind::Thinking
-                    }
-                    Some("redacted_thinking") if self.messages => {
-                        fields(block, &["type", "data"])?;
-                        string(&block["data"])?;
-                        BlockKind::Redacted
-                    }
-                    _ => return Err(InferenceError::InvalidUpstream),
-                };
-                self.active = Some((index, kind));
-                self.blocks += 1;
+                self.block_start(&value, &mut events)?;
             }
             Some("content_block_delta") if self.started && !self.finished => {
-                let (index, kind) = self.active.ok_or(InferenceError::InvalidUpstream)?;
-                if value["index"].as_u64() != Some(index) {
-                    return Err(InferenceError::InvalidUpstream);
-                }
-                let delta = &value["delta"];
-                if kind == BlockKind::Tool {
-                    fields(delta, &["type", "partial_json"])?;
-                    if delta["type"] != "input_json_delta" {
-                        return Err(InferenceError::InvalidUpstream);
-                    }
-                    let partial = string(&delta["partial_json"])?;
-                    if partial.len()
-                        > self
-                            .limit
-                            .unwrap_or(BODY_LIMIT)
-                            .saturating_sub(self.arguments.len())
-                    {
-                        return Err(InferenceError::InvalidUpstream);
-                    }
-                    self.arguments.push_str(partial);
-                    events.push(ChatEvent::Delta {
-                        text: None,
-                        tool_calls: vec![ToolCallDelta {
-                            index: self.tools - 1,
-                            id: None,
-                            name: None,
-                            arguments: Some(partial.into()),
-                        }],
-                    });
-                } else if kind == BlockKind::Thinking {
-                    match delta["type"].as_str() {
-                        Some("thinking_delta") => {
-                            fields(delta, &["type", "thinking"])?;
-                            string(&delta["thinking"])?;
-                        }
-                        Some("signature_delta") => {
-                            fields(delta, &["type", "signature"])?;
-                            string(&delta["signature"])?;
-                        }
-                        _ => return Err(InferenceError::InvalidUpstream),
-                    }
-                } else if kind == BlockKind::Text {
-                    fields(delta, &["type", "text"])?;
-                    if delta["type"] != "text_delta" {
-                        return Err(InferenceError::InvalidUpstream);
-                    }
-                    events.push(ChatEvent::Delta {
-                        text: Some(string(&delta["text"])?.into()),
-                        tool_calls: vec![],
-                    });
-                } else {
-                    return Err(InferenceError::InvalidUpstream);
-                }
+                self.block_delta(&value, &mut events)?;
             }
             Some("content_block_stop") if self.active.is_some() => {
-                if value["index"].as_u64() != self.active.map(|v| v.0) {
-                    return Err(InferenceError::InvalidUpstream);
-                }
-                if self.active.is_some_and(|v| v.1 == BlockKind::Tool) {
-                    if self.arguments.is_empty() {
-                        events.push(ChatEvent::Delta {
-                            text: None,
-                            tool_calls: vec![ToolCallDelta {
-                                index: self.tools - 1,
-                                id: None,
-                                name: None,
-                                arguments: Some("{}".into()),
-                            }],
-                        });
-                    } else if !serde_json::from_str::<Value>(&self.arguments)
-                        .map_err(|_| InferenceError::InvalidUpstream)?
-                        .is_object()
-                    {
-                        return Err(InferenceError::InvalidUpstream);
-                    }
-                    self.arguments.clear();
-                }
-                self.active = None;
+                self.block_stop(&value, &mut events)?;
             }
             Some("message_delta") if self.started && !self.finished && self.active.is_none() => {
-                fields(&value["delta"], &["stop_reason", "stop_sequence"])?;
-                self.usage = super::metering::merge(self.usage, usage(&value["usage"])?)?;
-                if !value["delta"]["stop_reason"].is_null() {
-                    self.finished = true;
-                    events.push(ChatEvent::Finish(finish(&value["delta"]["stop_reason"])?));
-                }
+                self.message_delta(&value, &mut events)?;
             }
             Some("message_stop") if self.finished => {
                 self.done = true;
@@ -576,6 +414,173 @@ impl State {
             }
             _ => return Err(InferenceError::InvalidUpstream),
         }
+        self.preserve_native(value, &mut events)?;
+        Ok(events)
+    }
+    fn message_start(&mut self, message: &Value) -> Result<()> {
+        fields(
+            message,
+            &[
+                "id",
+                "type",
+                "role",
+                "model",
+                "content",
+                "stop_reason",
+                "stop_sequence",
+                "usage",
+            ],
+        )?;
+        if message["type"] != "message"
+            || message["role"] != "assistant"
+            || message["content"].as_array().is_none_or(|v| !v.is_empty())
+            || !message["stop_reason"].is_null()
+        {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        self.started = true;
+        self.usage = super::metering::with_model(usage(&message["usage"])?, &message["model"]);
+        // Start counts are preliminary; only cumulative message_delta usage
+        // is evidence of generated output. Do not settle a missing final
+        // output count (or its thinking breakdown) using a start-event zero.
+        self.usage.output_tokens = None;
+        self.usage.reasoning_tokens = None;
+        Ok(())
+    }
+    fn block_start(&mut self, value: &Value, events: &mut Vec<ChatEvent>) -> Result<()> {
+        let index = value["index"]
+            .as_u64()
+            .ok_or(InferenceError::InvalidUpstream)?;
+        if index != self.blocks || index >= 256 {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        let kind = self.block_kind(&value["content_block"], events)?;
+        self.active = Some((index, kind));
+        self.blocks += 1;
+        Ok(())
+    }
+    fn block_kind(&mut self, block: &Value, events: &mut Vec<ChatEvent>) -> Result<BlockKind> {
+        Ok(match block["type"].as_str() {
+            Some("text") => {
+                fields(block, &["type", "text"])?;
+                let text = string(&block["text"])?;
+                if !text.is_empty() {
+                    events.push(ChatEvent::Delta {
+                        text: Some(text.into()),
+                        tool_calls: vec![],
+                    });
+                }
+                BlockKind::Text
+            }
+            Some("tool_use") => {
+                fields(block, &["type", "id", "name", "input"])?;
+                if self.tools >= 128 || block["input"].as_object().is_none_or(|v| !v.is_empty()) {
+                    return Err(InferenceError::InvalidUpstream);
+                }
+                events.push(ChatEvent::Delta {
+                    text: None,
+                    tool_calls: vec![ToolCallDelta {
+                        index: self.tools,
+                        id: Some(nonempty(&block["id"])?),
+                        name: Some(nonempty(&block["name"])?),
+                        arguments: None,
+                    }],
+                });
+                self.tools += 1;
+                BlockKind::Tool
+            }
+            Some("thinking") if self.messages => {
+                fields(block, &["type", "thinking", "signature"])?;
+                string(&block["thinking"])?;
+                string(&block["signature"])?;
+                BlockKind::Thinking
+            }
+            Some("redacted_thinking") if self.messages => {
+                fields(block, &["type", "data"])?;
+                string(&block["data"])?;
+                BlockKind::Redacted
+            }
+            _ => return Err(InferenceError::InvalidUpstream),
+        })
+    }
+    fn block_delta(&mut self, value: &Value, events: &mut Vec<ChatEvent>) -> Result<()> {
+        let (index, kind) = self.active.ok_or(InferenceError::InvalidUpstream)?;
+        if value["index"].as_u64() != Some(index) {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        let delta = &value["delta"];
+        if kind == BlockKind::Tool {
+            self.tool_delta(delta, events)
+        } else if kind == BlockKind::Thinking {
+            thinking_delta(delta)
+        } else if kind == BlockKind::Text {
+            text_delta(delta, events)
+        } else {
+            Err(InferenceError::InvalidUpstream)
+        }
+    }
+    fn tool_delta(&mut self, delta: &Value, events: &mut Vec<ChatEvent>) -> Result<()> {
+        fields(delta, &["type", "partial_json"])?;
+        if delta["type"] != "input_json_delta" {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        let partial = string(&delta["partial_json"])?;
+        if partial.len()
+            > self
+                .limit
+                .unwrap_or(BODY_LIMIT)
+                .saturating_sub(self.arguments.len())
+        {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        self.arguments.push_str(partial);
+        events.push(ChatEvent::Delta {
+            text: None,
+            tool_calls: vec![ToolCallDelta {
+                index: self.tools - 1,
+                id: None,
+                name: None,
+                arguments: Some(partial.into()),
+            }],
+        });
+        Ok(())
+    }
+    fn block_stop(&mut self, value: &Value, events: &mut Vec<ChatEvent>) -> Result<()> {
+        if value["index"].as_u64() != self.active.map(|v| v.0) {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        if self.active.is_some_and(|v| v.1 == BlockKind::Tool) {
+            if self.arguments.is_empty() {
+                events.push(ChatEvent::Delta {
+                    text: None,
+                    tool_calls: vec![ToolCallDelta {
+                        index: self.tools - 1,
+                        id: None,
+                        name: None,
+                        arguments: Some("{}".into()),
+                    }],
+                });
+            } else if !serde_json::from_str::<Value>(&self.arguments)
+                .map_err(|_| InferenceError::InvalidUpstream)?
+                .is_object()
+            {
+                return Err(InferenceError::InvalidUpstream);
+            }
+            self.arguments.clear();
+        }
+        self.active = None;
+        Ok(())
+    }
+    fn message_delta(&mut self, value: &Value, events: &mut Vec<ChatEvent>) -> Result<()> {
+        fields(&value["delta"], &["stop_reason", "stop_sequence"])?;
+        self.usage = super::metering::merge(self.usage, usage(&value["usage"])?)?;
+        if !value["delta"]["stop_reason"].is_null() {
+            self.finished = true;
+            events.push(ChatEvent::Finish(finish(&value["delta"]["stop_reason"])?));
+        }
+        Ok(())
+    }
+    fn preserve_native(&mut self, value: Value, events: &mut Vec<ChatEvent>) -> Result<()> {
         // Preserve only the reviewed content-block lifecycle, after structural
         // validation. Native start precedes canonical deltas so the codec knows
         // to use the native view without duplicating text or tools.
@@ -600,8 +605,33 @@ impl State {
             }
             events.insert(0, ChatEvent::MessagesBlock(value));
         }
-        Ok(events)
+        Ok(())
     }
+}
+fn thinking_delta(delta: &Value) -> Result<()> {
+    match delta["type"].as_str() {
+        Some("thinking_delta") => {
+            fields(delta, &["type", "thinking"])?;
+            string(&delta["thinking"])?;
+        }
+        Some("signature_delta") => {
+            fields(delta, &["type", "signature"])?;
+            string(&delta["signature"])?;
+        }
+        _ => return Err(InferenceError::InvalidUpstream),
+    }
+    Ok(())
+}
+fn text_delta(delta: &Value, events: &mut Vec<ChatEvent>) -> Result<()> {
+    fields(delta, &["type", "text"])?;
+    if delta["type"] != "text_delta" {
+        return Err(InferenceError::InvalidUpstream);
+    }
+    events.push(ChatEvent::Delta {
+        text: Some(string(&delta["text"])?.into()),
+        tool_calls: vec![],
+    });
+    Ok(())
 }
 /// Native Message Batches (`jobs::native`).
 mod batches;
