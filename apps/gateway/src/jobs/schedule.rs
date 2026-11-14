@@ -29,10 +29,9 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::store::JobRow;
+use super::store::{JobRow, job_storage};
 use crate::{
     inference::error::InferenceError, providers::local::endpoints::ApprovedEndpoints, store::Store,
 };
@@ -616,7 +615,9 @@ impl Scheduler {
         {
             return Ok(s.clone());
         }
-        let settings = load_settings(&self.store.pool, deployment).await?;
+        let settings = load_settings(&self.store.pool, deployment)
+            .await
+            .map_err(job_storage)?;
         let compiled = Arc::new(Compiled {
             window: settings.window.as_ref().and_then(TimeWindow::compile),
             settings,
@@ -639,7 +640,7 @@ impl Scheduler {
         let n: i64 = sqlx::query_scalar("SELECT count(*) FROM inference_executions e JOIN governance_reservations r ON r.execution_id=e.id WHERE e.deployment_id=$1 AND e.state='started' AND e.batch_job_id IS NULL AND e.workload_kind NOT IN('batches','videos') AND r.state='pending' AND r.lease_expires_at>clock_timestamp()")
             .bind(deployment)
             .fetch_one(&self.store.pool)
-            .await?;
+            .await.map_err(job_storage)?;
         self.live
             .lock()
             .expect("live")
@@ -761,7 +762,7 @@ impl Scheduler {
             .bind(kv)
             .bind(error)
             .execute(&self.store.pool)
-            .await;
+            .await.map_err(job_storage);
         if result.is_err() {
             tracing::warn!(deployment_id = %deployment, "batch route signal not recorded");
         }
@@ -775,6 +776,7 @@ impl Scheduler {
         .bind(deployment)
         .fetch_one(&self.store.pool)
         .await
+        .map_err(job_storage)
     }
 
     /// Claim line `line` of `job` on `deployment` when the route has room and
@@ -788,16 +790,19 @@ impl Scheduler {
         deployment: Uuid,
         max_concurrency: i32,
     ) -> Result<Claim, sqlx::Error> {
-        let mut tx = crate::db::begin(&self.store.pool).await?;
+        let mut tx = crate::db::begin(&self.store.pool)
+            .await
+            .map_err(job_storage)?;
         lock_route(&mut tx, deployment).await?;
         let running: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM batch_lines WHERE deployment_id=$1 AND state='running'",
         )
         .bind(deployment)
         .fetch_one(&mut *tx)
-        .await?;
+        .await
+        .map_err(job_storage)?;
         if running >= i64::from(max_concurrency) {
-            tx.commit().await?;
+            tx.commit().await.map_err(job_storage)?;
             return Ok(Claim::Full);
         }
         sqlx::query("INSERT INTO batch_route_waits(job_id,workspace_id,deployment_id,waiting_lines,ready) VALUES($1,$2,$3,1,true) ON CONFLICT(deployment_id,job_id) DO UPDATE SET ready=true,updated_at=clock_timestamp()")
@@ -805,13 +810,14 @@ impl Scheduler {
             .bind(job.workspace_id)
             .bind(deployment)
             .execute(&mut *tx)
-            .await?;
+            .await.map_err(job_storage)?;
         let first: Option<Uuid> = sqlx::query_scalar(&order_sql(true))
             .bind(deployment)
             .fetch_optional(&mut *tx)
-            .await?;
+            .await
+            .map_err(job_storage)?;
         if first != Some(job.id) {
-            tx.commit().await?;
+            tx.commit().await.map_err(job_storage)?;
             return Ok(Claim::Wait);
         }
         let inserted = sqlx::query("INSERT INTO batch_lines(job_id,workspace_id,line_no,state,execution_id,deployment_id) VALUES($1,$2,$3,'running',$4,$5) ON CONFLICT DO NOTHING")
@@ -821,18 +827,18 @@ impl Scheduler {
             .bind(execution)
             .bind(deployment)
             .execute(&mut *tx)
-            .await?
+            .await.map_err(job_storage)?
             .rows_affected();
         if inserted != 1 {
-            tx.commit().await?;
+            tx.commit().await.map_err(job_storage)?;
             return Ok(Claim::Taken);
         }
         sqlx::query("UPDATE batch_route_waits SET last_claim_at=clock_timestamp() WHERE deployment_id=$1 AND job_id=$2")
             .bind(deployment)
             .bind(job.id)
             .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
+            .await.map_err(job_storage)?;
+        tx.commit().await.map_err(job_storage)?;
         Ok(Claim::Claimed)
     }
 
@@ -847,21 +853,24 @@ impl Scheduler {
         deployment: Uuid,
         max_concurrency: i32,
     ) -> Result<Option<bool>, sqlx::Error> {
-        let mut tx = crate::db::begin(&self.store.pool).await?;
+        let mut tx = crate::db::begin(&self.store.pool)
+            .await
+            .map_err(job_storage)?;
         lock_route(&mut tx, deployment).await?;
         let running: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM batch_lines WHERE deployment_id=$1 AND state='running'",
         )
         .bind(deployment)
         .fetch_one(&mut *tx)
-        .await?;
+        .await
+        .map_err(job_storage)?;
         if running >= i64::from(max_concurrency) {
-            tx.commit().await?;
+            tx.commit().await.map_err(job_storage)?;
             return Ok(None);
         }
         let claimed = sqlx::query("UPDATE batch_lines SET state='running',attempts=attempts+1,execution_id=$4,status_code=NULL,error_code=NULL,finished_at=NULL WHERE job_id=$1 AND line_no=$2 AND state='failed' AND attempts=$3 AND segment IS NULL")
-            .bind(job).bind(line).bind(attempts).bind(execution).execute(&mut *tx).await?.rows_affected() == 1;
-        tx.commit().await?;
+            .bind(job).bind(line).bind(attempts).bind(execution).execute(&mut *tx).await.map_err(job_storage)?.rows_affected() == 1;
+        tx.commit().await.map_err(job_storage)?;
         Ok(Some(claimed))
     }
 
@@ -873,7 +882,9 @@ impl Scheduler {
         rows: &[WaitRow],
         legit: bool,
     ) -> Result<(), sqlx::Error> {
-        let mut tx = crate::db::begin(&self.store.pool).await?;
+        let mut tx = crate::db::begin(&self.store.pool)
+            .await
+            .map_err(job_storage)?;
         let ids: Vec<Uuid> = rows.iter().map(|r| r.deployment).collect();
         let lines: Vec<i32> = rows
             .iter()
@@ -885,7 +896,8 @@ impl Scheduler {
             .bind(job.id)
             .bind(&ids)
             .execute(&mut *tx)
-            .await?;
+            .await
+            .map_err(job_storage)?;
         sqlx::query("INSERT INTO batch_route_waits(job_id,workspace_id,deployment_id,waiting_lines,reason,ready) SELECT $1,$2,d,n,r,y FROM unnest($3::uuid[],$4::integer[],$5::text[],$6::boolean[]) AS u(d,n,r,y) ON CONFLICT(deployment_id,job_id) DO UPDATE SET waiting_lines=excluded.waiting_lines,reason=excluded.reason,ready=excluded.ready,updated_at=clock_timestamp()")
             .bind(job.id)
             .bind(job.workspace_id)
@@ -894,14 +906,14 @@ impl Scheduler {
             .bind(&reasons)
             .bind(&ready)
             .execute(&mut *tx)
-            .await?;
+            .await.map_err(job_storage)?;
         if legit {
             sqlx::query("UPDATE async_jobs SET last_waited_at=clock_timestamp() WHERE id=$1 AND state IN('queued','in_progress')")
                 .bind(job.id)
                 .execute(&mut *tx)
-                .await?;
+                .await.map_err(job_storage)?;
         }
-        tx.commit().await
+        tx.commit().await.map_err(job_storage)
     }
 
     /// Remove a finished batch's demand.
@@ -909,7 +921,8 @@ impl Scheduler {
         sqlx::query("DELETE FROM batch_route_waits WHERE job_id=$1")
             .bind(job)
             .execute(&self.store.pool)
-            .await?;
+            .await
+            .map_err(job_storage)?;
         Ok(())
     }
 }
@@ -921,47 +934,9 @@ async fn lock_route(
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('omg_batch_route:'||$1::text,0))")
         .bind(deployment)
         .execute(&mut **tx)
-        .await?;
+        .await
+        .map_err(job_storage)?;
     Ok(())
-}
-
-// ------------------------------------------------------------ Visibility ----
-
-/// Admin › route: queue depth, batch lines running, the pause reason and
-/// the last server metrics reading.
-pub async fn route_status<'e, E: sqlx::PgExecutor<'e>>(
-    executor: E,
-    deployment: Uuid,
-) -> Result<Value, sqlx::Error> {
-    sqlx::query_scalar(&format!("SELECT jsonb_build_object(
- 'queued_lines',(SELECT coalesce(sum(waiting_lines),0) FROM batch_route_waits WHERE deployment_id=$1 AND updated_at>clock_timestamp()-make_interval(secs=>{WAIT_FRESH_SECONDS})),
- 'waiting_batches',(SELECT count(*) FROM batch_route_waits WHERE deployment_id=$1 AND updated_at>clock_timestamp()-make_interval(secs=>{WAIT_FRESH_SECONDS})),
- 'running_lines',(SELECT count(*) FROM batch_lines WHERE deployment_id=$1 AND state='running'),
- 'paused_reason',s.paused_reason,'checked_at',s.checked_at,'live_in_flight',s.live_in_flight,
- 'metrics',CASE WHEN s.metrics_checked_at IS NULL THEN NULL ELSE jsonb_build_object('checked_at',s.metrics_checked_at,'ok',s.metrics_ok,'waiting',s.metrics_waiting,'running',s.metrics_running,'kv_cache_permille',s.metrics_kv_cache_permille,'error',s.metrics_error) END)
- FROM (SELECT 1) one LEFT JOIN deployment_batch_signals s ON s.deployment_id=$1"))
-        .bind(deployment)
-        .fetch_one(executor)
-        .await
-}
-
-/// A batch's waits per route (model name, reason, lines waiting and running,
-/// queue position and length on the route). Metadata only.
-pub async fn batch_waits<'e, E: sqlx::PgExecutor<'e>>(
-    executor: E,
-    job: Uuid,
-) -> Result<Vec<Value>, sqlx::Error> {
-    sqlx::query_scalar(&format!("WITH mine AS (SELECT deployment_id FROM batch_route_waits WHERE job_id=$1 AND updated_at>clock_timestamp()-make_interval(secs=>{WAIT_FRESH_SECONDS})),
- w AS (SELECT b.* FROM batch_route_waits b WHERE b.deployment_id IN (SELECT deployment_id FROM mine) AND b.updated_at>clock_timestamp()-make_interval(secs=>{WAIT_FRESH_SECONDS})),
- jr AS (SELECT deployment_id,job_id,count(*) n FROM batch_lines WHERE state='running' AND deployment_id IN (SELECT deployment_id FROM mine) GROUP BY 1,2),
- wr AS (SELECT deployment_id,workspace_id,count(*) n FROM batch_lines WHERE state='running' AND deployment_id IN (SELECT deployment_id FROM mine) GROUP BY 1,2),
- x AS (SELECT w.*,coalesce(jr.n,0) jn,coalesce(wr.n,0) wn,max(w.last_claim_at) OVER (PARTITION BY w.deployment_id,w.workspace_id) wl FROM w LEFT JOIN jr ON jr.deployment_id=w.deployment_id AND jr.job_id=w.job_id LEFT JOIN wr ON wr.deployment_id=w.deployment_id AND wr.workspace_id=w.workspace_id),
- r AS (SELECT x.*,row_number() OVER (PARTITION BY deployment_id ORDER BY wn,wl NULLS FIRST,jn,last_claim_at NULLS FIRST,since,job_id) pos,count(*) OVER (PARTITION BY deployment_id) queue FROM x)
- SELECT jsonb_build_object('model',m.public_name,'reason',r.reason,'waiting_lines',r.waiting_lines,'running_lines',r.jn,'position',r.pos,'queue',r.queue,'since',r.since)
- FROM r JOIN deployments d ON d.id=r.deployment_id JOIN models m ON m.id=d.model_id WHERE r.job_id=$1 ORDER BY m.public_name,r.deployment_id"))
-        .bind(job)
-        .fetch_all(executor)
-        .await
 }
 
 /// Installation-wide gauges: batch lines waiting and running per provider
@@ -971,10 +946,10 @@ pub async fn observe_metrics(store: &Store) -> Result<(), sqlx::Error> {
  r AS (SELECT p.provider,count(*) n FROM batch_lines l JOIN deployments d ON d.id=l.deployment_id JOIN provider_connections p ON p.id=d.provider_connection_id WHERE l.state='running' AND l.deployment_id IS NOT NULL GROUP BY 1)
  SELECT coalesce(w.provider,r.provider),coalesce(w.n,0),coalesce(r.n,0) FROM w FULL JOIN r ON r.provider=w.provider"))
         .fetch_all(&store.pool)
-        .await?;
+        .await.map_err(job_storage)?;
     let paused: Vec<(String, i64)> = sqlx::query_as(&format!("SELECT reason,count(DISTINCT deployment_id) FROM batch_route_waits WHERE reason IS NOT NULL AND updated_at>clock_timestamp()-make_interval(secs=>{WAIT_FRESH_SECONDS}) GROUP BY 1"))
         .fetch_all(&store.pool)
-        .await?;
+        .await.map_err(job_storage)?;
     crate::metrics::METRICS.set_batch_route_lines(
         &lines
             .into_iter()
@@ -990,16 +965,8 @@ pub async fn observe_metrics(store: &Store) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-/// The settings document of the management API (settings, defaults and
-/// what the route supports).
-pub fn settings_document(settings: &RouteSettings, provider: &str, status: Value) -> Value {
-    json!({
-        "settings": settings,
-        "defaults": RouteSettings::default(),
-        "priority_supported": PRIORITY_PROFILES.contains(&provider),
-        "status": status,
-    })
-}
+mod visibility;
+pub use visibility::{batch_waits, route_status, settings_document};
 
 #[cfg(test)]
 mod tests;

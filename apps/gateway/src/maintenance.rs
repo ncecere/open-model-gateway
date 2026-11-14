@@ -51,7 +51,10 @@ pub async fn refresh_runtime_settings(store: &Store) -> Result<Option<i32>, Infe
     )
     .fetch_one(&store.pool)
     .await
-    .map_err(|_| InferenceError::Storage)?;
+    .map_err(|error| {
+        crate::db::accounting_failure::maintenance_error(&error);
+        InferenceError::Storage
+    })?;
     crate::providers::openrouter::DataCollection::set_installation_default(
         crate::providers::openrouter::DataCollection::parse(&policy).unwrap_or_default(),
     );
@@ -125,7 +128,12 @@ pub fn start(store: Store, retention_days: Option<i32>) -> tokio::task::JoinHand
             .await
             {
                 Ok(Ok(_)) => {}
-                _ => crate::metrics::METRICS.observe_collection_error("scope_lock_waits"),
+                result => {
+                    if let Ok(Err(error)) = result {
+                        crate::db::accounting_failure::maintenance_error(&error);
+                    }
+                    crate::metrics::METRICS.observe_collection_error("scope_lock_waits");
+                }
             }
             // Minute rate counters admission no longer reads (0024), every minute.
             if counter.is_multiple_of(12) {
@@ -276,6 +284,17 @@ where
     Fut: std::future::Future<Output = Result<T, sqlx::Error>>,
 {
     let timeout = Duration::from_secs(4);
+    // A failed run is counted once with its cause (#497); a run whose lease
+    // term ended (fenced) committed nothing and is not a failure.
+    let work = move |fence: Option<crate::leases::Fence>| async move {
+        let result = work(fence).await;
+        if let Err(error) = &result
+            && !crate::leases::is_fenced(error)
+        {
+            crate::db::accounting_failure::maintenance_error(error);
+        }
+        result
+    };
     match store.leases() {
         Some(leases) => {
             crate::leases::run_singleton(leases, lease, job, timeout, |fence| work(Some(fence)))
@@ -411,7 +430,10 @@ mod tests {
         diagnostics::scope(handle.clone(), refresh_runtime_settings(&store))
             .await
             .unwrap();
-        assert!(handle.signals().is_empty(), "nothing is recorded on success");
+        assert!(
+            handle.signals().is_empty(),
+            "nothing is recorded on success"
+        );
         let mut blocker = sqlx::PgConnection::connect_with(&pool.connect_options())
             .await
             .unwrap();

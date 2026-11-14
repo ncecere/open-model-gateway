@@ -631,7 +631,7 @@ mod tests {
                 m.observe_accounting_failure(stage, cause);
             }
         }
-        assert_eq!(exported_series(&m.render(None).await).len(), 5 * 16);
+        assert_eq!(exported_series(&m.render(None).await).len(), 9 * 16);
     }
 
     #[tokio::test]

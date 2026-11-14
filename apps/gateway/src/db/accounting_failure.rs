@@ -1,6 +1,9 @@
-//! Production signal for the cause of `503 accounting_unavailable` (#389).
+//! Production signal for the cause of `503 accounting_unavailable` (#389),
+//! and of the other accounting and storage failures counted with it (#497):
+//! realtime accounting deadlines, the job module's database work,
+//! maintenance runs and key authentication.
 //!
-//! Each failed accounting operation increments
+//! Each failed operation increments
 //! `gateway_accounting_failures_total{stage,cause}` once and writes one WARN
 //! line carrying the same two fields. Both values come only from the closed
 //! enums below: never SQL text, bind values, a raw SQLSTATE, a driver or
@@ -31,15 +34,33 @@ pub(crate) enum Stage {
     /// The three-second deadline of the detached settlement of a cancelled
     /// request (its client is gone; no response carries the failure).
     CancellationSettlement,
+    /// The deadline of a realtime session accounting step: the window
+    /// reservation before `response.create` (5 s), the response open and
+    /// settlement, the session finish and the detached finish of a dropped
+    /// session (3 s each).
+    RealtimeDeadline,
+    /// A statement of the job module (`jobs/*`): the batch runner, the job
+    /// poller, the batch scheduler and the job API's own job-table reads and
+    /// writes (connection, `BEGIN` and statements alike).
+    JobStorage,
+    /// A database failure of a maintenance run (`maintenance.rs`): the
+    /// settings refresh, the scope-lock wait flush and the leased jobs.
+    Maintenance,
+    /// The database lookup of an API key (the client gets `503 api_error`).
+    KeyAuthentication,
 }
 impl Stage {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 9] = [
         Self::PoolAcquireAndBegin,
         Self::GovernanceStorage,
         Self::RouteLookup,
         Self::ExplicitSettlement,
         Self::CancellationSettlement,
+        Self::RealtimeDeadline,
+        Self::JobStorage,
+        Self::Maintenance,
+        Self::KeyAuthentication,
     ];
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
@@ -48,6 +69,10 @@ impl Stage {
             Self::RouteLookup => "route_lookup",
             Self::ExplicitSettlement => "explicit_settlement",
             Self::CancellationSettlement => "cancellation_settlement",
+            Self::RealtimeDeadline => "realtime_deadline",
+            Self::JobStorage => "job_storage",
+            Self::Maintenance => "maintenance",
+            Self::KeyAuthentication => "key_authentication",
         }
     }
 }
@@ -197,7 +222,25 @@ pub(crate) fn route_lookup_error(error: &sqlx::Error) {
     record(Stage::RouteLookup, classify(error));
 }
 
-/// What a settlement is waiting on, for the cause of an elapsed deadline.
+/// A failed statement of the job module, passed on unchanged (for `map_err`).
+pub(crate) fn job_storage(error: sqlx::Error) -> sqlx::Error {
+    record(Stage::JobStorage, classify(&error));
+    error
+}
+
+/// A failed maintenance run or statement.
+pub(crate) fn maintenance_error(error: &sqlx::Error) {
+    record(Stage::Maintenance, classify(error));
+}
+
+/// A failed API key lookup, passed on unchanged (for `map_err`).
+pub(crate) fn key_authentication(error: sqlx::Error) -> sqlx::Error {
+    record(Stage::KeyAuthentication, classify(&error));
+    error
+}
+
+/// What a settlement (or a realtime accounting step) is waiting on, for the
+/// cause of an elapsed deadline.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Waiting {
     /// Its in-process slot (the settlement gate).
@@ -214,8 +257,8 @@ tokio::task_local! {
 }
 
 /// Mark what the running settlement waits on next: one store into a
-/// task-local cell (no allocation, no lock). Outside the two settlement
-/// deadline wrappers below there is nothing to mark.
+/// task-local cell (no allocation, no lock). Outside the deadline wrappers
+/// below there is nothing to mark.
 pub(crate) fn settlement_waiting(on: Waiting) {
     let _ = WAITING.try_with(|waiting| waiting.set(on));
 }
@@ -245,12 +288,21 @@ where
     settlement(Stage::CancellationSettlement, future).await
 }
 
+/// As [`explicit_settlement`], for the unchanged deadline of a realtime
+/// session accounting step (`inference::realtime`).
+pub(crate) async fn realtime_deadline<F, T>(future: F) -> Result<T, tokio::time::error::Elapsed>
+where
+    F: Future<Output = Result<T, tokio::time::error::Elapsed>>,
+{
+    settlement(Stage::RealtimeDeadline, future).await
+}
+
 async fn settlement<F, T>(stage: Stage, future: F) -> Result<T, tokio::time::error::Elapsed>
 where
     F: Future<Output = Result<T, tokio::time::error::Elapsed>>,
 {
     // A settlement queues first; it marks each later wait itself
-    // (`governance::finish_unobserved`).
+    // (`governance::finish_unobserved`, `governance::realtime`).
     WAITING
         .scope(Cell::new(Waiting::Queue), async {
             let result = future.await;
@@ -267,11 +319,11 @@ where
         .await
 }
 
-/// The only writer of the signal. The types bound it to 5 stages and 16
-/// causes, so at most 80 label combinations. The callers above narrow that:
-/// the three SQL stages take only the thirteen driver causes and the two
-/// settlement stages only the three deadline causes (at most 45), and not
-/// every one of those occurs in practice.
+/// The only writer of the signal. The types bound it to 9 stages and 16
+/// causes, so at most 144 label combinations. The callers above narrow that:
+/// the six SQL stages take only the thirteen driver causes and the three
+/// deadline stages only the three deadline causes (at most 6 × 13 + 3 × 3 =
+/// 87), and not every one of those occurs in practice.
 fn record(stage: Stage, cause: Cause) {
     record_to(&crate::metrics::METRICS, stage, cause);
 }

@@ -209,7 +209,9 @@ mod storage_failures {
         )
     }
 
-    async fn capture<F: std::future::Future>(future: F) -> (F::Output, Vec<(&'static str, &'static str)>) {
+    async fn capture<F: std::future::Future>(
+        future: F,
+    ) -> (F::Output, Vec<(&'static str, &'static str)>) {
         let handle = Handle::new();
         let output = diagnostics::scope(handle.clone(), future).await;
         (output, labels(&handle.signals()))

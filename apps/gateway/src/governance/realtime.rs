@@ -26,6 +26,7 @@ use crate::{
         CostBreakdown,
         v3::{AudioTokens, Meter, Observed},
     },
+    db::accounting_failure::{Waiting, settlement_waiting},
     inference::realtime::{RealtimeFinish, RealtimeUsage, ResponseBound, ResponseStatus},
 };
 use chrono::{DateTime, Utc};
@@ -175,7 +176,10 @@ async fn reserve_window_once(
     window: ResponseBound,
     armed: Option<ResponseBound>,
 ) -> Result<(), InferenceError> {
+    // What an elapsed realtime deadline was waiting on (#497).
+    settlement_waiting(Waiting::Connection);
     let mut tx = crate::db::begin(&store.pool).await.map_err(begin_storage)?;
+    settlement_waiting(Waiting::Database);
     admission_prefix(store, &mut tx, principal).await?;
     let (lineage, _shared) = authorize(store, &mut tx, principal).await?;
     let s = session(&mut tx, id).await?;
@@ -315,7 +319,10 @@ pub async fn open_response(
     sequence: i32,
     window: ResponseBound,
 ) -> Result<(), InferenceError> {
+    // What an elapsed realtime deadline was waiting on (#497).
+    settlement_waiting(Waiting::Connection);
     let mut tx = crate::db::begin(&store.pool).await.map_err(begin_storage)?;
+    settlement_waiting(Waiting::Database);
     let s = session(&mut tx, id).await?;
     if s.state != "pending" {
         return Err(InferenceError::Storage);
@@ -429,7 +436,10 @@ async fn settle_response_once(
     usage: Option<RealtimeUsage>,
     window: ResponseBound,
 ) -> Result<(), InferenceError> {
+    // What an elapsed realtime deadline was waiting on (#497).
+    settlement_waiting(Waiting::Connection);
     let mut tx = crate::db::begin(&store.pool).await.map_err(begin_storage)?;
+    settlement_waiting(Waiting::Database);
     settlement_prefix(store, &mut tx).await?;
     let s = session(&mut tx, id).await?;
     if s.state != "pending" {
@@ -536,7 +546,10 @@ async fn finish_unobserved(
 async fn finish_once(store: &Store, record: &RealtimeFinish) -> Result<Finished, InferenceError> {
     let telemetry = record.telemetry.for_outcome(record.outcome);
     let ms = |v: Option<u64>| v.map(|n| n.min(i64::MAX as u64) as i64);
+    // What an elapsed realtime deadline was waiting on (#497).
+    settlement_waiting(Waiting::Connection);
     let mut tx = crate::db::begin(&store.pool).await.map_err(begin_storage)?;
+    settlement_waiting(Waiting::Database);
     settlement_prefix(store, &mut tx).await?;
     let r = reservation(&mut tx, record.id, scoped(store)).await?;
     let s = session(&mut tx, record.id).await?;

@@ -43,12 +43,16 @@ const DEADLINES: [Cause; 3] = [
     Cause::DeadlineAcquiringConnection,
     Cause::DeadlineInDatabase,
 ];
-const STAGES: [&str; 5] = [
+const STAGES: [&str; 9] = [
     "pool_acquire_and_begin",
     "governance_storage",
     "route_lookup",
     "explicit_settlement",
     "cancellation_settlement",
+    "realtime_deadline",
+    "job_storage",
+    "maintenance",
+    "key_authentication",
 ];
 const CAUSES: [&str; 16] = [
     "pool_timeout",
@@ -324,6 +328,42 @@ async fn a_pool_statement_failure_without_a_connection_is_a_failed_start() {
             (Stage::PoolAcquireAndBegin, Cause::PoolClosed),
             (Stage::GovernanceStorage, Cause::StatementTimeout),
             (Stage::GovernanceStorage, Cause::Io),
+        ]
+    );
+}
+
+/// #497: the job, maintenance and key-lookup stages take the driver causes
+/// (the error passes through unchanged); the realtime stage takes only the
+/// deadline causes, and only when its deadline elapses.
+#[tokio::test]
+async fn the_later_stages_classify_like_the_first() {
+    let handle = Handle::new();
+    diagnostics::scope(handle.clone(), async {
+        assert!(matches!(
+            job_storage(sqlx::Error::PoolTimedOut),
+            sqlx::Error::PoolTimedOut
+        ));
+        maintenance_error(&database(Some("57P01")));
+        assert!(matches!(
+            key_authentication(database(Some("57014"))),
+            sqlx::Error::Database(_)
+        ));
+        let done = tokio::time::timeout(std::time::Duration::from_secs(3), async {});
+        assert!(realtime_deadline(done).await.is_ok());
+        let hung = tokio::time::timeout(std::time::Duration::from_millis(1), async {
+            settlement_waiting(Waiting::Connection);
+            std::future::pending::<()>().await
+        });
+        assert!(realtime_deadline(hung).await.is_err());
+    })
+    .await;
+    assert_eq!(
+        handle.signals(),
+        [
+            (Stage::JobStorage, Cause::PoolTimeout),
+            (Stage::Maintenance, Cause::BackendTerminated),
+            (Stage::KeyAuthentication, Cause::StatementTimeout),
+            (Stage::RealtimeDeadline, Cause::DeadlineAcquiringConnection),
         ]
     );
 }

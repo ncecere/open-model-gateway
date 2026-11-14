@@ -721,7 +721,9 @@ async fn elapsed_realtime_accounting_deadlines_name_what_they_waited_on(pool: Pg
             .unwrap(),
     );
     let mut registry = crate::providers::ProviderRegistry::default();
-    registry.register(std::sync::Arc::new(IdleRealtime)).unwrap();
+    registry
+        .register(std::sync::Arc::new(IdleRealtime))
+        .unwrap();
     let engine = Engine::new(
         std::sync::Arc::new(store.clone()),
         registry,
