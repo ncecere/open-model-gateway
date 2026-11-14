@@ -36,6 +36,10 @@
 //! A value that must be unguessable to protect anything (a credential, a
 //! token that authorizes on its own, a key or a nonce) is drawn here, never
 //! from a UUID. This is policy, reviewed by hand; nothing enforces it.
+//!
+//! The scan reads source text. A path assembled at run time is not seen:
+//! `Path::join`, `format!`, slices joined with `join("/")`, text read with
+//! `include_str!`, and crate-local macros wrapping `concat!`.
 use std::fmt;
 
 use rand::{TryRng, rngs::SysRng};
@@ -267,7 +271,10 @@ mod tests {
                 );
                 raw
             }
-            // Numbers, characters and booleans: one character names nothing.
+            // By value, so `concat!("/dev/ran", 'd', "om")` joins to a path.
+            syn::Lit::Char(c) => c.value().to_string(),
+            syn::Lit::Byte(b) => char::from(b.value()).to_string(),
+            // Numbers and booleans.
             _ => literal.to_string(),
         }
     }
@@ -316,8 +323,11 @@ mod tests {
     }
 
     /// The text `concat!` would produce from `stream`: its literals joined,
-    /// nested `concat!` calls included, so a path split across literals is
-    /// read whole (#511). Other tokens (the commas) add nothing.
+    /// nested `concat!` calls and `stringify!(tokens)` included, so a path
+    /// split across literals is read whole (#511). `env!`, `option_env!`,
+    /// `include_str!` and any other macro are a part this scan does not know:
+    /// they break the text (a space), so the pieces on either side are not
+    /// glued together. Other tokens (the commas) add nothing.
     fn concat_text(stream: TokenStream) -> String {
         let trees: Vec<TokenTree> = stream.into_iter().collect();
         let mut out = String::new();
@@ -331,6 +341,30 @@ mod tests {
                     ..,
                 ] if word == "concat" && bang.as_char() == '!' => {
                     out.push_str(&concat_text(group.stream()));
+                    at += 3;
+                    continue;
+                }
+                [
+                    TokenTree::Ident(word),
+                    TokenTree::Punct(bang),
+                    TokenTree::Group(group),
+                    ..,
+                ] if word == "stringify" && bang.as_char() == '!' => {
+                    // rustc prints the tokens without the spaces
+                    // proc_macro2 puts between them; the tokens are also
+                    // scanned as tokens.
+                    let text = group.stream().to_string();
+                    out.extend(text.chars().filter(|c| !c.is_whitespace()));
+                    at += 3;
+                    continue;
+                }
+                [
+                    TokenTree::Ident(_),
+                    TokenTree::Punct(bang),
+                    TokenTree::Group(_),
+                    ..,
+                ] if bang.as_char() == '!' => {
+                    out.push(' ');
                     at += 3;
                     continue;
                 }

@@ -237,7 +237,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 - Tests: `entropy.rs` `only_this_module_draws_randomness`, `sources_clippy_cannot_name_are_named`, `clippy_disallows_randomness_that_names_no_generator`, `the_crates_clippy_toml_names_are_at_their_reviewed_versions`; `egress_source_scan_tests.rs` `only_the_sanctioned_sites_turn_off_disallowed_methods`.
 - Residual, not enforced:
   - std `RandomState` reached through a generic `Default` (`S::default()` with `S` inferred, never written), and a map's iteration order, which follows its random keys.
-  - A path built at run time (`format!`, configuration) or by a macro other than `concat!`.
+  - A path assembled at run time is not seen: `Path::join`, `format!`, slices joined with `join("/")`, text read with `include_str!` or from configuration, and crate-local macros wrapping `concat!`. The scan joins only the literals (and `stringify!`) of a direct `concat!`.
   - Randomness inside dependencies: tungstenite's own `generate_key` (`Sec-WebSocket-Key`) and frame masks, and rustls's internal key exchange and tickets.
   - A UUID (`Uuid::new_v4`/`now_v7`/`new_v7`, `gen_random_uuid()`) used as a secret: policy, reviewed by hand.
   - Weak non-random values passed as secrets (time, process id, `PkceCodeVerifier::new("weak")`): neither guard sees what a value is made of.
