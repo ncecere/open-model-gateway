@@ -27,7 +27,7 @@ Before any client event is forwarded, the gateway sends its own `session.update`
 
 ## Client events
 
-Only JSON text frames are accepted. A binary frame gets an error event and close 1003. A text frame that is not UTF-8 gets an `invalid_payload` error event and close 1007; any other WebSocket protocol violation (for example a continuation frame with nothing to continue) gets a `protocol_error` error event and close 1002. Allowed event types:
+Only JSON text frames are accepted. A binary frame gets an error event and close 1003. A text frame or close reason that is not UTF-8 gets an `invalid_payload` error event and close 1007; any other WebSocket protocol violation (for example a continuation frame with nothing to continue) gets a `protocol_error` error event and close 1002. Allowed event types:
 
 | Event | Rules |
 | --- | --- |
@@ -70,9 +70,9 @@ The session holds one process concurrency permit (`GATEWAY_MAX_CONCURRENT_REQUES
 
   | Client end | No response in flight | Response in flight |
   | --- | --- | --- |
-  | Close frame | `succeeded`, finish reason `stop` | `cancelled`, hold kept |
-  | Connection lost without a close frame (reset, I/O error) | `cancelled` | `cancelled`, hold kept |
-  | Text frame not UTF-8 (close 1007) or other protocol violation (close 1002) | `failed`, `invalid_request_error` | `cancelled`, hold kept |
+  | Close frame (with a valid UTF-8 reason) | `succeeded`, finish reason `stop` | `cancelled`, hold kept |
+  | Connection lost without a close frame (reset, I/O error), or a gateway write to the client that fails or times out (a slow or unwritable client) | `cancelled` | `cancelled`, hold kept |
+  | Text frame or close reason not UTF-8 (close 1007), or other protocol violation (close 1002) | `failed`, `invalid_request_error` | `failed`, `invalid_request_error`, hold kept |
   | Message above the size cap (close 1009) | `failed`, `invalid_request_error` | `failed`, hold kept |
 
   Upstream closes and errors send an error event and close 1011. They are never presented as a clean end. Graceful shutdown does not wait for upgraded sockets. A session cut off by a process stop may not be finalized; lease reconciliation (`max session + 60 s`) then marks it unknown and its open responses unknown, and the holds are kept.

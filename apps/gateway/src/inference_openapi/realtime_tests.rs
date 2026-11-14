@@ -213,7 +213,7 @@ fn reviewed_close_trigger(code: u16) -> Option<&'static str> {
             "The client violated the WebSocket protocol, such as a continuation frame with nothing to continue (protocol_error).",
         ),
         1003 => Some("A binary client frame is not supported; send JSON text events."),
-        1007 => Some("A client text frame is not valid UTF-8 (invalid_payload)."),
+        1007 => Some("A client text frame or close reason is not valid UTF-8 (invalid_payload)."),
         1008 => {
             Some("Rejected client event, event-rate limit, or live authorization/admission denial.")
         }

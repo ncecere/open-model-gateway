@@ -97,7 +97,7 @@ pub(super) fn too_large(error: &axum::Error) -> bool {
 /// refusal or a lost connection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Fault {
-    /// A text message whose payload is not UTF-8 (close 1007).
+    /// A text message or close reason that is not UTF-8 (close 1007).
     InvalidUtf8,
     /// Any other protocol violation, such as a continuation frame with
     /// nothing to continue or a non-zero reserved bit (close 1002).
@@ -106,20 +106,20 @@ pub(super) enum Fault {
 
 impl Fault {
     /// The outcome, attempt error and `error` event of a session the fault
-    /// ended: failed when idle, cancelled (the hold kept) mid-response.
-    pub(super) fn ending(self, in_flight: bool) -> (Outcome, Option<InferenceError>, String) {
+    /// ended: failed with `invalid_request_error`, idle or mid-response (a
+    /// response in flight keeps its hold as unknown cost).
+    pub(super) fn ending(self) -> (Outcome, Option<InferenceError>, String) {
         let text = match self {
-            Self::InvalidUtf8 => invalid_text("invalid_payload", "Text frames must be valid UTF-8"),
+            Self::InvalidUtf8 => invalid_text(
+                "invalid_payload",
+                "A text frame or close reason is not valid UTF-8",
+            ),
             Self::Violation => invalid_text(
                 "protocol_error",
                 "The client violated the WebSocket protocol",
             ),
         };
-        if in_flight {
-            (Outcome::Cancelled, None, text)
-        } else {
-            (Outcome::Failed, Some(InferenceError::InvalidRequest), text)
-        }
+        (Outcome::Failed, Some(InferenceError::InvalidRequest), text)
     }
 }
 

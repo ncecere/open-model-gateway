@@ -714,11 +714,11 @@ async fn proxy(socket: WebSocket, session: RealtimeSession) {
         // Never a clean stop (#410): a close mid-response or a lost connection.
         End::ClientClosed | End::ClientGone => (None, Outcome::Cancelled, None, None),
         End::ClientProtocol(fault @ Fault::InvalidUtf8) => {
-            let (outcome, error, text) = fault.ending(in_flight);
+            let (outcome, error, text) = fault.ending();
             (Some((1007, "invalid_payload", text)), outcome, error, None)
         }
         End::ClientProtocol(fault @ Fault::Violation) => {
-            let (outcome, error, text) = fault.ending(in_flight);
+            let (outcome, error, text) = fault.ending();
             (Some((1002, "protocol_error", text)), outcome, error, None)
         }
         End::Idle | End::MaxDuration if in_flight => (

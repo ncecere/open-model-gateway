@@ -265,7 +265,7 @@ curl https://gateway/v1/audio/transcriptions -H "Authorization: Bearer $KEY" \
 - **Responses:** one at a time. `response.create` always carries `max_output_tokens` (at most the window). It is forwarded only after a budget window is reserved.
 - **Accounting:** one attempt and reservation per session. Usage is settled per `response.done` with the realtime audio-token meters (`input_audio_tokens`, `cache_read_audio_tokens`, `output_audio_tokens`) beside the text token meters. Unknown usage keeps its window on hold.
 - **Limits:** `GATEWAY_REALTIME_*` (session length, idle time, output window, message size and event rate).
-- **Termination:** a client disconnect closes upstream immediately. Only a client close frame with no response in flight ends the session as `succeeded`/`stop`; a connection lost without a close frame is `cancelled`, and a text frame that is not UTF-8 (close 1007) or another WebSocket protocol violation (close 1002) is `failed` (`invalid_request_error`) when idle and `cancelled` with the hold kept mid-response. Upstream failures close with 1011, never a clean end.
+- **Termination:** a client disconnect closes upstream immediately. Only a client close frame with no response in flight ends the session as `succeeded`/`stop`. A connection lost without a close frame, or a client the gateway can no longer write to, is `cancelled`. A text frame or close reason that is not UTF-8 (close 1007) or another WebSocket protocol violation (close 1002) is `failed` (`invalid_request_error`), with any in-flight hold kept. Upstream failures close with 1011, never a clean end.
 
 Details, limits and pricing: [realtime](realtime.md).
 
