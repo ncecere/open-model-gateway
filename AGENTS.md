@@ -11,12 +11,12 @@ One GitHub issue at a time per worker, one loop per issue:
 1. Branch from current `main`. Write a failing test that shows the problem (or, for a feature, the behaviour that doesn't exist yet).
 2. Make the smallest change that passes it.
 3. Run the checks below for the areas the change touches (browser tests for UI flows, a real PostgreSQL database for SQL/authorization changes).
-4. **Prove it on the real path**, not only with unit tests and mocks: run the changed flow end to end against a running gateway (the local stack, or a `dev-env` cluster environment for chart, migration and multi-replica behaviour) and check the result, including the refusal cases.
+4. **Prove it on the real path**, not only with unit tests and mocks: run the changed flow end to end against a running gateway (the local stack, or a Spark environment for chart, CloudNativePG and migration behaviour) and check the result, including the refusal cases.
 5. **Review.** Every change gets a code review. A security-relevant change (authentication, authorization, egress, secrets and credentials, SQL and runtime grants, migrations, crypto, CI/supply chain, anything parsing untrusted input) gets two independent, separately briefed reviews, one of them adversarial (its job is to break the change). Use different models when available and permitted; when the operator restricts model choice, use independent contexts within the permitted model set. Neither review may substitute for the other. Fix actionable findings.
 6. **The coordinator reads every diff before it merges**, including code written by agents, and re-runs whatever it doubts.
 7. Open a PR. `main` is protected: merge only through a PR with every required check green, then close the issue.
 
-- Releases: the coordinator decides when a minor or patch release is ready; the user decides v1.0.0. Before tagging: the full local gates, the staging rehearsal, the release notes checked against the tag (versions, migration ranges, breaking changes) and a candidate run on `dev-env`. After tagging: deploy to the homelab, run the end-to-end journeys (sign-in, keys, inference on each configured provider, admin flows, the new features), and file UI/UX findings as issues.
+- Releases: the coordinator decides when a minor or patch release is ready; the user decides v1.0.0. Before tagging: the full local gates, the staging rehearsal, the release notes checked against the tag (versions, migration ranges, breaking changes) and a candidate run on the Spark test platform (`scripts/spark-env.py up <name> --ref <candidate>`; never the production cluster). After tagging: deploy to the homelab, run the end-to-end journeys (sign-in, keys, inference on each configured provider, admin flows, the new features), and file UI/UX findings as issues.
 - **v1.0.0 requires an independent security review** (#61) and a clean authorization matrix (#195).
 - Do not add bespoke evidence files, source hashing or copied candidate trees. CI, the PR and the issue are the record.
 - Do not expand scope: no side investigations inside an issue. File a new issue instead. `backup/held-issue-work-b7f1d10` is a read-only archive of unaccepted work; do not port from it.
@@ -77,31 +77,32 @@ For a local production-style preview, run `npm run build:web`, then `GATEWAY_WEB
 
 ## Running a branch on the cluster
 
-A branch can be tested as a running copy of the local demo on the bitop-talos homelab cluster instead of on the laptop. It is removed automatically after 8 hours.
+Branches and release candidates are tested on the Spark test platform: a dedicated single-node k3s cluster (arm64) that the owner provides for this, reached with `kspark` (`kubectl` bound to `~/.kube/spark-k3s.yaml`, namespace-scoped credentials). It is not the homelab. **Plain `kubectl` and `helm` on the coordinator's machine target the production cluster with admin rights: never use them for a test.** `scripts/spark-env.py` passes the Spark kubeconfig to every call, refuses to run unless that file names the Spark server, and only creates, targets or deletes namespaces named `<base>-omg-<name>` (base: the namespace of the Spark credentials, `coder-NN`). Read `~/.agents/skills/spark-k3s/SKILL.md` before using the cluster directly.
 
-1. Push the branch. `.github/workflows/branch-images.yml` builds `ghcr.io/ncecere/open-model-gateway:dev-<first 12 characters of the commit>` (amd64 only; it does not wait for `ci.yml`, and it skips the staging rehearsal, scan and signature that `image.yml` runs). A branch cut before that workflow existed has no image: rebase it onto `main`.
-2. Create the environment with the `dev-env` tool from the homelab checkout, then forward it:
+1. Push the branch. `.github/workflows/branch-images.yml` builds `ghcr.io/ncecere/open-model-gateway:dev-<first 12 characters of the commit>` (linux/amd64) and `dev-<first 12 characters of the commit>-arm64` (linux/arm64, native runner; the Spark is arm64). It does not wait for `ci.yml`, and it skips the staging rehearsal, scan and signature that `image.yml` runs. Release tags are multi-arch already. A branch cut before that workflow existed has no image: rebase it onto `main`.
+2. Create the environment, then forward it:
 
    ```sh
-   DEVENV=~/homelab/bitop-talos/tools/dev-env/dev-env
-   $DEVENV up omg my-name --ref my-branch   # ~75 s; checks the image exists first
-   $DEVENV forward omg my-name              # http://127.0.0.1:<port> and the issuer on 127.0.0.1:18084; leave running
-   $DEVENV creds omg my-name                # the demo accounts
-   $DEVENV renew omg my-name --ttl 8h       # also: list, status, down
+   python3 -I scripts/spark-env.py up my-name --ref my-branch   # about 1 minute; checks the image has linux/arm64 first
+   python3 -I scripts/spark-env.py forward my-name              # http://127.0.0.1:3000 and the issuer on 127.0.0.1:18084; leave running
+   python3 -I scripts/spark-env.py creds my-name                # the demo accounts
+   python3 -I scripts/spark-env.py status [my-name]             # list environments, or pods, jobs and database of one
+   python3 -I scripts/spark-env.py down my-name                 # deletes the namespace and everything in it
    ```
 
-   `--ref` is a branch, tag or commit of this clone, or a release such as `v0.4.1`. The tool deploys the Helm chart of that ref, so a chart change is tested too. Always `down` an environment you are done with. Names are 2-20 characters (lowercase letters, digits, dashes). The tool needs `kubectl`, `helm` and Python 3 with PyYAML.
+   `--ref` is a branch, commit or tag of this clone (fetch it first), or a release such as `v0.16.0`. The image (pinned by digest), the Helm chart and the demo issuer come from the ref, so a chart change is tested too; the Spark glue in `deploy/spark` comes from the checkout you run it from. Names are 2-20 characters (lowercase letters, digits, dashes). The script needs `kubectl`, `helm` and Python 3 (standard library only); the Spark kubeconfig is `SPARK_KUBECONFIG`, else `~/.kube/spark-k3s.yaml`.
 
-What it does is `docs/local-demo.md` in Kubernetes, in the order the invariants above require (nothing migrates or bootstraps from `serve`): it creates the `gateway_runtime` role, runs the chart's migrate Job (`migrate` and `deploy/staging/runtime-grants.sql`), runs `bootstrap-demo`, then starts the gateway. Sign in at the forwarded address with SSO as `operator@demo.invalid` (Platform Admin), `auditor@demo.invalid`, `alex@demo.invalid`, `blair@demo.invalid`, or `unentitled@demo.invalid` (authenticates, platform access denied); see `docs/local-demo.md` for what each can do.
+What it does is `docs/local-demo.md` in Kubernetes, in the order the invariants above require (nothing migrates or bootstraps from `serve`): it creates the migrator and `gateway_runtime` role Secrets, installs the chart's CloudNativePG Cluster and its migrate Job (`migrate`, then `deploy/staging/runtime-grants.sql`; `deploy/spark/values.yaml`), runs `bootstrap-demo`, then starts the gateway (`deploy/spark/demo.yaml`). Sign in at the forwarded address with SSO as `operator@demo.invalid` (Platform Admin), `auditor@demo.invalid`, `alex@demo.invalid`, `blair@demo.invalid`, or `unentitled@demo.invalid` (authenticates, platform access denied); see `docs/local-demo.md` for what each can do.
 
-- The demo is passwordless and loopback-only by design: when `GATEWAY_OIDC_ISSUER` is the demo issuer the gateway requires a loopback listener and a loopback database host, and `bootstrap-demo` seeds the personas under `http://127.0.0.1:18084`. So the gateway, a Postgres forwarder and the demo issuer run in one pod and are reached by `kubectl port-forward` only; there is no ingress. Never expose it or register its issuer anywhere: anyone who can reach the issuer can sign in as the platform admin.
-- The issuer is forwarded to local port 18084, so only one omg environment can be forwarded at a time.
-- Only `dev-omg` is used. Never deploy, apply or edit anything in another namespace to test a change. The environment has no resource limits and low scheduling priority; it yields to production, so do not leave it running.
-- Postgres is version 18 (CloudNativePG). OMG's CI and `deploy/staging` use PostgreSQL 17, so a result that depends on the server version needs checking against 17 locally.
+- The demo is passwordless and loopback-only by design: when `GATEWAY_OIDC_ISSUER` is the demo issuer the gateway requires a loopback listener and a loopback database host, and `bootstrap-demo` seeds the personas under `http://127.0.0.1:18084`. So the gateway, a database forwarder and the demo issuer run in one pod and are reached by `kubectl port-forward` (bound to 127.0.0.1) only; there is no Service or Ingress. Never expose it or register its issuer anywhere: anyone who can reach the issuer can sign in as the platform admin.
+- The issuer is forwarded to local port 18084 and the gateway to 3000, so only one omg environment can be forwarded at a time.
+- The environment is one gateway pod: the chart's own gateway Deployment is set to zero replicas, so this path proves the chart's CloudNativePG Cluster and migrate Job, migrations, grants and the demo flows, not multi-replica behaviour, the Pooler, the chart's NetworkPolicy or ingress.
+- The platform's rules: the quota is shared by all your namespaces (4 CPU and 16 GiB requested, 40 pods, 100 GiB of volumes), pod security is baseline, there are no NodePort or LoadBalancer Services, pods cannot reach the LAN, and a `Forbidden` is a boundary, not something to work around. Create namespaces one at a time. Only `<base>-omg-<name>` is touched; never deploy, apply or edit anything elsewhere to test a change. Always `down` an environment you are done with.
+- Postgres is CloudNativePG with the `ghcr.io/cloudnative-pg/postgresql:17.6` image, like CI and `deploy/staging`; storage is `local-path`.
 - Example connections and deployments start disabled, as in the local demo, and there is no model server or provider: nothing here is paid or live-provider acceptance.
 - Secrets are generated per environment and stay in the cluster. Do not print or commit them.
 
-Only environments exist. The Rust and web test suites, the container and staging tests, and the browser tests still run locally or on GitHub (see Checks); running them as Jobs on the cluster is planned.
+Only environments run on the cluster. The Rust and web test suites, the container and staging tests, and the browser tests still run locally or on GitHub (see Checks); running them as Jobs on the cluster is planned.
 
 ## Checks
 
