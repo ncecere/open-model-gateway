@@ -181,16 +181,14 @@ impl OpenRouterAdapter {
         resolver: Arc<dyn SecretResolver>,
         config: OpenRouterConfig,
     ) -> anyhow::Result<Self> {
-        let client = Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .no_proxy()
-            // Every resolved address must pass the egress policy (#33).
-            .dns_resolver(crate::egress::resolver(crate::egress::Purpose::Provider))
-            .https_only(true)
-            .connect_timeout(Duration::from_secs(10))
-            .build()
-            .map_err(|_| anyhow::anyhow!("Unable to initialize provider transport"))?;
+        // Every resolved address must pass the egress policy (#33).
+        let client = crate::egress::client_builder(crate::egress::resolver(
+            crate::egress::Purpose::Provider,
+        ))
+        .https_only(true)
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|_| anyhow::anyhow!("Unable to initialize provider transport"))?;
         Ok(Self {
             client,
             resolver,

@@ -114,17 +114,14 @@ impl HttpConnector for Connector {
 pub(super) fn client() -> anyhow::Result<SharedHttpClient> {
     // SDK config cannot override these bounded settings. No redirects, hidden retries,
     // ambient proxies or detached producer tasks. Dropping the body cancels its socket work.
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        // Every resolved address must pass the egress policy (#33).
-        .dns_resolver(crate::egress::resolver(crate::egress::Purpose::Provider))
-        .redirect(reqwest::redirect::Policy::none())
-        .retry(reqwest::retry::never())
-        .connect_timeout(Duration::from_secs(10))
-        .read_timeout(Duration::from_secs(60))
-        .timeout(Duration::from_secs(300))
-        .build()
-        .map_err(|_| anyhow::anyhow!("Unable to initialize provider transport"))?;
+    // Every resolved address must pass the egress policy (#33).
+    let client =
+        crate::egress::client_builder(crate::egress::resolver(crate::egress::Purpose::Provider))
+            .connect_timeout(Duration::from_secs(10))
+            .read_timeout(Duration::from_secs(60))
+            .timeout(Duration::from_secs(300))
+            .build()
+            .map_err(|_| anyhow::anyhow!("Unable to initialize provider transport"))?;
     let connector = SharedHttpConnector::new(Connector(client));
     Ok(http_client_fn(move |_, _| connector.clone()))
 }

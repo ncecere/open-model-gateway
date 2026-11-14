@@ -2,7 +2,6 @@
 //! unreserved or running executions, incomplete rollups), the checksummed
 //! export, detach to omg_archive or drop, `budget verify` with archived
 //! contributions, and usage history kept by rollups.
-#![allow(clippy::disallowed_methods)]
 use super::*;
 use crate::governance::tests::db::fixture;
 use crate::partitions::tests::seed_history;

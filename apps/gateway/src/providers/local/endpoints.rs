@@ -17,6 +17,23 @@ struct Endpoint {
     client: reqwest::Client,
     base: String,
 }
+/// One approval's host and pinned addresses, after every check in
+/// [`ApprovedEndpoints::parse_detailed`]. The fields are private and this
+/// module has no constructor function, so no other module can make one:
+/// `crate::egress::pinned_client_builder` pins only approved destinations
+/// (#509).
+pub(crate) struct ApprovedDestinations {
+    host: String,
+    addresses: Vec<SocketAddr>,
+}
+impl ApprovedDestinations {
+    pub(crate) fn host(&self) -> &str {
+        &self.host
+    }
+    pub(crate) fn addresses(&self) -> &[SocketAddr] {
+        &self.addresses
+    }
+}
 /// Why approvals failed to load.
 enum Rejected {
     /// Malformed, duplicated, out of bounds, a setting mismatch (loopback
@@ -139,12 +156,12 @@ impl ApprovedEndpoints {
             if approval_refused {
                 continue;
             }
-            let client = reqwest::Client::builder()
-                .no_proxy()
-                .redirect(reqwest::redirect::Policy::none())
-                .retry(reqwest::retry::never())
+            let approved = ApprovedDestinations {
+                host: host.to_owned(),
+                addresses: destinations,
+            };
+            let client = crate::egress::pinned_client_builder(&approved)
                 .connect_timeout(Duration::from_secs(10))
-                .resolve_to_addrs(host, &destinations)
                 .build()
                 .map_err(|_| Rejected::Invalid)?;
             endpoints.insert(base.clone(), Endpoint { client, base });

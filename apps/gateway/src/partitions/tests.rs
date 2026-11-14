@@ -2,7 +2,6 @@
 //! boundary, fail-closed writes outside every partition, the
 //! partitions_missing alert, preflight, partition-key immutability, and the
 //! safe conversion of a seeded 0029 database (timed, with the locks held).
-#![allow(clippy::disallowed_methods)]
 use super::*;
 use crate::governance::tests::db::{Fixture, done, fixture, request};
 use crate::store::Store;

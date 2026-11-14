@@ -17,15 +17,13 @@ pub struct AnthropicAdapter {
 impl AnthropicAdapter {
     pub fn new(resolver: Arc<dyn SecretResolver>) -> anyhow::Result<Self> {
         Ok(Self {
-            client: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .retry(reqwest::retry::never())
-                .no_proxy()
-                // Every resolved address must pass the egress policy (#33).
-                .dns_resolver(crate::egress::resolver(crate::egress::Purpose::Provider))
-                .connect_timeout(Duration::from_secs(10))
-                .build()
-                .map_err(|_| anyhow::anyhow!("Unable to initialize provider transport"))?,
+            // Every resolved address must pass the egress policy (#33).
+            client: crate::egress::client_builder(crate::egress::resolver(
+                crate::egress::Purpose::Provider,
+            ))
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|_| anyhow::anyhow!("Unable to initialize provider transport"))?,
             resolver,
             base: BASE.into(),
         })

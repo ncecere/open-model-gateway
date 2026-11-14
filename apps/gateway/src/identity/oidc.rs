@@ -105,28 +105,24 @@ impl OidcHttp {
             // No ambient HTTP(S)_PROXY/ALL_PROXY and no implicit retries,
             // like every provider client (#144): identity traffic goes
             // straight to the issuer, once.
-            client: reqwest::Client::builder()
-                .no_proxy()
-                // Discovery, token and JWKS addresses pass the egress policy
-                // (#33). `allow_loopback_http` is GATEWAY_ENV=development, as
-                // in the global policy; passing it keeps tests (strict global
-                // default) and production identical.
-                .dns_resolver(crate::egress::resolver_with(
-                    crate::egress::Purpose::Oidc,
-                    crate::egress::policy().permit_loopback(allow_loopback_http),
-                ))
-                .retry(reqwest::retry::never())
-                .redirect(reqwest::redirect::Policy::none())
-                .timeout(Duration::from_secs(15))
-                .connect_timeout(Duration::from_secs(5))
-                // No idle connections (#417): a provider closes them on
-                // its own schedule, and a request written to one it is closing
-                // is lost. With no retry that fails the sign-in after its
-                // one-time attempt is consumed. Sign-in is rare; each request
-                // pays for its own connection.
-                .pool_max_idle_per_host(0)
-                .build()
-                .map_err(|_| anyhow::anyhow!("Cannot initialize OIDC HTTP client"))?,
+            // Discovery, token and JWKS addresses pass the egress policy
+            // (#33). `allow_loopback_http` is GATEWAY_ENV=development, as
+            // in the global policy; passing it keeps tests (strict global
+            // default) and production identical.
+            client: crate::egress::client_builder(crate::egress::resolver_with(
+                crate::egress::Purpose::Oidc,
+                crate::egress::policy().permit_loopback(allow_loopback_http),
+            ))
+            .timeout(Duration::from_secs(15))
+            .connect_timeout(Duration::from_secs(5))
+            // No idle connections (#417): a provider closes them on
+            // its own schedule, and a request written to one it is closing
+            // is lost. With no retry that fails the sign-in after its
+            // one-time attempt is consumed. Sign-in is rare; each request
+            // pays for its own connection.
+            .pool_max_idle_per_host(0)
+            .build()
+            .map_err(|_| anyhow::anyhow!("Cannot initialize OIDC HTTP client"))?,
             allow_loopback_http,
         })
     }

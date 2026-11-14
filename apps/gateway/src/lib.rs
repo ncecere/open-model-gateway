@@ -3,7 +3,9 @@
 // in the non-test build. Today's offenders carry an `expect` that names #499;
 // remove the marker when the function is fixed. Never `allow`, never a threshold.
 #![cfg_attr(not(test), warn(clippy::too_many_lines, clippy::cognitive_complexity))]
-// Test code may begin transactions directly; production code uses `db::begin`.
+// Test code may begin transactions directly (production code uses `db::begin`)
+// and build HTTP clients for loopback test servers (production code uses
+// `egress::client_builder`, #509).
 #![cfg_attr(test, allow(clippy::disallowed_methods))]
 pub mod admin_tokens;
 pub mod alerts;

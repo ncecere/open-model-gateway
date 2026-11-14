@@ -1,6 +1,38 @@
 # Direct pool begins bypass the READ COMMITTED baseline and can leave an
 # untracked server-side transaction when cancelled (sqlx 0.8); see `src/db.rs`.
+#
+# Outbound HTTP (#509): every reqwest client starts from
+# `crate::egress::client_builder` (or `pinned_client_builder` for approved
+# local endpoints), which disables redirects, implicit retries and ambient
+# proxies and checks every resolved address. Any other constructor, and any
+# builder method that changes destination, proxy, redirect, retry, DNS or TLS
+# trust, is rejected outside `src/egress.rs`. Clippy resolves these paths by
+# name resolution, so aliases, re-exports (`openidconnect::reqwest`) and
+# renamed imports are covered.
 disallowed-methods = [
   { path = "sqlx::Pool::begin", reason = "use crate::db::begin (cancellation-safe)" },
   { path = "sqlx::Pool::begin_with", reason = "use crate::db::begin_with_setup (cancellation-safe)" },
+  { path = "reqwest::Client::new", reason = "build HTTP clients with crate::egress::client_builder (#509)" },
+  { path = "reqwest::Client::builder", reason = "build HTTP clients with crate::egress::client_builder (#509)" },
+  { path = "reqwest::ClientBuilder::new", reason = "build HTTP clients with crate::egress::client_builder (#509)" },
+  { path = "reqwest::get", reason = "send requests with a client from crate::egress::client_builder (#509)" },
+  { path = "reqwest::ClientBuilder::redirect", reason = "crate::egress::client_builder disables redirects (#509)" },
+  { path = "reqwest::ClientBuilder::retry", reason = "crate::egress::client_builder disables implicit retries (#509)" },
+  { path = "reqwest::ClientBuilder::proxy", reason = "crate::egress::client_builder disables proxies (#509)" },
+  { path = "reqwest::ClientBuilder::no_proxy", reason = "only crate::egress::client_builder sets proxy behaviour (#509)" },
+  { path = "reqwest::ClientBuilder::dns_resolver", reason = "crate::egress::client_builder sets the egress resolver (#509)" },
+  { path = "reqwest::ClientBuilder::dns_resolver2", reason = "crate::egress::client_builder sets the egress resolver (#509)" },
+  { path = "reqwest::ClientBuilder::resolve", reason = "pinned destinations use crate::egress::pinned_client_builder (#509)" },
+  { path = "reqwest::ClientBuilder::resolve_to_addrs", reason = "pinned destinations use crate::egress::pinned_client_builder (#509)" },
+  { path = "reqwest::ClientBuilder::connector_layer", reason = "a connector layer can bypass crate::egress::client_builder's safeguards (#509)" },
+  { path = "reqwest::ClientBuilder::unix_socket", reason = "a socket path bypasses crate::egress::client_builder's resolver (#509)" },
+  { path = "reqwest::ClientBuilder::windows_named_pipe", reason = "a pipe path bypasses crate::egress::client_builder's resolver (#509)", allow-invalid = true },
+  { path = "reqwest::ClientBuilder::danger_accept_invalid_certs", reason = "TLS verification stays on; see crate::egress::client_builder (#509)" },
+  { path = "reqwest::ClientBuilder::danger_accept_invalid_hostnames", reason = "TLS verification stays on; see crate::egress::client_builder (#509)" },
+  { path = "reqwest::ClientBuilder::use_preconfigured_tls", reason = "TLS verification stays on; see crate::egress::client_builder (#509)" },
+  { path = "reqwest::ClientBuilder::tls_built_in_root_certs", reason = "TLS trust changes only in crate::egress (see crate::egress::client_builder) (#509)" },
+  { path = "reqwest::ClientBuilder::tls_built_in_webpki_certs", reason = "TLS trust changes only in crate::egress (see crate::egress::client_builder) (#509)" },
+  { path = "reqwest::ClientBuilder::tls_built_in_native_certs", reason = "TLS trust changes only in crate::egress (see crate::egress::client_builder) (#509)", allow-invalid = true },
+  { path = "reqwest::ClientBuilder::add_root_certificate", reason = "use crate::egress::add_root_certificates on a crate::egress::client_builder (#509)" },
+  { path = "reqwest::ClientBuilder::hickory_dns", reason = "crate::egress::client_builder sets the egress resolver (#509)", allow-invalid = true },
 ]

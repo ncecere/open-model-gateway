@@ -35,15 +35,13 @@ pub(crate) struct OpenRouterCatalog {
 impl OpenRouterCatalog {
     fn build(base: String, timeout: Duration) -> anyhow::Result<Self> {
         Ok(Self {
-            client: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .retry(reqwest::retry::never())
-                .no_proxy()
-                // Every resolved address must pass the egress policy (#33).
-                .dns_resolver(crate::egress::resolver(crate::egress::Purpose::Catalog))
-                .connect_timeout(timeout)
-                .build()
-                .map_err(|_| anyhow::anyhow!("Unable to initialize catalog transport"))?,
+            // Every resolved address must pass the egress policy (#33).
+            client: crate::egress::client_builder(crate::egress::resolver(
+                crate::egress::Purpose::Catalog,
+            ))
+            .connect_timeout(timeout)
+            .build()
+            .map_err(|_| anyhow::anyhow!("Unable to initialize catalog transport"))?,
             base,
             timeout,
             cache: tokio::sync::Mutex::new(HashMap::new()),
