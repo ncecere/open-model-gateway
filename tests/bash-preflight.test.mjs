@@ -344,6 +344,12 @@ const ALLOWED = {
     "[\"S: a custom step shell that is itself a build\", \"ci\", d => afterScan(d, { shell: \"docker build -t open-model-gateway:staging . && bash {0}\", run: \"true\" })],",
   ],
   // RegExp.prototype.exec, not child_process.
+  // Fixtures that set a no-op `shell` on a workflow step or job object to prove the CI
+  // test refuses it (#502); nothing is spawned.
+  "ci.test.mjs": [
+    "[\"a no-op shell\", data => { clippy(data).shell = \"true {0}\"; }],",
+    "[\"job-level run defaults\", data => { lint(data).defaults = { run: { shell: \"true {0}\" } }; }],",
+  ],
   "browser/alert-webhooks.spec.ts": ["const match = /^t=(\\d+),v1=([0-9a-f]{64})$/.exec(signature);"],
 };
 // ALLOWED is a multiset: each listing excuses one occurrence, so a line that appears twice

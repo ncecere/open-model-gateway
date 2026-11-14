@@ -100,10 +100,15 @@ impl ApprovedEndpoints {
     ) -> Result<Self, InferenceError> {
         Self::parse(value, environment)
     }
+    /// Validates approval JSON, reporting any rejection only as a
+    /// configuration error. Production loads approvals through
+    /// [`Self::from_env`], which needs the detailed rejection, so this is
+    /// compiled only for its test and integration-test callers.
+    #[cfg(any(test, feature = "integration-tests"))]
     pub(super) fn parse(value: &str, environment: &str) -> Result<Self, InferenceError> {
         Self::parse_detailed(value, environment).map_err(|_| InferenceError::Configuration)
     }
-    /// Like [`Self::parse`], but a refusal because an address is in a range
+    /// Validates approval JSON. A refusal because an address is in a range
     /// the gateway never connects to is reported with the approval's host,
     /// address and category (never anything else from the URL). Every such
     /// approval is collected so an operator can fix them in one pass; any

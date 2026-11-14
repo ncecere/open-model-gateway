@@ -7,7 +7,8 @@ Run from the repository root. None of them make paid provider calls or touch the
 | Command | Covers | Needs |
 | --- | --- | --- |
 | `cargo fmt --all -- --check` | Formatting | Rust |
-| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Lints | Rust |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Lints, with the `integration-tests` feature on and test code included | Rust |
+| `cargo clippy -p open-model-gateway --bins --lib --locked -- -D warnings` | Lints the shipped build: the gateway library and binary with default features, so code compiled only without `integration-tests` is linted too (#502). Test code is not included | Rust |
 | `cargo test --workspace --all-features` | Unit, mock-provider contract, SDK and real-PostgreSQL integration tests (SQLx creates disposable databases) | `DATABASE_URL` to the disposable cluster, e.g. `postgres://gateway:gateway@127.0.0.1:54339/gateway`; `npm ci` for the SDK tests |
 | `cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored` | Runtime-role ACL rollback probe | Disposable cluster only |
 | `cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact` | Anthropic terminal fidelity, ordinary SDKs, runtime-role settlement/unknown holds and cancellation | Disposable cluster only; changes maintenance-database ACLs. Run sequentially after the runtime ACL probe, never via an unrestricted ignored-test sweep; requires `npm ci` |
@@ -190,7 +191,7 @@ The thresholds are Clippy's, so a toolchain bump may change which functions offe
 - A `#[cfg(test)]` line inside a block comment, a string literal or a macro body can confuse the line counter. Every such case found so far had to be constructed on purpose.
 - A `mod x;` declared inside an inline module (not at the start of a line) is not followed when deciding which files are test-only or declared by production code.
 - Clippy does not see a long body moved into a `macro_rules!`, or a long closure or block in a `static` or `const` initialiser.
-- Clippy does not lint code that is compiled only without the `integration-tests` feature. #502 tracks linting the default build.
+- Clippy lints the all-feature build with tests and the default-feature library and binary. Test code compiled only without `integration-tests` is not linted.
 - An `allow` of a whole Clippy group (`clippy::pedantic`, `clippy::nursery`, `clippy::all`) placed after the crate line could switch the lints off without naming them.
 - Only `apps/gateway/src` is covered. Other crates and `build.rs` are not.
 
@@ -205,7 +206,7 @@ Test code may build its own clients: `lib.rs` allows the lint for the test build
 **Known limits.** Review must catch these:
 
 - `reqwest::Client::default()` and `ClientBuilder::default()` (the `Default` impls) are not caught: Clippy cannot name a trait impl's method in `disallowed-methods`, and disallowing `Default::default` would hit every type.
-- Code that is not compiled in a Clippy run is not checked. CI runs Clippy with `--all-features`; code built only without `integration-tests` is not linted (#502).
+- Code that is not compiled in a Clippy run is not checked. CI runs Clippy twice: on every target with `--all-features`, and on the gateway library and binary with default features (#502). Test code built only without `integration-tests` is not linted.
 - Code expanded from an external macro or a derive may not be linted.
 - Clients built inside dependencies (the AWS SDK's credential providers, `openidconnect` internals) and non-reqwest transports (SMTP, syslog, raw sockets) are outside the rule.
 - With the `http2` feature off in this build, reqwest's default retry policy has nothing to retry, so the retry test cannot tell `retry::never()` from the default today; it guards a future feature change.
