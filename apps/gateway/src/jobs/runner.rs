@@ -301,9 +301,9 @@ impl Runner {
         self.finalize(job, files, work, stop).await
     }
 
-    /// Resume a claimed batch: observe a recorded cancel, interrupt the lines
-    /// a crashed runner left running, mark it running and return the lines
-    /// already claimed.
+    /// Resume a claimed batch: observe a recorded cancel, interrupt (and
+    /// count) the lines a crashed runner left running, mark it running and
+    /// return the lines already claimed.
     async fn resume(&self, job: &JobRow, state: &RunState) -> JobResult<HashSet<i32>> {
         let store = &self.jobs.store;
         if job.cancel_requested_at.is_some() {
