@@ -138,7 +138,7 @@ for (const [label, example, reason] of REFUSED_EXAMPLES) {
 }
 
 test("staging.env.example is read as staging.py reads it (quotes and spaces stripped)", () => {
-  assert.deepEqual(candidate(EXAMPLE.replace("GATEWAY_IMAGE=open-model-gateway:staging", '  GATEWAY_IMAGE = "open-model-gateway:staging"')), []);
+  assert.deepEqual(candidate(EXAMPLE.replace("GATEWAY_IMAGE=open-model-gateway:staging", '  GATEWAY_IMAGE="open-model-gateway:staging"')), []);
 });
 
 const REFUSED_OVERLAYS = [

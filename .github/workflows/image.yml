@@ -546,16 +546,16 @@ jobs:
       # digest instead of a local build. No real credentials or providers.
       - name: Staging rehearsal of the pushed digest
         run: |
-          python3 scripts/staging.py init
+          python3 -I scripts/staging.py init
           sed -i "s|^GATEWAY_IMAGE=.*|GATEWAY_IMAGE=${IMAGE}@${DIGEST}|" .local/staging/staging.env
           grep -qx "GATEWAY_IMAGE=${IMAGE}@${DIGEST}" .local/staging/staging.env
-          python3 scripts/staging.py db
-          python3 scripts/staging.py migrate
-          python3 scripts/staging.py up
-          python3 scripts/staging.py verify
-          python3 scripts/staging.py local-ca
+          python3 -I scripts/staging.py db
+          python3 -I scripts/staging.py migrate
+          python3 -I scripts/staging.py up
+          python3 -I scripts/staging.py verify
+          python3 -I scripts/staging.py local-ca
           curl --fail --silent --show-error --cacert .local/staging/local-ca.crt https://localhost:18443/health/ready
-          python3 scripts/staging.py restore-check
+          python3 -I scripts/staging.py restore-check
           # The rehearsal ran the pulled digest, not an image Compose built.
           running=$(docker inspect --format '{{.Image}}' "$(docker ps -q --filter label=com.docker.compose.project=omg-staging --filter label=com.docker.compose.service=gateway)")
           pulled=$(docker image inspect --format '{{.Id}}' "${IMAGE}@${DIGEST}")
@@ -567,7 +567,7 @@ jobs:
       - name: Stop isolated staging
         if: always()
         run: |
-          if [ -f .local/staging/staging.env ]; then python3 scripts/staging.py down; fi
+          if [ -f .local/staging/staging.env ]; then python3 -I scripts/staging.py down; fi
 
       # Distroless runtime contract of the pushed digest: no shell/package
       # manager, UID 10001, read-only rootfs, _FILE secrets, serve never

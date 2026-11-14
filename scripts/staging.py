@@ -72,6 +72,9 @@ def settings(state):
         name, separator, value = line.partition("=")
         if not separator or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
             raise ValueError("Invalid staging.env entry")
+        if name in result:
+            # The last value would win: a second GATEWAY_IMAGE could replace the candidate.
+            raise ValueError(f"staging.env sets {name} more than once")
         result[name] = value.strip().strip('"').strip("'")
     return result
 

@@ -316,7 +316,32 @@ export function pinnedJobInputViolations(pins = currentPins(), listed = PINNED_J
 // gateway's Dockerfile (the gateway and the ops services that share its definition) must
 // default to it, and so must deploy/staging/staging.env.example, from which staging.py init
 // writes the environment. image.yml's rehearsal replaces the value with the digest it tests.
-export function stagingCandidateViolations(compose, envExample, ci) {
+// staging.env.example as staging.py settings() reads it: lines stripped, blank lines and
+// comments skipped, `NAME=value` with the value stripped of spaces and quotes. A key set twice
+// is refused (staging.py refuses it too; before, the last value won).
+export function stagingSettings(text) {
+  const values = {}, problems = [];
+  for (const raw of String(text ?? "").split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const at = line.indexOf("=");
+    const name = at === -1 ? line : line.slice(0, at);
+    if (at === -1 || !/^[A-Z][A-Z0-9_]*$/.test(name)) { problems.push(`an entry staging.py refuses: ${JSON.stringify(line.slice(0, 40))}`); continue; }
+    if (name in values) problems.push(`${name} is set more than once`);
+    values[name] = line.slice(at + 1).trim().replace(/^"+|"+$/g, "").replace(/^'+|'+$/g, "");
+  }
+  return { values, problems };
+}
+
+// The Compose overlays staging.py compose() can add with -f, read from its `overlays` table.
+export function stagingOverlayFiles(source = readLocalFromRepo("scripts/staging.py")) {
+  const table = source.match(/^\s*overlays = \{([^}]*)\}/m);
+  if (!table) throw new Error("scripts/staging.py: the overlays table is not where the check expects it");
+  return [...table[1].matchAll(/:\s*"([a-z0-9-]+)"/g)].map(([, name]) => `deploy/staging/compose.${name}.yaml`);
+}
+const readOverlays = () => Object.fromEntries(stagingOverlayFiles().map(file => [file, readWorkflow(file)]));
+
+export function stagingCandidateViolations(compose, envExample, ci, overlays = readOverlays()) {
   const out = [];
   const candidate = stepOf(ci?.jobs?.["staging-image"], "docker/build-push-action")?.with?.tags;
   if (typeof candidate !== "string" || candidate.includes("${{") || candidate.includes("\n")) return ["ci.yml: staging-image must load one literal candidate tag"];
@@ -327,14 +352,85 @@ export function stagingCandidateViolations(compose, envExample, ci) {
     if (!isMapping(service) || (name !== "gateway" && service.build === undefined)) continue;
     if (service.image !== expected) out.push(`deploy/staging/compose.yaml: service '${name}' image '${service.image}' is not the candidate under test (${expected})`);
   }
-  const lines = String(envExample ?? "").split("\n").filter(line => line.startsWith("GATEWAY_IMAGE="));
-  if (JSON.stringify(lines) !== JSON.stringify([`GATEWAY_IMAGE=${candidate}`])) out.push(`deploy/staging/staging.env.example: GATEWAY_IMAGE must be exactly the candidate ${candidate}`);
+  const candidates = Object.entries(services).filter(([name, service]) => name === "gateway" || service?.build !== undefined).map(([name]) => name);
+  for (const [file, overlay] of Object.entries(overlays ?? {})) {
+    for (const [name, service] of Object.entries(isMapping(overlay?.services) ? overlay.services : {})) {
+      if (candidates.includes(name) && isMapping(service) && "image" in service) out.push(`${file}: service '${name}' may not set image; the rehearsal runs the candidate under test`);
+      if (isMapping(service) && "build" in service) out.push(`${file}: service '${name}' may not set build; only deploy/staging/compose.yaml builds the candidate`);
+    }
+  }
+  const example = "deploy/staging/staging.env.example";
+  const { values, problems } = stagingSettings(envExample);
+  out.push(...problems.map(problem => `${example}: ${problem}`));
+  for (const name of Object.keys(values)) if (DOCKER_ENV.test(name)) out.push(`${example}: ${name} selects a builder or changes the Docker client (Compose reads this file as --env-file)`);
+  if (values.GATEWAY_IMAGE !== candidate) out.push(`${example}: GATEWAY_IMAGE must be exactly the candidate ${candidate}`);
+  return out;
+}
+
+// npm runs `pre<name>` and `post<name>` around `npm run <name>`, and install lifecycle scripts
+// in the root package and its workspaces during `npm ci`/`npm install`. Around the npm
+// commands of the pinned jobs both are refused: they would run there without appearing in a
+// pinned run line or in PINNED_JOB_INPUTS.
+const INSTALL_SCRIPTS = ["preinstall", "install", "postinstall", "preprepare", "prepare", "postprepare", "prepublish"];
+export function repoPackages() {
+  const root = JSON.parse(readLocalFromRepo("package.json"));
+  const packages = { "package.json": root };
+  for (const dir of Array.isArray(root.workspaces) ? root.workspaces : []) packages[`${dir}/package.json`] = JSON.parse(readLocalFromRepo(`${dir}/package.json`));
+  return packages;
+}
+const pinnedScripts = pins => [...pins.jobs.flatMap(({ definition }) => stepsOf(definition)), ...Object.values(pins.local_actions ?? {}).flatMap(action => stepsOf(action?.runs))]
+  .filter(step => typeof step.run === "string").map(step => step.run);
+
+export function pinnedNpmViolations(pins = currentPins(), packages = repoPackages()) {
+  const out = new Set();
+  const scripts = packages["package.json"]?.scripts ?? {};
+  const read = (script, depth = 0) => {
+    for (const words of shellCommands(script)) {
+      const texts = words.map(w => w.text);
+      const npm = texts.indexOf("npm");
+      if (npm === -1) continue;
+      const [sub, name] = texts.slice(npm + 1).filter(t => !t.startsWith("-"));
+      if (["ci", "install", "i", "clean-install"].includes(sub)) {
+        for (const [file, pkg] of Object.entries(packages)) for (const hook of INSTALL_SCRIPTS) if (pkg?.scripts?.[hook] !== undefined) out.add(`${file}: ${hook} runs during npm ci in a pinned job; it is not allowed`);
+      }
+      const run = sub === "test" ? "test" : ["run", "run-script"].includes(sub) ? name : null;
+      if (!run) continue;
+      for (const hook of [`pre${run}`, `post${run}`]) if (scripts[hook] !== undefined) out.add(`package.json: ${hook} runs with the pinned npm run ${run}; it is not allowed`);
+      if (typeof scripts[run] === "string" && depth < 5) read(scripts[run], depth + 1);
+    }
+  };
+  for (const script of pinnedScripts(pins)) read(script);
+  return [...out];
+}
+
+// A tracked .npmrc (node-options, script-shell, ignore-scripts=false, ...) changes what every
+// npm run executes; none is allowed.
+export function npmrcViolations(files = [...tracked()]) {
+  return files.filter(file => posix.basename(file) === ".npmrc").map(file => `${file}: a tracked .npmrc changes how npm runs scripts (node-options, script-shell); it is not allowed`);
+}
+
+// Python started by a pinned job runs isolated (-I): without it, the script's directory and
+// PYTHON* variables come first on the import path, so a planted scripts/json.py would replace
+// the standard library module staging.py imports.
+export function pythonIsolationViolations(pins = currentPins()) {
+  const out = [];
+  for (const script of pinnedScripts(pins)) {
+    for (const words of shellCommands(script)) {
+      const texts = words.map(w => w.text);
+      const at = texts.findIndex(t => /^python(3(\.\d+)?)?$/.test(posix.basename(t)));
+      if (at === -1) continue;
+      const options = [];
+      for (const t of texts.slice(at + 1)) { if (!t.startsWith("-") || t === "-" || t === "-c" || t === "-m") { if (t === "-c" || t === "-m") options.push(t); break; } options.push(t); }
+      if (!options.some(o => /^-[A-Za-z]*I/.test(o))) out.push(`a pinned job runs Python without -I: ${JSON.stringify(texts.join(" ").slice(0, 60))}`);
+    }
+  }
   return out;
 }
 
 // A job outside the pinned set that builds, logs in, publishes or calls another workflow.
 const IMAGE_ACTIONS = new Set(["docker/build-push-action", "docker/setup-buildx-action", "docker/metadata-action", "docker/login-action"]);
-const IMAGE_WRITE_SCOPES = ["packages", "id-token", "attestations", "contents"];
+// checks and statuses: an unpinned job could post a result under a required check's name.
+const IMAGE_WRITE_SCOPES = ["packages", "id-token", "attestations", "contents", "checks", "statuses"];
 // What a job may write among IMAGE_WRITE_SCOPES, from its effective permissions (its own, else
 // the workflow's, else the repository default, taken as write-all), or null.
 function imageWrites(data, job) {
@@ -705,9 +801,3 @@ export const buildChecks = (name, data) => imageBuildViolations(`.github/workflo
 export const actionChecks = (name, data, options) => actionPolicyViolations(`.github/workflows/${name}.yml`, data, options);
 export const withStep = (name, job, step) => { const data = structuredClone(loadWorkflow(name)); data.jobs[job].steps.push(step); return data; };
 export const stepOf = (job, action) => stepsOf(job).find(s => actionName(s.uses ?? "") === action);
-
-// Implemented in the next commit; the fixtures show what each must refuse.
-export const stagingOverlayFiles = () => [];
-export function pinnedNpmViolations() { return []; }
-export function npmrcViolations() { return []; }
-export function pythonIsolationViolations() { return []; }
