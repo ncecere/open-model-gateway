@@ -194,6 +194,22 @@ The thresholds are Clippy's, so a toolchain bump may change which functions offe
 - An `allow` of a whole Clippy group (`clippy::pedantic`, `clippy::nursery`, `clippy::all`) placed after the crate line could switch the lints off without naming them.
 - Only `apps/gateway/src` is covered. Other crates and `build.rs` are not.
 
+### Egress client rule
+
+Every outbound reqwest client starts from `crate::egress::client_builder` (or `pinned_client_builder` for an approved local endpoint, `providers/local/endpoints.rs`), which turns off redirects, implicit retries and ambient proxies (`HTTP(S)_PROXY`, `ALL_PROXY`) and sets the egress resolver; callers add only their own timeouts, pool and TLS-mode settings (#509). Clippy enforces this with `disallowed-methods` in `apps/gateway/clippy.toml`: `reqwest::Client::new`/`builder`, `reqwest::ClientBuilder::new`, `reqwest::get`, and every builder method that changes destination, proxy, redirect, retry, DNS or TLS trust (`redirect`, `retry`, `proxy`, `no_proxy`, `dns_resolver`, `dns_resolver2`, `resolve`, `resolve_to_addrs`, `connector_layer`, `unix_socket`, the `danger_*` methods, `use_preconfigured_tls`, the `tls_built_in_*` switches, `add_root_certificate`, `hickory_dns`). Clippy matches by name resolution, so aliases, braced or renamed imports and re-exports such as `openidconnect::reqwest::Client` are caught. Only `egress.rs` uses them, under `#[expect(clippy::disallowed_methods, reason = "the egress-guarded constructor (#509)")]`; `S3` trust anchors go through `egress::add_root_certificates`.
+
+Test code may build its own clients: `lib.rs` allows the lint for the test build, and integration tests under `tests/` opt out per file. `egress_source_scan_tests.rs` keeps the rule switched on: the lint is named only at the sanctioned sites (`egress.rs`, the `sqlx` site in `db.rs`, the test-build line in `lib.rs`), no `allow`/`expect` of `warnings`, `clippy::all` or `clippy::style` appears under `src/`, and `clippy.toml` still lists every reqwest entry with a reason naming the egress constructor. `egress_client_tests.rs` checks the constructor over real HTTP on loopback: no redirect is followed, ambient proxy variables are ignored (in a child process), a failed request is sent once, and a refused address is never connected to.
+
+**Known limits.** Review must catch these:
+
+- `reqwest::Client::default()` and `ClientBuilder::default()` (the `Default` impls) are not caught: Clippy cannot name a trait impl's method in `disallowed-methods`, and disallowing `Default::default` would hit every type.
+- Code that is not compiled in a Clippy run is not checked. CI runs Clippy with `--all-features`; code built only without `integration-tests` is not linted (#502).
+- Code expanded from an external macro or a derive may not be linted.
+- Clients built inside dependencies (the AWS SDK's credential providers, `openidconnect` internals) and non-reqwest transports (SMTP, syslog, raw sockets) are outside the rule.
+- With the `http2` feature off in this build, reqwest's default retry policy has nothing to retry, so the retry test cannot tell `retry::never()` from the default today; it guards a future feature change.
+- A lint level built by a macro from separate tokens is not seen by the source scan.
+- Only `apps/gateway` has this `clippy.toml`; `tools/` crates are not covered.
+
 ### No Docker Hub pulls in CI
 
 GitHub's shared runners hit Docker Hub's anonymous pull limit, and a Docker Hub outage (`auth.docker.io` 504) failed builds, so CI and the release pipeline pull nothing from Docker Hub:
