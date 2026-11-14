@@ -125,7 +125,10 @@ impl Store {
                  SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=w.id AND m.user_id=k.issued_to_user_id))))
                OR (k.service_account_id IS NOT NULL AND w.kind IN ('team','project') AND EXISTS(
                  SELECT 1 FROM service_accounts a WHERE a.workspace_id=w.id AND a.id=k.service_account_id AND a.disabled_at IS NULL)))",
-        ).bind(id).fetch_optional(&self.pool).await?;
+        ).bind(id).fetch_optional(&self.pool).await
+        // A failed lookup is counted with its cause (#497); the caller's
+        // response (`503 api_error`) is unchanged.
+        .map_err(crate::db::accounting_failure::key_authentication)?;
         let Some(record) = record else {
             return Ok(None);
         };
@@ -323,5 +326,41 @@ mod tests {
         let valid = NewApiKey::generate().unwrap();
         assert!(token_id(&valid.token.replace('.', ":")).is_none());
         assert!(token_id(&valid.token.replacen("omg_", "sk__", 1)).is_none());
+    }
+
+    /// #497: a key lookup that fails in the database is counted once, at the
+    /// `key_authentication` stage; a malformed token never reaches it.
+    #[tokio::test]
+    async fn a_failed_key_lookup_is_recorded_once_at_its_stage() {
+        use crate::db::{
+            accounting_failure::tests::labels,
+            diagnostics::{self, Handle},
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .unwrap();
+        pool.close().await;
+        let store = Store::new(pool);
+        let token = NewApiKey::generate().unwrap().token;
+        for cached in [false, true] {
+            let handle = Handle::new();
+            let result = diagnostics::scope(handle.clone(), async {
+                if cached {
+                    store.authenticate_inference(&token).await
+                } else {
+                    store.authenticate(&token).await
+                }
+            })
+            .await;
+            assert!(matches!(result, Err(sqlx::Error::PoolClosed)));
+            assert_eq!(
+                labels(&handle.signals()),
+                [("key_authentication", "pool_closed")]
+            );
+        }
+        let handle = Handle::new();
+        let result = diagnostics::scope(handle.clone(), store.authenticate("omg_bad.secret")).await;
+        assert!(matches!(result, Ok(None)));
+        assert!(handle.signals().is_empty(), "no lookup, nothing recorded");
     }
 }
