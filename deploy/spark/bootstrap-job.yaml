@@ -1,0 +1,59 @@
+# `bootstrap-demo` for the Spark test platform (scripts/spark-env.py applies this after the
+# chart's migrate Job has completed, then demo.yaml). The command insists on a loopback
+# database host, so a pod-local forwarder relays 127.0.0.1:5432 to the CloudNativePG
+# read-write Service. __IMAGE__ is replaced by the script with the gateway image under test.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: omg-bootstrap-demo
+  labels: {app.kubernetes.io/name: omg-bootstrap-demo}
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: omg-bootstrap-demo}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: pg-forward
+          image: &node mirror.gcr.io/library/node:22.23.4-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d
+          restartPolicy: Always
+          command: [node, /scripts/pg-forward.mjs]
+          resources: &small
+            requests: {cpu: 20m, memory: 48Mi}
+            limits: {memory: 128Mi}
+          securityContext: &locked
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts: [{name: scripts, mountPath: /scripts, readOnly: true}]
+        - name: wait-for-database
+          image: __IMAGE__
+          args: [wait-for-database]
+          env: &migrator
+            - {name: PG_USER, valueFrom: {secretKeyRef: {name: omg-migrator-role, key: username}}}
+            - {name: PG_PASSWORD, valueFrom: {secretKeyRef: {name: omg-migrator-role, key: password}}}
+            - {name: DATABASE_URL, value: "postgres://$(PG_USER):$(PG_PASSWORD)@127.0.0.1:5432/gateway_enterprise_demo"}
+            - {name: GATEWAY_ENV, value: development}
+            - {name: GATEWAY_LISTEN, value: "127.0.0.1:3000"}
+          resources: &gateway-resources
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          securityContext: *locked
+      containers:
+        - name: bootstrap-demo
+          image: __IMAGE__
+          args: [bootstrap-demo]
+          env: *migrator
+          resources: *gateway-resources
+          securityContext: *locked
+      volumes:
+        - name: scripts
+          configMap: {name: omg-demo-scripts}
