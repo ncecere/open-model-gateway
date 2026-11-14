@@ -186,3 +186,83 @@ fn rendering_uses_gateway_ids_and_no_content() {
     assert!(v["cancelled_at"].is_number());
     assert_eq!(v["input_file_id"], client_id(FILE_PREFIX, legacy));
 }
+
+/// #497: database failures of the job module itself (the batch runner, the
+/// job poller, the scheduler and the job API's own reads) are counted once per
+/// failed operation at the `job_storage` stage. No database: the pool is closed.
+mod storage_failures {
+    use super::*;
+    use crate::db::{
+        accounting_failure::tests::labels,
+        diagnostics::{self, Handle},
+    };
+
+    async fn closed_jobs() -> Jobs {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .unwrap();
+        pool.close().await;
+        Jobs::with(
+            Store::new(pool),
+            ProviderRegistry::default(),
+            JobLimits::default(),
+        )
+    }
+
+    async fn capture<F: std::future::Future>(future: F) -> (F::Output, Vec<(&'static str, &'static str)>) {
+        let handle = Handle::new();
+        let output = diagnostics::scope(handle.clone(), future).await;
+        (output, labels(&handle.signals()))
+    }
+
+    const CLOSED: (&str, &str) = ("job_storage", "pool_closed");
+
+    #[tokio::test]
+    async fn a_failed_runner_tick_records_each_failed_statement_once() {
+        let runner = runner::Runner::new(closed_jobs().await);
+        let (ticked, signals) = capture(runner.tick()).await;
+        assert!(matches!(
+            ticked,
+            Err(JobError::Inference(InferenceError::Storage))
+        ));
+        // The queue gauge, the route gauges and the claim: three statements.
+        assert_eq!(signals, [CLOSED, CLOSED, CLOSED]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_poll_records_its_claim_once() {
+        let jobs = closed_jobs().await;
+        let (polled, signals) = capture(jobs.poll_once()).await;
+        assert!(matches!(polled, Err(InferenceError::Storage)));
+        assert_eq!(signals, [CLOSED]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_scheduler_statement_is_recorded_once() {
+        let jobs = closed_jobs().await;
+        let scheduler = schedule::Scheduler::new(jobs.store.clone(), None);
+        let (gate, signals) = capture(scheduler.gate(Uuid::new_v4())).await;
+        assert!(matches!(gate, Err(InferenceError::Storage)));
+        assert_eq!(signals, [CLOSED], "the route settings");
+        let (cleared, signals) = capture(scheduler.clear_waits(Uuid::new_v4())).await;
+        assert!(cleared.is_err());
+        assert_eq!(signals, [CLOSED], "the demand rows");
+    }
+
+    #[tokio::test]
+    async fn a_failed_job_read_is_recorded_once() {
+        let jobs = closed_jobs().await;
+        let principal = Principal {
+            key_id: Uuid::new_v4(),
+            workspace_id: Uuid::new_v4(),
+            user_id: None,
+        };
+        let id = types::client_id(JobKind::Video.prefix(), Uuid::new_v4());
+        let (read, signals) = capture(jobs.get_video(&principal, &id)).await;
+        assert!(matches!(
+            read,
+            Err(JobError::Inference(InferenceError::Storage))
+        ));
+        assert_eq!(signals, [CLOSED]);
+    }
+}

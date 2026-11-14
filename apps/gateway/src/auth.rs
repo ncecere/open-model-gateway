@@ -324,4 +324,40 @@ mod tests {
         assert!(token_id(&valid.token.replace('.', ":")).is_none());
         assert!(token_id(&valid.token.replacen("omg_", "sk__", 1)).is_none());
     }
+
+    /// #497: a key lookup that fails in the database is counted once, at the
+    /// `key_authentication` stage; a malformed token never reaches it.
+    #[tokio::test]
+    async fn a_failed_key_lookup_is_recorded_once_at_its_stage() {
+        use crate::db::{
+            accounting_failure::tests::labels,
+            diagnostics::{self, Handle},
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .unwrap();
+        pool.close().await;
+        let store = Store::new(pool);
+        let token = NewApiKey::generate().unwrap().token;
+        for cached in [false, true] {
+            let handle = Handle::new();
+            let result = diagnostics::scope(handle.clone(), async {
+                if cached {
+                    store.authenticate_inference(&token).await
+                } else {
+                    store.authenticate(&token).await
+                }
+            })
+            .await;
+            assert!(matches!(result, Err(sqlx::Error::PoolClosed)));
+            assert_eq!(
+                labels(&handle.signals()),
+                [("key_authentication", "pool_closed")]
+            );
+        }
+        let handle = Handle::new();
+        let result = diagnostics::scope(handle.clone(), store.authenticate("omg_bad.secret")).await;
+        assert!(matches!(result, Ok(None)));
+        assert!(handle.signals().is_empty(), "no lookup, nothing recorded");
+    }
 }

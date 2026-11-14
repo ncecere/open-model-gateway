@@ -635,6 +635,47 @@ mod tests {
         }
     }
 
+    /// #497: with no pooled connection in time, key authentication answers
+    /// exactly as before (503 api_error) and is counted once with its cause.
+    #[tokio::test]
+    async fn a_key_lookup_without_a_connection_is_recorded_and_answers_as_before() {
+        use crate::db::{
+            accounting_failure::tests::labels,
+            diagnostics::{self, Handle},
+        };
+        let pool = PgPoolOptions::new()
+            .acquire_timeout(Duration::from_millis(200))
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .unwrap();
+        let app = router(Store::new(pool));
+        let token = crate::auth::NewApiKey::generate().unwrap().token;
+        // A cached engine route and a live route.
+        for path in ["/v1/models", "/v1/files"] {
+            let handle = Handle::new();
+            let request = Request::builder()
+                .uri(path)
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap();
+            let response = diagnostics::scope(handle.clone(), app.clone().oneshot(request))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            let body: serde_json::Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap())
+                    .unwrap();
+            assert_eq!(
+                body,
+                json!({"error": {"message": "Authentication service unavailable", "type": "api_error", "param": null, "code": "api_error"}})
+            );
+            assert_eq!(
+                labels(&handle.signals()),
+                [("key_authentication", "pool_timeout")],
+                "{path}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn readiness_is_structured_and_fails_closed_without_database() {
         let pool = PgPoolOptions::new()

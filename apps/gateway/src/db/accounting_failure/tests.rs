@@ -1,7 +1,7 @@
 //! #389: the production accounting-failure signal. No database: the driver
 //! boundary is synthetic here; `inference::steering_tests` drives the real faults.
 use super::*;
-use crate::db::diagnostics::{self, Handle};
+use crate::db::diagnostics::{self, Handle, Signal};
 use std::collections::BTreeSet;
 
 const CANARY: &str = "accounting-secret-canary-389";
@@ -34,7 +34,7 @@ impl sqlx::error::DatabaseError for SyntheticDatabaseError {
         sqlx::error::ErrorKind::Other
     }
 }
-fn database(code: Option<&'static str>) -> sqlx::Error {
+pub(crate) fn database(code: Option<&'static str>) -> sqlx::Error {
     sqlx::Error::Database(Box::new(SyntheticDatabaseError(code)))
 }
 
@@ -68,6 +68,15 @@ const CAUSES: [&str; 16] = [
     "deadline_acquiring_connection",
     "deadline_in_database",
 ];
+
+/// The (stage, cause) label values of captured signals, so a test can name a
+/// stage or cause by its exported value.
+pub(crate) fn labels(signals: &[Signal]) -> Vec<(&'static str, &'static str)> {
+    signals
+        .iter()
+        .map(|(stage, cause)| (stage.as_str(), cause.as_str()))
+        .collect()
+}
 
 /// The accounting-failure log lines in `text`, as (stage, cause). Every such
 /// line, whoever wrote it, must carry exactly the two closed fields.

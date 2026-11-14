@@ -308,6 +308,71 @@ where
         },
     }
 }
+/// #497: a maintenance run that fails in the database is counted once at the
+/// `maintenance` stage; a run whose lease term ended (fenced) is not a failure.
+#[cfg(test)]
+mod failure_tests {
+    use super::*;
+    use crate::db::{
+        accounting_failure::tests::{database, labels},
+        diagnostics::{self, Handle},
+    };
+
+    async fn closed_store() -> Store {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .unwrap();
+        pool.close().await;
+        Store::new(pool)
+    }
+
+    #[tokio::test]
+    async fn a_failed_settings_refresh_is_recorded_once() {
+        let store = closed_store().await;
+        let handle = Handle::new();
+        let refreshed = diagnostics::scope(handle.clone(), refresh_runtime_settings(&store)).await;
+        assert!(matches!(refreshed, Err(InferenceError::Storage)));
+        assert_eq!(labels(&handle.signals()), [("maintenance", "pool_closed")]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_singleton_run_is_recorded_once_and_a_fenced_one_not_at_all() {
+        let store = closed_store().await;
+        let handle = Handle::new();
+        let ran = diagnostics::scope(
+            handle.clone(),
+            singleton(
+                &store,
+                crate::leases::Lease::Maintenance,
+                crate::ops_log::Job::RatePrune,
+                |fence| {
+                    let store = store.clone();
+                    async move {
+                        crate::governance::rates::prune_fenced(&store, 10, fence.as_ref()).await
+                    }
+                },
+            ),
+        )
+        .await;
+        assert_eq!(ran, None);
+        assert_eq!(labels(&handle.signals()), [("maintenance", "pool_closed")]);
+
+        let handle = Handle::new();
+        let ran: Option<()> = diagnostics::scope(
+            handle.clone(),
+            singleton(
+                &store,
+                crate::leases::Lease::Maintenance,
+                crate::ops_log::Job::RatePrune,
+                |_| async { Err(database(Some("55006"))) },
+            ),
+        )
+        .await;
+        assert_eq!(ran, None);
+        assert!(handle.signals().is_empty(), "a fenced run is not a failure");
+    }
+}
+
 #[cfg(all(test, feature = "integration-tests"))]
 mod tests {
     use super::*;
@@ -317,5 +382,48 @@ mod tests {
         assert!(compact_history(&store, 0, 100).await.is_err());
         assert!(compact_history(&store, 30, 1001).await.is_err());
         assert_eq!(compact_history(&store, 30, 100).await.unwrap(), 0);
+    }
+
+    /// #497: a settings refresh whose statement times out on a lock names it.
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn a_settings_refresh_lock_timeout_is_recorded_with_its_cause(pool: sqlx::PgPool) {
+        use crate::db::{
+            accounting_failure::tests::labels,
+            diagnostics::{self, Handle},
+        };
+        use sqlx::Connection;
+        let store = Store::new(
+            sqlx::postgres::PgPoolOptions::new()
+                .max_connections(1)
+                .after_connect(|connection, _| {
+                    Box::pin(async move {
+                        sqlx::query("SET lock_timeout = '200ms'")
+                            .execute(connection)
+                            .await?;
+                        Ok(())
+                    })
+                })
+                .connect_with((*pool.connect_options()).clone())
+                .await
+                .unwrap(),
+        );
+        let handle = Handle::new();
+        diagnostics::scope(handle.clone(), refresh_runtime_settings(&store))
+            .await
+            .unwrap();
+        assert!(handle.signals().is_empty(), "nothing is recorded on success");
+        let mut blocker = sqlx::PgConnection::connect_with(&pool.connect_options())
+            .await
+            .unwrap();
+        sqlx::raw_sql("BEGIN; LOCK TABLE installation_settings IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut blocker)
+            .await
+            .unwrap();
+        let handle = Handle::new();
+        let refreshed = diagnostics::scope(handle.clone(), refresh_runtime_settings(&store)).await;
+        sqlx::query("ROLLBACK").execute(&mut blocker).await.unwrap();
+        blocker.close().await.unwrap();
+        assert!(matches!(refreshed, Err(InferenceError::Storage)));
+        assert_eq!(labels(&handle.signals()), [("maintenance", "lock_timeout")]);
     }
 }

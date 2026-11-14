@@ -644,3 +644,199 @@ async fn context_sized_windows_settle_known_and_flag_usage_above_them(pool: PgPo
         )
     );
 }
+
+/// #497: an adapter that connects a realtime session with an idle upstream.
+struct IdleRealtime;
+#[async_trait::async_trait]
+impl crate::providers::ProviderAdapter for IdleRealtime {
+    fn id(&self) -> &'static str {
+        "openai"
+    }
+    fn capabilities(&self) -> crate::inference::types::Capabilities {
+        crate::inference::types::Capabilities {
+            text_chat: false,
+            streaming: false,
+            tools: false,
+        }
+    }
+    fn supports_protocol(&self, protocol: ApiProtocol) -> bool {
+        protocol == ApiProtocol::Realtime
+    }
+    async fn execute(
+        &self,
+        _: &Deployment,
+        _: ChatRequest,
+    ) -> Result<crate::inference::types::ProviderOutput, InferenceError> {
+        Err(InferenceError::Unsupported)
+    }
+    async fn connect_realtime(
+        &self,
+        _: &Deployment,
+        _: &crate::inference::realtime::RealtimeSetup,
+    ) -> Result<crate::inference::realtime::RealtimeUpstream, InferenceError> {
+        use futures_util::SinkExt;
+        Ok(crate::inference::realtime::RealtimeUpstream {
+            sink: Box::pin(
+                futures_util::sink::drain::<String>()
+                    .sink_map_err(|never: std::convert::Infallible| match never {}),
+            ),
+            events: Box::pin(futures_util::stream::pending()),
+            config: Default::default(),
+        })
+    }
+}
+
+/// The exported count of one (stage, cause) series of the process-wide metrics.
+async fn exported(stage: &str, cause: &str) -> u64 {
+    let exposition = crate::metrics::METRICS.render(None).await;
+    crate::db::accounting_failure::tests::exported_series(&exposition)
+        .into_iter()
+        .find(|(s, c, _)| (s.as_str(), c.as_str()) == (stage, cause))
+        .map_or(0, |(_, _, n)| n)
+}
+
+/// #497: each realtime accounting step whose own deadline elapses (window
+/// reservation 5 s; response open, response settlement and session finish
+/// 3 s; the detached finish of a dropped session 3 s) is counted once at the
+/// `realtime_deadline` stage, naming what it waited on: the in-process gate,
+/// a pooled connection, or the database. Before, none was counted.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn elapsed_realtime_accounting_deadlines_name_what_they_waited_on(pool: PgPool) {
+    use crate::db::{
+        accounting_failure::tests::{labels, signal_lines},
+        diagnostics::{self, Handle},
+    };
+    use crate::inference::{Engine, EngineLimits, realtime::RealtimeLimits};
+    use sqlx::Connection;
+    use std::time::Duration;
+    let f = fixture(pool.clone()).await;
+    realtime_model(&f, Some(lines())).await;
+    // Two connections, and an acquire timeout longer than every deadline.
+    let store = Store::new(
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .acquire_timeout(Duration::from_secs(20))
+            .connect_with((*pool.connect_options()).clone())
+            .await
+            .unwrap(),
+    );
+    let mut registry = crate::providers::ProviderRegistry::default();
+    registry.register(std::sync::Arc::new(IdleRealtime)).unwrap();
+    let engine = Engine::new(
+        std::sync::Arc::new(store.clone()),
+        registry,
+        EngineLimits::default(),
+    )
+    .unwrap()
+    .with_realtime_limits(RealtimeLimits {
+        max_output_tokens: 100,
+        ..RealtimeLimits::default()
+    })
+    .unwrap();
+    let open = || engine.open_realtime(f.principal, "company/smart", Uuid::new_v4());
+    let lock = || async {
+        let mut blocker = sqlx::PgConnection::connect_with(&pool.connect_options())
+            .await
+            .unwrap();
+        sqlx::raw_sql("BEGIN; LOCK TABLE governance_reservations IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut blocker)
+            .await
+            .unwrap();
+        blocker
+    };
+    let unlock = |mut blocker: sqlx::PgConnection| async move {
+        sqlx::query("ROLLBACK").execute(&mut blocker).await.unwrap();
+        blocker.close().await.unwrap();
+    };
+    let gate = &store.lock_gates.settlement;
+    let mut session = open().await.unwrap();
+
+    // Opening a response waits for its session's reservation row.
+    let blocker = lock().await;
+    let handle = Handle::new();
+    let opened = diagnostics::scope(handle.clone(), session.open_response("r1".into())).await;
+    unlock(blocker).await;
+    assert_eq!(opened, Err(InferenceError::Storage));
+    assert_eq!(
+        labels(&handle.signals()),
+        [("realtime_deadline", "deadline_in_database")],
+        "the response open"
+    );
+    session.open_response("r1".into()).await.unwrap();
+
+    // Settling it waits at the settlement gate (every permit taken).
+    let permits = gate.acquire_many(gate.available_permits() as u32).await;
+    let handle = Handle::new();
+    let settled = diagnostics::scope(
+        handle.clone(),
+        session.settle_response("r1", Some(ResponseStatus::Completed), None),
+    )
+    .await;
+    drop(permits);
+    assert_eq!(settled, Err(InferenceError::Storage));
+    assert_eq!(
+        labels(&handle.signals()),
+        [("realtime_deadline", "deadline_in_queue")],
+        "the response settlement"
+    );
+    session
+        .settle_response("r1", Some(ResponseStatus::Completed), None)
+        .await
+        .unwrap();
+
+    // The next window waits for a pooled connection (both are busy).
+    let held = [
+        store.pool.acquire().await.unwrap(),
+        store.pool.acquire().await.unwrap(),
+    ];
+    let handle = Handle::new();
+    let reserved = diagnostics::scope(handle.clone(), session.reserve_window(50)).await;
+    drop(held);
+    assert_eq!(reserved, Err(InferenceError::Storage));
+    assert_eq!(
+        labels(&handle.signals()),
+        [("realtime_deadline", "deadline_acquiring_connection")],
+        "the window reservation"
+    );
+
+    // The session finish waits for its reservation row.
+    let blocker = lock().await;
+    let handle = Handle::new();
+    let finished = diagnostics::scope(
+        handle.clone(),
+        session.finish(Outcome::Cancelled, None, None),
+    )
+    .await;
+    unlock(blocker).await;
+    assert_eq!(finished, Err(InferenceError::Storage));
+    assert_eq!(
+        labels(&handle.signals()),
+        [("realtime_deadline", "deadline_in_database")],
+        "the session finish"
+    );
+
+    // A dropped session finishes in a detached task: no request capture
+    // reaches it, so the process-wide counter and the log show it. No other
+    // test produces this pair.
+    let dropped = open().await.unwrap();
+    let capture = crate::log_capture_test::Capture::start();
+    let pair = ("realtime_deadline", "deadline_in_queue");
+    let before = exported(pair.0, pair.1).await;
+    let permits = gate.acquire_many(gate.available_permits() as u32).await;
+    drop(dropped);
+    let mut after = before;
+    for _ in 0..200 {
+        after = exported(pair.0, pair.1).await;
+        if after > before {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    drop(permits);
+    assert_eq!(after, before + 1, "the detached finish is counted once");
+    let logged = signal_lines(&capture.text())
+        .into_iter()
+        .filter(|(s, c)| (s.as_str(), c.as_str()) == pair)
+        .count();
+    assert_eq!(logged, 1, "and logged once");
+}

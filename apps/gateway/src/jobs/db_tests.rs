@@ -768,3 +768,59 @@ async fn object_visibility_matrix_for_video_jobs(pool: PgPool) {
         }
     }
 }
+
+/// #497 on real PostgreSQL: the job poller's claim with every pooled
+/// connection busy, or timing out on a lock, is counted once at the
+/// `job_storage` stage with its cause; a claim that runs records nothing.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_failed_job_claim_names_its_cause(pool: PgPool) {
+    use crate::db::{
+        accounting_failure::tests::labels,
+        diagnostics::{self, Handle},
+    };
+    use sqlx::Connection;
+    let store = Store::new(
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(std::time::Duration::from_millis(300))
+            .after_connect(|connection, _| {
+                Box::pin(async move {
+                    sqlx::query("SET lock_timeout = '200ms'")
+                        .execute(connection)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect_with((*pool.connect_options()).clone())
+            .await
+            .unwrap(),
+    );
+    let jobs = Jobs::with(store, ProviderRegistry::default(), JobLimits::default());
+    let poll = || async {
+        let handle = Handle::new();
+        let polled = diagnostics::scope(handle.clone(), jobs.poll_once()).await;
+        (polled, labels(&handle.signals()))
+    };
+    let (polled, signals) = poll().await;
+    assert_eq!(polled, Ok(0));
+    assert!(signals.is_empty(), "nothing is recorded on success");
+
+    let held = jobs.store.pool.acquire().await.unwrap();
+    let (polled, signals) = poll().await;
+    drop(held);
+    assert_eq!(polled, Err(InferenceError::Storage));
+    assert_eq!(signals, [("job_storage", "pool_timeout")]);
+
+    let mut blocker = sqlx::PgConnection::connect_with(&pool.connect_options())
+        .await
+        .unwrap();
+    sqlx::raw_sql("BEGIN; LOCK TABLE async_jobs IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut blocker)
+        .await
+        .unwrap();
+    let (polled, signals) = poll().await;
+    sqlx::query("ROLLBACK").execute(&mut blocker).await.unwrap();
+    blocker.close().await.unwrap();
+    assert_eq!(polled, Err(InferenceError::Storage));
+    assert_eq!(signals, [("job_storage", "lock_timeout")]);
+}
