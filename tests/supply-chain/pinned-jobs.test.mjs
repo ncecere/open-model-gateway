@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SHA, actionName, loadWorkflow, parseStrict, readLocalFromRepo, stepsOf, toData } from "./lib.mjs";
-import { PINNED_JOB_INPUTS, PINNED_JOBS_FILE, currentPins, pinnedJobInputViolations, npmrcViolations, pinnedJobViolations, pinnedNpmViolations, pythonIsolationViolations, readPinnedJobs, stagingCandidateViolations, stagingOverlayFiles } from "./policy.mjs";
+import { PINNED_JOB_INPUTS, PINNED_JOBS_FILE, currentPins, invisibleCharacterViolations, stagingTextFiles, pinnedJobInputViolations, npmrcViolations, pinnedJobViolations, pinnedNpmViolations, pythonIsolationViolations, readPinnedJobs, stagingCandidateViolations, stagingOverlayFiles } from "./policy.mjs";
 
 const CHECKOUT = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const DOWNLOAD = "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333";
@@ -197,3 +197,67 @@ test("every Python program a pinned job runs is started isolated (-I)", () => {
   }
   assert.deepEqual(pythonIsolationViolations(currentPins(readMutated("ci", d => afterScan(d, { run: "python3 -I scripts/staging.py status" })))), []);
 });
+
+// ---- invisible characters, the staging.env keys, and the npm scripts the pinned jobs run ----
+
+test("the staging files and the files the pinned jobs run have no invisible line separators", () => {
+  const files = stagingTextFiles();
+  for (const file of ["deploy/staging/staging.env.example", "deploy/staging/compose.yaml", "deploy/staging/compose.oidc.yaml", "scripts/staging.py", ".github/scripts/oci-stage.py"]) assert.ok(files.includes(file), file);
+  assert.deepEqual(invisibleCharacterViolations(), []);
+});
+const INVISIBLE = [["\\x1c (file separator)", "\x1c"], ["\\x0b (vertical tab)", "\x0b"], ["\\x0c (form feed)", "\x0c"], ["\\x85 (next line)", "\x85"], ["U+2028", " "], ["U+2029", " "], ["\\r", "\r"], ["\\x00", "\x00"]];
+for (const [label, ch] of INVISIBLE) {
+  test(`staging.env.example refuses ${label} hiding a line in a comment`, () => {
+    const text = `${EXAMPLE}# note${ch}DOCKER_HOST=tcp://evil:2375\n`;
+    assert.match(invisibleCharacterViolations({ "deploy/staging/staging.env.example": text }).join(), /staging\.env\.example:\d+: a control character or line separator/);
+  });
+}
+test("a listed input file refuses an invisible line separator", () => {
+  assert.match(invisibleCharacterViolations({ "scripts/staging.py": "x = 1 y = 2\n" }).join(), /scripts\/staging\.py:1:/);
+});
+
+const UNLISTED_KEYS = ["PATH=/tmp/evil", "LD_PRELOAD=/tmp/evil.so", "COMPOSE_PROFILES=ops", "STAGING_EXTRA=1"];
+for (const line of UNLISTED_KEYS) {
+  test(`staging.env.example refuses a key that is not allowed: ${line.split("=")[0]}`, () => {
+    assert.match(candidate(`${EXAMPLE}\n${line}\n`).join(), /is not an allowed staging\.env key/);
+  });
+}
+test("staging.env.example accepts a single-quoted value, as staging.py does", () => {
+  assert.deepEqual(candidate(EXAMPLE.replace("GATEWAY_IMAGE=open-model-gateway:staging", "GATEWAY_IMAGE='open-model-gateway:staging'")), []);
+});
+
+const ciRead = readMutated("ci", () => {});
+const packagesWith = scripts => { const p = PACKAGES(); Object.assign(p["package.json"].scripts, scripts); return p; };
+test("the pinned jobs' npm scripts are pinned with their exact command text", () => {
+  const changed = pinnedJobViolations(currentPins(ciRead, packagesWith({ "test:container": `${PACKAGES()["package.json"].scripts["test:container"]} && node -e 1` })), readPinnedJobs());
+  assert.match(changed.join(), /package\.json.*test:container.*update the pinned job/);
+});
+const NPM_SPELLINGS = [
+  ["npm run", "npm run helper"], ["npm run-script", "npm run-script helper"], ["npm rum", "npm rum helper"], ["npm urn", "npm urn helper"],
+  ["npm -w apps/web run", "npm -w apps/web run helper"], ["npm --workspace=apps/web run", "npm --workspace=apps/web run helper"], ["npm --prefix apps/web run", "npm --prefix apps/web run helper"],
+];
+for (const [label, command] of NPM_SPELLINGS) {
+  test(`a script reached through ${label} is pinned with its text and refuses pre and post hooks`, () => {
+    const withHelper = text => { const p = packagesWith({ "test:container": command, helper: text }); p["apps/web/package.json"].scripts.helper = text; return p; };
+    const before = currentPins(ciRead, withHelper("node a.js")), after = currentPins(ciRead, withHelper("node b.js"));
+    assert.ok(pinnedJobViolations(after, before).some(v => /helper/.test(v)), "a changed helper is a pin difference");
+    const hooked = withHelper("node a.js");
+    hooked["package.json"].scripts.prehelper = "true";
+    hooked["apps/web/package.json"].scripts.prehelper = "true";
+    assert.match(pinnedNpmViolations(currentPins(ciRead, hooked), hooked).join(), /prehelper runs with/);
+  });
+}
+for (const [label, command, script] of [["npm start", "npm start", "start"], ["npm t", "npm t", "test"], ["npm restart", "npm restart", "restart"]]) {
+  test(`a script reached through ${label} is pinned with its text`, () => {
+    const before = currentPins(ciRead, packagesWith({ "test:container": command, [script]: "node a.js" })), after = currentPins(ciRead, packagesWith({ "test:container": command, [script]: "node b.js" }));
+    assert.ok(pinnedJobViolations(after, before).some(v => v.includes("npm_scripts")), "a changed script is a pin difference");
+  });
+}
+for (const spelling of ["it", "install-test", "isntall", "add", "ic", "clean-install"]) {
+  test(`npm ${spelling} in a pinned job refuses install scripts`, () => {
+    const packages = PACKAGES();
+    packages["package.json"].scripts.prepare = "node x.cjs";
+    const pins = currentPins(readMutated("ci", d => afterScan(d, { run: `npm ${spelling}` })), packages);
+    assert.match(pinnedNpmViolations(pins, packages).join(), /runs during npm ci/);
+  });
+}

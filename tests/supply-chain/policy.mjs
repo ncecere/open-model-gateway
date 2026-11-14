@@ -801,3 +801,7 @@ export const buildChecks = (name, data) => imageBuildViolations(`.github/workflo
 export const actionChecks = (name, data, options) => actionPolicyViolations(`.github/workflows/${name}.yml`, data, options);
 export const withStep = (name, job, step) => { const data = structuredClone(loadWorkflow(name)); data.jobs[job].steps.push(step); return data; };
 export const stepOf = (job, action) => stepsOf(job).find(s => actionName(s.uses ?? "") === action);
+
+// Implemented in the next commit; the fixtures show what it must refuse.
+export function invisibleCharacterViolations() { return []; }
+export const stagingTextFiles = () => [];

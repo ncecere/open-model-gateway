@@ -49,6 +49,15 @@ class StagingTests(unittest.TestCase):
             (state / "staging.env").write_text("GATEWAY_IMAGE=open-model-gateway:staging\nA=1\n")
             self.assertEqual(staging.settings(state)["GATEWAY_IMAGE"], "open-model-gateway:staging")
 
+    def test_settings_refuse_invisible_line_separators(self):
+        # splitlines() also breaks lines at these, so a comment could hide a setting (#488).
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder)
+            for separator in ("\x1c", "\x0b", "\x0c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029", "\r", "\x00"):
+                (state / "staging.env").write_text("GATEWAY_IMAGE=open-model-gateway:staging\n# note" + separator + "DOCKER_HOST=tcp://evil:2375\n", newline="")
+                with self.assertRaises(ValueError, msg=repr(separator)):
+                    staging.settings(state)
+
     def test_overlays_are_explicit_not_enabled_by_placeholder_values(self):
         base = staging.compose(Path("/state"), "omg-staging-ci", {})
         self.assertEqual(base.count("-f"), 1)
