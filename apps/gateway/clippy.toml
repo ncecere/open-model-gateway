@@ -9,6 +9,13 @@
 # trust, is rejected outside `src/egress.rs`. Clippy resolves these paths by
 # name resolution, so aliases, re-exports (`openidconnect::reqwest`) and
 # renamed imports are covered.
+#
+# Randomness (#511): every secret, nonce and token is drawn through
+# `crate::entropy` (the OS CSPRNG, failing closed). The entropy source scan
+# (`entropy.rs` tests) finds generators by name (`rand`, `OsRng`, ...); the
+# library calls below draw randomness without such a name, so they are
+# refused here by path. `Uuid::new_v4`/`now_v7` stay allowed: identifiers and
+# fencing values only, never a secret (docs/threat-model.md KEY-10).
 disallowed-methods = [
   { path = "sqlx::Pool::begin", reason = "use crate::db::begin (cancellation-safe)" },
   { path = "sqlx::Pool::begin_with", reason = "use crate::db::begin_with_setup (cancellation-safe)" },
@@ -35,4 +42,24 @@ disallowed-methods = [
   { path = "reqwest::ClientBuilder::tls_built_in_native_certs", reason = "TLS trust changes only in crate::egress (see crate::egress::client_builder) (#509)", allow-invalid = true },
   { path = "reqwest::ClientBuilder::add_root_certificate", reason = "use crate::egress::add_root_certificates on a crate::egress::client_builder (#509)" },
   { path = "reqwest::ClientBuilder::hickory_dns", reason = "crate::egress::client_builder sets the egress resolver (#509)", allow-invalid = true },
+  { path = "tungstenite::handshake::client::generate_key", reason = "draw secrets and nonces with crate::entropy, not tungstenite's ThreadRng (#511)" },
+  { path = "rustls::crypto::SecureRandom::fill", reason = "draw secrets and nonces with crate::entropy, not the TLS provider's generator (#511)" },
+  { path = "crypto_common::Generate::generate", reason = "draw keys and nonces with crate::entropy (fails closed; this panics) (#511)", allow-invalid = true },
+  { path = "crypto_common::Generate::try_generate", reason = "draw secrets and nonces with crate::entropy (#511)", allow-invalid = true },
+  { path = "crypto_common::Generate::generate_from_rng", reason = "draw secrets and nonces with crate::entropy (#511)", allow-invalid = true },
+  { path = "crypto_common::Generate::try_generate_from_rng", reason = "draw secrets and nonces with crate::entropy (#511)", allow-invalid = true },
+  { path = "crypto_common::KeyInit::generate_key", reason = "draw secrets and nonces with crate::entropy (#511)", allow-invalid = true },
+  { path = "crypto_common::KeyIvInit::generate_key", reason = "draw secrets and nonces with crate::entropy (#511)", allow-invalid = true },
+  { path = "crypto_common::KeyIvInit::generate_iv", reason = "draw secrets and nonces with crate::entropy (#511)", allow-invalid = true },
+  { path = "crypto_common::KeyIvInit::generate_key_iv", reason = "draw secrets and nonces with crate::entropy (#511)", allow-invalid = true },
+  { path = "oauth2::CsrfToken::new_random", reason = "build OAuth state with CsrfToken::new from crate::entropy (#511)" },
+  { path = "oauth2::CsrfToken::new_random_len", reason = "build OAuth state with CsrfToken::new from crate::entropy (#511)" },
+  { path = "oauth2::PkceCodeChallenge::new_random_sha256", reason = "build the PKCE verifier with PkceCodeVerifier::new from crate::entropy (#511)" },
+  { path = "oauth2::PkceCodeChallenge::new_random_sha256_len", reason = "build the PKCE verifier with PkceCodeVerifier::new from crate::entropy (#511)" },
+  { path = "oauth2::PkceCodeChallenge::new_random_plain", reason = "build the PKCE verifier with PkceCodeVerifier::new from crate::entropy (#511)", allow-invalid = true },
+  { path = "openidconnect::Nonce::new_random", reason = "build the OIDC nonce with Nonce::new from crate::entropy (#511)" },
+  { path = "openidconnect::Nonce::new_random_len", reason = "build the OIDC nonce with Nonce::new from crate::entropy (#511)" },
+  { path = "std::hash::RandomState::new", reason = "randomly keyed hashes are not secrets; draw them with crate::entropy (#511)" },
+  { path = "std::collections::HashMap::hasher", reason = "a map's RandomState is randomly keyed; draw randomness with crate::entropy (#511)" },
+  { path = "std::collections::HashSet::hasher", reason = "a set's RandomState is randomly keyed; draw randomness with crate::entropy (#511)" },
 ]

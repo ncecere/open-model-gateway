@@ -13,6 +13,21 @@
 //! transitively and used by tungstenite only for WebSocket masking and
 //! handshake keys; no gateway secret is drawn from it. `StdRng` is used only
 //! by routing for its seeded, non-secret weighted choice.
+//!
+//! Two guards keep secrets here. The source scan in this module's tests
+//! refuses generators by name (`rand`, `OsRng`, `RandomState`,
+//! `/dev/urandom`, ...) outside this file. Library calls that draw randomness
+//! without such a name (tungstenite's `generate_key`, `aead::Generate`,
+//! openidconnect's `new_random` constructors, rustls's `SecureRandom::fill`,
+//! `RandomState::new`) are `disallowed-methods` in `clippy.toml`, resolved by
+//! path (#511). OAuth state, the OIDC nonce and the PKCE verifier are drawn
+//! here and passed to the `new` constructors (`identity/login.rs`).
+//!
+//! `Uuid::new_v4()` and `Uuid::now_v7()` are allowed for identifiers only:
+//! row ids, the public id half of a key token, lease and claim fencing
+//! tokens compared in SQL, multipart boundaries and event ids. A value that
+//! must be unguessable to protect anything (a credential, a token that
+//! authorizes on its own, a key or a nonce) is drawn here, never from a UUID.
 use std::fmt;
 
 use rand::{TryRng, rngs::SysRng};
@@ -144,9 +159,13 @@ mod tests {
     /// crates under and beside it, other generator crates, and generators by
     /// name (`thread_rng_n` is tokio's, public as
     /// `tokio::macros::support::thread_rng_n`). A name is matched whole, so
-    /// each one is listed. An API that draws without one of these names
-    /// (`Uuid::new_v4()`) is outside this scan (#511).
-    const NEEDLES: [&str; 17] = [
+    /// each one is listed. The last three name what Clippy cannot refuse by
+    /// path (#511): rustls's `CryptoProvider::secure_random` field, any
+    /// `RandomState` (std's through `Default`, `ahash`, `foldhash`) and
+    /// `/dev/urandom` (`/dev/random` is matched in [`names`]). Library calls
+    /// that draw without any of these names are on the `clippy.toml` list
+    /// ([`CLIPPY_LIST`]); `Uuid::new_v4()` is allowed for identifiers only.
+    const NEEDLES: [&str; 20] = [
         "rand",
         "rand_core",
         "rand_chacha",
@@ -164,6 +183,9 @@ mod tests {
         "thread_rng_n",
         "StdRng",
         "SmallRng",
+        "secure_random",
+        "RandomState",
+        "urandom",
     ];
 
     /// The length in tokens of the test module that starts at `trees[0]`:
@@ -240,6 +262,15 @@ mod tests {
     fn names(text: &str, found: &mut BTreeSet<&'static str>) {
         for word in text.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
             found.extend(NEEDLES.iter().filter(|needle| **needle == word));
+        }
+        // `random` alone is an ordinary word; only the device path counts.
+        let device = text.split("/dev/").skip(1).any(|rest| {
+            rest.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .next()
+                .is_some_and(|word| word == "random")
+        });
+        if device {
+            found.insert("/dev/random");
         }
     }
 
@@ -510,9 +541,10 @@ mod tests {
     /// `clippy.toml` whose reason names this module (#511).
     #[test]
     fn clippy_disallows_randomness_that_names_no_generator() {
-        let config =
-            std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("clippy.toml"))
-                .unwrap();
+        let config = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("clippy.toml"),
+        )
+        .unwrap();
         for path in CLIPPY_LIST {
             let entry = format!("{{ path = \"{path}\", reason = \"");
             let line = config
@@ -544,7 +576,10 @@ mod tests {
                 "fn a(p: &rustls::crypto::CryptoProvider) { let _ = p.secure_random; }",
                 vec!["secure_random"],
             ),
-            ("use std::collections::hash_map::RandomState;", vec!["RandomState"]),
+            (
+                "use std::collections::hash_map::RandomState;",
+                vec!["RandomState"],
+            ),
             (
                 "fn a() { let _ = <ahash::RandomState as Default>::default(); }",
                 vec!["RandomState"],
