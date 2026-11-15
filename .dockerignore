@@ -43,6 +43,14 @@
 **/.git/**
 **/.env
 **/.env.*
+**/*.env
+**/*.env.*
+**/.envrc
+**/.netrc
+**/.pgpass
+**/.git-credentials
+**/.local
+**/.local/**
 **/node_modules
 **/node_modules/**
 **/target

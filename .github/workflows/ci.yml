@@ -25,7 +25,8 @@ permissions:
 # allowlist in tests/supply-chain.test.mjs. Node, helm, kubeconform and age are
 # pinned releases fetched by .github/scripts/fetch-verified.sh, which checks a
 # SHA-256 written in the workflow (.github/actions/setup-node, the helm job, the
-# backup tests). No job installs operating-system packages at run time (#491).
+# backup tests, the secret-scan job's gitleaks). No job installs operating-system
+# packages at run time (#491).
 
 jobs:
   gateway-lint:
@@ -273,6 +274,129 @@ jobs:
             npm audit || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Secret scanning (#596, docs/verification.md "Secret scanning"): gitleaks over the
+  # commits of a pull request or push and over the final tree. Its own job so that no
+  # project code (apart from fetch-verified.sh) and no third-party action runs next to
+  # it; the token is read-only. The scanner is a pinned release fetched by the
+  # checksum-verifying script.
+  secret-scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      EVENT_NAME: ${{ github.event_name }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      BEFORE_SHA: ${{ github.event.before }}
+      AFTER_SHA: ${{ github.sha }}
+    steps:
+      # The whole history, so every commit of the range is there (a secret added in one
+      # commit and removed in the next is still in the range) and a forced or first push
+      # can be scanned from the start.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # gitleaks 8.30.1 (MIT). The SHA-256 is the linux_x64 line of the release's
+      # gitleaks_8.30.1_checksums.txt, which also equals the digest GitHub records for the asset.
+      - name: Install gitleaks (pinned release, SHA-256 verified)
+        run: |
+          set -euo pipefail
+          bash .github/scripts/fetch-verified.sh https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb "${RUNNER_TEMP}/gitleaks.tar.gz"
+          mkdir -p "${RUNNER_TEMP}/gitleaks-bin"
+          tar -xzf "${RUNNER_TEMP}/gitleaks.tar.gz" -C "${RUNNER_TEMP}/gitleaks-bin" gitleaks
+          echo "${RUNNER_TEMP}/gitleaks-bin" >> "${GITHUB_PATH}"
+          "${RUNNER_TEMP}/gitleaks-bin/gitleaks" version
+      # Pull request: base..head, every commit the pull request adds (a merge of main into
+      # the branch is excluded by the base). Push: before..after; a new ref or a force push
+      # whose old tip is gone is scanned from the whole history. `-m` shows a merge commit's
+      # changes (plain `git log -p` shows none) and `--text` scans files that a .gitattributes
+      # `-diff` or a NUL byte would hide. The tree scan covers the final state. Findings print
+      # as rule, file, line and commit only (a report template, never the matched line), the
+      # secret is redacted, an inline gitleaks:allow comment is ignored, and any finding fails
+      # the job. The canaries prove, with this same config and these same options, that both
+      # the git and the dir paths still detect each rule.
+      - name: Scan the commits and the tree for secrets
+        run: |
+          set -euo pipefail
+          zeros=0000000000000000000000000000000000000000
+          work="$(mktemp -d)"
+          trap 'rm -rf "${work}"' EXIT
+          printf '%s\n' '{{ range . }}finding rule={{ .RuleID }} file={{ .File }} line={{ .StartLine }} commit={{ .Commit }}' '{{ end }}' > "${work}/report.tmpl"
+          common=(--config .gitleaks.toml --redact --no-banner --no-color --ignore-gitleaks-allow --log-level info --report-format template --report-template "${work}/report.tmpl" --report-path -)
+          plant() {
+            printf 'aws_access_key_id = %s%s\n' AKIA ZR7QXMLK3PWNB5TD > "$1/aws.txt"
+            printf 'token = omg_%s.%s\n' "$(printf 'ab%.0s' {1..16})" "$(printf 'cd%.0s' {1..32})" > "$1/gateway.txt"
+            printf 'Cookie: omg_session=%s\n' "$(printf 'ef%.0s' {1..32})" > "$1/session.txt"
+            printf 'GATEWAY_FILE_KEYS=canary:%s%s=\n' "$(printf 'Aq9Zk3Lm%.0s' {1..5})" Wxy > "$1/filekey.txt"
+            printf 'url = postgres://svc:%s@db.internal:5432/app\n' K9m2Xv7Qp4Zr8 > "$1/url.txt"
+            printf '%s_%s = "%s"\n' API KEY k8Jd2Qm7Xv4Zp9Lr3Wt6Yb1Nc5 > "$1/api.txt"
+            { printf -- '-----%s PRIVATE KEY-----\n' BEGIN; printf 'QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=%.0s\n' {1..3}; printf -- '-----%s PRIVATE KEY-----\n' END; } > "$1/key.pem"
+          }
+          expect_rules() {
+            for rule in aws-access-token omg-gateway-key omg-session-cookie omg-file-encryption-key omg-url-credentials generic-api-key private-key; do
+              grep -q "finding rule=${rule} " <<<"$2" || { echo "canary ($1): rule ${rule} did not fire, so the scanner or its config is broken" >&2; exit 1; }
+            done
+          }
+          mkdir "${work}/dir-canary" "${work}/git-canary"
+          plant "${work}/dir-canary"
+          if report="$(gitleaks dir "${common[@]}" "${work}/dir-canary" 2>/dev/null)"; then
+            echo "canary (dir): nothing was detected, so the scanner or its config is broken" >&2
+            exit 1
+          fi
+          expect_rules dir "${report}"
+          plant "${work}/git-canary"
+          printf '*.txt -diff\n' > "${work}/git-canary/.gitattributes"
+          git -C "${work}/git-canary" init -q
+          git -C "${work}/git-canary" add -A
+          git -C "${work}/git-canary" -c user.name=canary -c user.email=canary@example.invalid -c commit.gpgsign=false commit -q -m canary
+          if report="$(gitleaks git "${common[@]}" --log-opts="-m --text HEAD" "${work}/git-canary" 2>/dev/null)"; then
+            echo "canary (git): nothing was detected, so the scanner or its config is broken" >&2
+            exit 1
+          fi
+          expect_rules git "${report}"
+          is_commit() {
+            [[ "$1" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "$1^{commit}" 2>/dev/null
+          }
+          case "${EVENT_NAME}" in
+            pull_request)
+              is_commit "${BASE_SHA}" || { echo "BASE_SHA is not a commit of this checkout" >&2; exit 1; }
+              is_commit "${HEAD_SHA}" || { echo "HEAD_SHA is not a commit of this checkout" >&2; exit 1; }
+              range="${BASE_SHA}..${HEAD_SHA}"
+              ;;
+            push)
+              is_commit "${AFTER_SHA}" || { echo "AFTER_SHA is not a commit of this checkout" >&2; exit 1; }
+              if [ "${BEFORE_SHA}" = "${zeros}" ]; then
+                range="${AFTER_SHA}"
+              elif [[ "${BEFORE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+                if is_commit "${BEFORE_SHA}"; then range="${BEFORE_SHA}..${AFTER_SHA}"; else range="${AFTER_SHA}"; fi
+              else
+                echo "BEFORE_SHA is neither a commit id nor the zero id" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "unexpected event ${EVENT_NAME}" >&2
+              exit 1
+              ;;
+          esac
+          commits="$(git rev-list --count "${range}")"
+          if [ "${commits}" -eq 0 ]; then
+            echo "range ${range} holds no commits; nothing to scan in the history, scanning the tree"
+          else
+            echo "scanning ${commits} commits of ${range}"
+            status=0
+            gitleaks git "${common[@]}" --log-opts="-m --text ${range}" . 2>"${work}/gitleaks.log" || status=$?
+            cat "${work}/gitleaks.log" >&2
+            [ "${status}" -eq 0 ] || exit "${status}"
+            # gitleaks exits 0 when its git log fails; it did not get that far if it never
+            # reports the number of commits it scanned. (The number is not compared with
+            # rev-list: it leaves out commits without added lines, such as pure renames.)
+            grep -Eq '[0-9]+ commits scanned' "${work}/gitleaks.log" || { echo "gitleaks did not report scanning any commits" >&2; exit 1; }
+          fi
+          gitleaks dir "${common[@]}" .
 
   browser:
     # Playwright (Chromium) against the real gateway binary + built SPA, a disposable

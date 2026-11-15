@@ -11,11 +11,23 @@ coverage/
 *.log
 *.dump
 /image*.png
-/.local/
+.local/
 __pycache__/
 
-# Local provider keys (never commit)
+# Local provider keys and any other environment file (never commit). `ai.env` stays
+# listed by name; `*.env` also covers `boat.env` and every other `<name>.env`, which
+# `.env` and `.env.*` do not match (#596). The tracked examples end in `.example`.
 ai.env
+*.env
+# `<name>.env.local`, `<name>.env.production` and the like; the tracked examples end in
+# `.example`, which the re-include below keeps tracked.
+*.env.*
+!*.example
+# Credential files that tools and people keep in a working copy.
+.envrc
+.netrc
+.pgpass
+.git-credentials
 
 # Local screenshots of third-party accounts (may contain account details)
 _images/

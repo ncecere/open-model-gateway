@@ -1,0 +1,141 @@
+# Secret scanning (#596). One config for CI (`secret-scan` job in .github/workflows/ci.yml)
+# and the optional local hook (scripts/secret-scan.py). Pinned scanner: docs/verification.md.
+#
+# The scanner's default rules stay on. This file adds the gateway's own key shapes and a
+# deliberately narrow allowlist. Rules for the allowlist, enforced by
+# tests/supply-chain/secret-scan.test.mjs:
+#   - one exact file per entry (an anchored path, never a directory or a glob);
+#   - the exact value, or the commit for text that is no longer in the tree;
+#   - `condition = "AND"` (the default OR would let the path alone allow the whole file);
+#   - the rule it silences, and the reason.
+# Never allowlist a real credential: rotate it first (docs/verification.md, "Secret scanning").
+# Inline `gitleaks:allow` comments are switched off in CI and the hook, so this file is the
+# only place a finding can be accepted.
+
+title = "open-model-gateway secret scanning"
+
+[extend]
+useDefault = true
+
+# Inference API keys (`omg_<32 hex>.<64 hex>`, apps/gateway/src/auth.rs) and admin tokens
+# (`omg_admin_<32 hex>.<64 hex>`, apps/gateway/src/admin_tokens.rs). The shapes are exact
+# (101 and 107 characters), so a hit is a key and not a lookalike. No word-boundary
+# anchors: a key glued to an identifier (`pre_omg_...`) is still a key.
+[[rules]]
+id = "omg-gateway-key"
+description = "Open Model Gateway inference API key or admin token"
+regex = '''omg_(?:admin_)?[0-9a-f]{32}\.[0-9a-f]{64}'''
+keywords = ["omg_"]
+tags = ["key", "open-model-gateway"]
+
+# Browser session and CSRF cookie values (`omg_session=` and `omg_csrf=` followed by the
+# 64 hex characters of `entropy::hex_token`, apps/gateway/src/identity.rs).
+[[rules]]
+id = "omg-session-cookie"
+description = "Open Model Gateway browser session or CSRF cookie value"
+regex = '''omg_(?:session|csrf)=[0-9a-f]{64}'''
+keywords = ["omg_session", "omg_csrf"]
+tags = ["session", "open-model-gateway"]
+
+# File-store master keys: `<key id>:<base64 of 32 bytes>` held in the environment variable
+# that GATEWAY_FILE_ENCRYPTION_KEYS_ENV names (docs use GATEWAY_FILE_KEYS;
+# apps/gateway/src/filestore/crypto.rs `KeyRing::parse`). The variable name is the
+# operator's choice, so the rule keys on a name that contains FILE and KEY and takes the
+# 44-character value (43 base64 characters and one `=`) after it.
+[[rules]]
+id = "omg-file-encryption-key"
+description = "Open Model Gateway file-store master key (key id and base64 of 32 bytes)"
+regex = '''(?i)[a-z0-9_]*file[a-z0-9_]*key[a-z0-9_]*["']?\s*[=:]\s*["']?([a-z0-9][a-z0-9._-]{0,31}:[A-Za-z0-9+/]{43}=)'''
+secretGroup = 1
+keywords = ["file"]
+tags = ["key", "open-model-gateway"]
+
+# A password inside a URL (`scheme://user:password@host`), such as a database URL: at least
+# 12 characters without `$`, `{`, `<`, `*` or brackets (so `$VAR`, `${VAR}` and `<placeholder>`
+# forms are not read as passwords) and entropy of at least 3.0, which leaves out short or
+# repetitive placeholders (`postgres`, `gateway`, `password`). A low-entropy real password
+# is not found.
+[[rules]]
+id = "omg-url-credentials"
+description = "Password in a URL (scheme://user:password@host)"
+regex = '''(?i)[a-z][a-z0-9+.-]{1,20}://[^\s:@/'"<>$`{}()\[\]\\]{1,64}:([^\s:@/'"<>$`{}()\[\]\\*]{12,})@[a-z0-9.\[\]-]'''
+secretGroup = 1
+entropy = 3.0
+keywords = ["://"]
+tags = ["password", "url"]
+
+# ---- Allowlist: known test fixtures and false positives ----
+# Every regex is anchored ^...$ to the whole text the scanner matched (its "secret", or
+# for regexTarget = "match" the whole match), so a different value that merely contains
+# the fixture does not qualify.
+
+[[allowlists]]
+description = "Test-only P-256 private key of the receiver certificate SERVER_CERT (CN omg-test-receiver, SAN 127.0.0.1 and localhost; WRONG_NAME_CERT reuses the key), in the cfg(test) module `pki` of apps/gateway/src/audit_export.rs. Published as a fixture; protects nothing."
+condition = "AND"
+targetRules = ["private-key"]
+paths = ['''^apps/gateway/src/audit_export\.rs$''']
+regexes = ['''^-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgNM/I9lDtGbEloYt9\n3ysQIi9VLLr5aUIHS3WiNMGDC/GhRANCAASiVE86kAJfNhv79gQMCuyFa7KB/wbt\nGbFOhq1PTfv/m02/lJ7eEdw/a6NHAuIjOgCKw9ldRHJjc6iMkh5Zus\+2\n-----END PRIVATE KEY-----$''']
+
+[[allowlists]]
+description = "Test-only P-256 private key of the client certificate CLIENT_CERT in the cfg(test) module `pki` of apps/gateway/src/audit_export.rs, used by the audit exporter's mutual-TLS tests. Published as a fixture; protects nothing."
+condition = "AND"
+targetRules = ["private-key"]
+paths = ['''^apps/gateway/src/audit_export\.rs$''']
+regexes = ['''^-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgAxk2rqE1tw7NMsZd\n8dO9d4Hs6FWuIakUar1baq6OH0OhRANCAAQaZK7/hkSw3WAqlb2FAsjOSmj64iKa\nPQRhI\+zyaFt0RDFdpYeRxeNUjnyCkqAfcm7oPDyqLNrA5LrQoU1mak4V\n-----END PRIVATE KEY-----$''']
+
+[[allowlists]]
+description = "Test-only Ed25519 private key for the mock OIDC provider (constant TEST_KEY in apps/gateway/src/identity/tests.rs, a test module; its comment says it is never used outside the mock provider). Published as a fixture; protects nothing."
+condition = "AND"
+targetRules = ["private-key"]
+paths = ['''^apps/gateway/src/identity/tests\.rs$''']
+regexes = ['''^-----BEGIN PRIVATE KEY-----\\nMC4CAQAwBQYDK2VwBCIEICWeYPLxoZKHZlQ6rkBi11E9JwchynXtljATLqym/XS9\\n-----END PRIVATE KEY-----$''']
+
+[[allowlists]]
+description = "Placeholder gateway key made of the digits 0123456789abcdef repeated, a constant in the realtime protocol unit tests (apps/gateway/src/protocols/realtime/tests.rs); it never matched a real key."
+condition = "AND"
+targetRules = ["omg-gateway-key"]
+paths = ['''^apps/gateway/src/protocols/realtime/tests\.rs$''']
+regexes = ['''^omg_0123456789abcdef0123456789abcdef\.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$''']
+
+[[allowlists]]
+description = "Base64 of the ASCII text 'secret-key-material-never-printed', a canary string in the backup tests that the tests assert is never printed (tests/backup.test.py)."
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/backup\.test\.py$''']
+regexes = ['''^c2VjcmV0LWtleS1tYXRlcmlhbC1uZXZlci1wcmludGVk$''']
+
+[[allowlists]]
+description = "A URL path (an SDK base URL with a port and prefix) in a web unit test, matched by the generic key rule because of the word 'prefix' (apps/web/src/components/inference-base-url.test.tsx)."
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^apps/web/src/components/inference-base-url\.test\.tsx$''']
+regexes = ['''^8443/prefix/v1/blue/v1$''']
+
+[[allowlists]]
+description = "The SHA-256 of the copied UI registry file tokens.css in the Bitop lock file, matched by the generic key rule because the file name contains 'tokens' (apps/web/bitop-lock.json). Matched on the whole match text, the file name and a 64-digit hex value, so a refreshed hash stays allowed; it excuses nothing else in that file."
+condition = "AND"
+targetRules = ["generic-api-key"]
+regexTarget = "match"
+paths = ['''^apps/web/bitop-lock\.json$''']
+regexes = ['''^tokens\.css": "[0-9a-f]{64}"$''']
+
+[[allowlists]]
+description = "Marker passwords in connection-string fixtures that the startup integration tests assert are never printed or dialed: private-database-marker, password-sensitive, never-dialed-marker and credential-canary, on 127.0.0.1:1 or .example hosts (apps/gateway/tests/startup.rs)."
+condition = "AND"
+targetRules = ["omg-url-credentials"]
+paths = ['''^apps/gateway/tests/startup\.rs$''']
+regexes = ['''^(?:private-database-marker|password-sensitive|never-dialed-marker|credential-canary)$''']
+
+[[allowlists]]
+description = "The marker password canary-password in an OTLP metrics endpoint fixture on collector.invalid (apps/gateway/src/metrics_export_config_tests.rs)."
+condition = "AND"
+targetRules = ["omg-url-credentials"]
+paths = ['''^apps/gateway/src/metrics_export_config_tests\.rs$''']
+regexes = ['''^canary-password$''']
+
+[[allowlists]]
+description = "The marker password canary-password in an OTLP logs endpoint fixture on collector.invalid (apps/gateway/src/logs_export_config_tests.rs)."
+condition = "AND"
+targetRules = ["omg-url-credentials"]
+paths = ['''^apps/gateway/src/logs_export_config_tests\.rs$''']
+regexes = ['''^canary-password$''']
