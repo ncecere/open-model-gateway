@@ -14,9 +14,20 @@ impl Metrics {
             .inc();
     }
 
-    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     pub(super) async fn refresh(&self, store: &Store) {
         let pool = &store.pool;
+        self.pool_gauges(pool);
+        if self.clear_unless_metrics_lease(store) || !self.reservation_refresh_due() {
+            return;
+        }
+        self.collect_alert_email(pool).await;
+        self.collect_report_email(pool).await;
+        self.collect_alert_webhook(pool).await;
+        self.collect_reservations(pool).await;
+    }
+
+    /// Connection-pool gauges: idle, in use and the configured maximum.
+    fn pool_gauges(&self, pool: &sqlx::PgPool) {
         let size = i64::from(pool.size());
         let idle = pool.num_idle() as i64;
         self.pool_connections
@@ -27,9 +38,13 @@ impl Metrics {
             .set((size - idle).max(0));
         self.pool_max
             .set(i64::from(pool.options().get_max_connections()));
-        // Installation-wide gauge: with leased background work (serve) only
-        // the `metrics` lease holder exports it, so summing over replicas
-        // does not multiply it.
+    }
+
+    /// Installation-wide gauge: with leased background work (serve) only
+    /// the `metrics` lease holder exports it, so summing over replicas
+    /// does not multiply it. Returns true (after clearing the gauges) when
+    /// this replica does not hold the lease.
+    fn clear_unless_metrics_lease(&self, store: &Store) -> bool {
         if let Some(leases) = store.leases()
             && leases.held(crate::leases::Lease::Metrics).is_none()
         {
@@ -44,18 +59,25 @@ impl Metrics {
                 .reservations_refreshed
                 .lock()
                 .unwrap_or_else(|e| e.into_inner()) = None;
-            return;
+            return true;
         }
-        {
-            let mut refreshed = self
-                .reservations_refreshed
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if refreshed.is_some_and(|at| at.elapsed() < RESERVATION_REFRESH) {
-                return;
-            }
-            *refreshed = Some(Instant::now());
+        false
+    }
+
+    /// Whether the database gauges are due; when they are, the refresh time is taken.
+    fn reservation_refresh_due(&self) -> bool {
+        let mut refreshed = self
+            .reservations_refreshed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if refreshed.is_some_and(|at| at.elapsed() < RESERVATION_REFRESH) {
+            return false;
         }
+        *refreshed = Some(Instant::now());
+        true
+    }
+
+    async fn collect_alert_email(&self, pool: &sqlx::PgPool) {
         match tokio::time::timeout(
             Duration::from_secs(2),
             sqlx::query_as::<_, (i64, i64, i64, i64, i64, i64)>(ALERT_DELIVERY_COUNTS)
@@ -81,6 +103,9 @@ impl Metrics {
             }
             _ => self.collection_error("alert_email"),
         }
+    }
+
+    async fn collect_report_email(&self, pool: &sqlx::PgPool) {
         match tokio::time::timeout(Duration::from_secs(2), sqlx::query_as::<_,(String,i64)>("SELECT q.state,count(*) FROM (SELECT id FROM alert_deliveries WHERE report_run_id IS NOT NULL AND created_at>clock_timestamp()-interval '24 hours' ORDER BY created_at DESC,id LIMIT 1024) d JOIN alert_recipient_outbox q ON q.delivery_id=d.id GROUP BY q.state").fetch_all(pool)).await {
             Ok(Ok(rows)) => {
                 for state in ["waiting","leased","sent","failed","ineligible","exhausted","not_configured"] {
@@ -89,6 +114,9 @@ impl Metrics {
             }
             _ => self.collection_error("report_email"),
         }
+    }
+
+    async fn collect_alert_webhook(&self, pool: &sqlx::PgPool) {
         match tokio::time::timeout(
             Duration::from_secs(2),
             sqlx::query_as::<_, (String, i64, i64)>(ALERT_WEBHOOK_COUNTS).fetch_all(pool),
@@ -107,6 +135,9 @@ impl Metrics {
             }
             _ => self.collection_error("alert_webhook"),
         }
+    }
+
+    async fn collect_reservations(&self, pool: &sqlx::PgPool) {
         // The workspace lifetime totals rows (0015) count every pending and
         // unknown reservation exactly (each belongs to one workspace): one row
         // per workspace through the 0026 window index, not a scan of history.
