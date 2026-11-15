@@ -35,7 +35,7 @@ pub struct HttpClient(reqwest::Client);
 /// anchors.
 #[derive(Debug)]
 #[must_use]
-pub struct HttpClientBuilder(reqwest::ClientBuilder);
+pub(crate) struct HttpClientBuilder(reqwest::ClientBuilder);
 
 /// Compile-time proof that neither type implements `Default` (#569): if one
 /// did, `some_item` would resolve through both impls and this would not

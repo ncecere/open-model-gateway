@@ -43,9 +43,9 @@ use std::{
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
 #[path = "egress_http.rs"]
-mod http;
-pub use http::{HttpClient, HttpClientBuilder};
-pub(crate) use http::{add_root_certificates, client_builder, pinned_client_builder};
+mod client;
+pub use client::HttpClient;
+pub(crate) use client::{add_root_certificates, client_builder, pinned_client_builder};
 
 /// Env var listing the private networks the gateway may reach.
 pub const PRIVATE_ALLOW_ENV: &str = "GATEWAY_EGRESS_PRIVATE_ALLOW";

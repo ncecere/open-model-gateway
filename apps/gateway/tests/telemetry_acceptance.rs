@@ -1,6 +1,7 @@
 #![cfg(feature = "integration-tests")]
-// Test clients reach loopback test servers directly (#509: production code uses
-// `egress::client_builder`).
+// Test clients reach loopback test servers directly, as raw reqwest clients
+// (#509, #569: production code uses `egress::client_builder` and holds
+// `egress::HttpClient`).
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 //! #98 PR 3 acceptance: end-to-end collector acceptance for the bounded
 //! OTLP trace exporter (PR 1, #259) and its interactive-generation spans

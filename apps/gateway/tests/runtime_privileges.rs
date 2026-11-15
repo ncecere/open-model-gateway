@@ -1,5 +1,7 @@
 #![cfg(feature = "integration-tests")]
-// Test probes may begin transactions directly (see `src/db.rs`).
+// Test probes may begin transactions directly (see `src/db.rs`) and reach the
+// loopback gateway with raw reqwest clients (#509, #569: production code uses
+// `egress::client_builder` and holds `egress::HttpClient`).
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 //! Explicitly opt in only on the dedicated disposable PostgreSQL test cluster.
 use sqlx::PgPool;

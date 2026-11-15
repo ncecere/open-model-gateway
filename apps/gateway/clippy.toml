@@ -6,7 +6,7 @@
 # local endpoints), which disables redirects, implicit retries and ambient
 # proxies and checks every resolved address. Any other constructor, and any
 # builder method that changes destination, proxy, redirect, retry, DNS or TLS
-# trust, is rejected outside `src/egress.rs`. Clippy resolves these paths by
+# trust, is rejected outside `src/egress_http.rs`. Clippy resolves these paths by
 # name resolution, so aliases, re-exports (`openidconnect::reqwest`) and
 # renamed imports are covered.
 #
@@ -17,6 +17,8 @@
 # parameters, annotations, `Client::default()`, `<ClientBuilder as
 # Default>::default()`) outside `src/egress_http.rs`, and the two
 # `RequestBuilder` methods that hand out or take a raw client are refused.
+# Neither lint constrains `src/egress_http.rs` itself: a source test holds
+# that file to an exact list of its contents (`CLIENT_MODULE`).
 #
 # Randomness (#511): every secret, nonce and token is drawn through
 # `crate::entropy` (the OS CSPRNG, failing closed). The entropy source scan

@@ -2668,6 +2668,7 @@ dependencies = [
  "proc-macro2",
  "prometheus-client",
  "proptest",
+ "quote",
  "rand 0.10.3",
  "reqwest",
  "rustls",
