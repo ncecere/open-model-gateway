@@ -5,11 +5,22 @@ use serde_json::Value;
 pub(super) type Result<T> = std::result::Result<T, InferenceError>;
 pub(super) const BODY_LIMIT: usize = 4 * 1024 * 1024;
 const SSE_LIMIT: usize = 1024 * 1024;
-pub(super) fn transport(error: reqwest::Error) -> InferenceError {
+pub(crate) fn transport(error: reqwest::Error) -> InferenceError {
     if error.is_timeout() {
         InferenceError::Timeout
     } else {
         InferenceError::UpstreamUnavailable
+    }
+}
+/// [`transport`] for the error of a `send()`, which also counts a request
+/// lost with its connection under `client` (#483). The returned error is
+/// the same as [`transport`]'s.
+pub(crate) fn send_error(
+    client: crate::egress::UpstreamClient,
+) -> impl Fn(reqwest::Error) -> InferenceError + Copy {
+    move |error| {
+        client.lost_before_response(&error);
+        transport(error)
     }
 }
 pub(super) fn status(status: reqwest::StatusCode) -> Result<()> {

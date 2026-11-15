@@ -35,6 +35,7 @@ impl OpenAiAdapter {
             crate::egress::Purpose::Provider,
         ))
         .connect_timeout(Duration::from_secs(10))
+        .pool_idle_timeout(crate::egress::UpstreamClient::Openai.pool_idle_timeout())
         .build()
         .map_err(|_| anyhow::anyhow!("Unable to initialize provider transport"))?;
         Ok(Self {
@@ -338,6 +339,7 @@ impl ProviderAdapter for OpenAiAdapter {
 }
 
 fn transport_error(error: reqwest::Error) -> InferenceError {
+    crate::egress::UpstreamClient::Openai.lost_before_response(&error);
     if error.is_timeout() {
         InferenceError::Timeout
     } else {

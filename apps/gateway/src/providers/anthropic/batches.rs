@@ -18,7 +18,7 @@ use super::{AnthropicAdapter, decode_for, encode};
 use crate::{
     inference::{error::InferenceError, types::Deployment},
     jobs::types::*,
-    providers::framing::{body, status, transport},
+    providers::framing::{body, send_error, status, transport},
 };
 
 type Result<T> = std::result::Result<T, InferenceError>;
@@ -181,7 +181,7 @@ pub(super) async fn submit_native_batch(
         .body(reqwest::Body::wrap_stream(payload))
         .send()
         .await
-        .map_err(transport)?;
+        .map_err(send_error(crate::egress::UpstreamClient::Anthropic))?;
     status(response.status())?;
     parse_batch(&body(response).await?)
 }
@@ -208,7 +208,7 @@ async fn batch_request(
         .header("x-api-key", key)
         .send()
         .await
-        .map_err(transport)?;
+        .map_err(send_error(crate::egress::UpstreamClient::Anthropic))?;
     Ok(response)
 }
 

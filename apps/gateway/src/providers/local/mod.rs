@@ -91,7 +91,7 @@ impl LocalAdapter {
             .json(payload)
             .send()
             .await
-            .map_err(framing::transport)?;
+            .map_err(framing::send_error(crate::egress::UpstreamClient::Local))?;
         framing::status(response.status())?;
         framing::body(response).await
     }
@@ -211,7 +211,7 @@ impl ProviderAdapter for LocalAdapter {
             .json(&payload)
             .send()
             .await
-            .map_err(framing::transport)?;
+            .map_err(framing::send_error(crate::egress::UpstreamClient::Local))?;
         let response = if request.messages_options.is_some() {
             framing::generation_status(response).await?
         } else {
@@ -266,7 +266,7 @@ impl ProviderAdapter for LocalAdapter {
             .json(&payload)
             .send()
             .await
-            .map_err(framing::transport)?;
+            .map_err(framing::send_error(crate::egress::UpstreamClient::Local))?;
         framing::status(response.status())?;
         let value = framing::body(response).await?;
         if native {

@@ -35,7 +35,7 @@ Local Chat maps the gateway's effective maximum (client `max_completion_tokens`,
 
 ## Local rerank and System One
 
-Both use the connection's approved base, pinned destinations and client (no redirects, proxies or retries), and the same status mapping as local Chat (401/403/3xx → `provider_configuration_error`, 429 → `rate_limit_error`, other 4xx such as OpenJev's 422 → `upstream_rejected`, 5xx including 529 → `upstream_unavailable`). Error bodies are never read. Request support is checked before the connection, and the connection before any credential is resolved.
+Both use the connection's approved base, pinned destinations and client (no redirects, proxies or reqwest retries; see [Lost connections](operations.md#lost-connections-483) for the pool), and the same status mapping as local Chat (401/403/3xx → `provider_configuration_error`, 429 → `rate_limit_error`, other 4xx such as OpenJev's 422 → `upstream_rejected`, 5xx including 529 → `upstream_unavailable`). Error bodies are never read. Request support is checked before the connection, and the connection before any credential is resolved.
 
 | Profile | Rerank | System One |
 | --- | --- | --- |
@@ -59,7 +59,7 @@ Registry ID `openrouter`; connection profile `openrouter` (fixed base, `env:` ke
 | `GATEWAY_OPENROUTER_HTTP_REFERER` | Optional absolute http(s) URL sent as `HTTP-Referer` (attribution only). |
 | `GATEWAY_OPENROUTER_TITLE` | Optional 1–128 printable ASCII characters sent as `X-Title`. |
 
-Redirects, ambient proxies and implicit retries are disabled. Non-success bodies are never read: OpenRouter error bodies carry the account `user_id` and embedded provider errors. Statuses map to sanitized kinds: 401/402 (bad key, or no credit on the gateway's account) → `provider_configuration_error`; 403 (moderation) and other 4xx → `upstream_rejected`; 408/524 → `timeout_error`; 429 → `rate_limit_error`; 5xx → `upstream_unavailable`; 3xx → `provider_configuration_error`. A 200 body (or stream frame) carrying `error` fails by its code; a non-JSON 200 is invalid.
+Redirects, ambient proxies and implicit retries are disabled (reqwest's retry policy only: the connection pool beneath it may re-dispatch a request it never wrote, see [Lost connections](operations.md#lost-connections-483)). Non-success bodies are never read: OpenRouter error bodies carry the account `user_id` and embedded provider errors. Statuses map to sanitized kinds: 401/402 (bad key, or no credit on the gateway's account) → `provider_configuration_error`; 403 (moderation) and other 4xx → `upstream_rejected`; 408/524 → `timeout_error`; 429 → `rate_limit_error`; 5xx → `upstream_unavailable`; 3xx → `provider_configuration_error`. A 200 body (or stream frame) carrying `error` fails by its code; a non-JSON 200 is invalid.
 
 OpenRouter `:free` variants may train on prompts. Under the default `deny` they have no eligible endpoint and fail as `upstream_rejected` (upstream 404). Using them requires a Platform Admin (or the operator override) to set `allow` installation-wide.
 
@@ -160,7 +160,7 @@ Streams contain deltas, one Finish, optional cumulative Usage and one terminal D
 
 Inbound HTTP bodies are 2 MiB. Provider complete bodies are 4 MiB; SSE frames 1 MiB; Chat supports at most 128 tool-call indices. Embeddings allow 128 strings, 1 MiB aggregate input content, dimensions at most 16384, finite uniform vectors and a 4 MiB response. OpenAI-wire vectors require complete unique indices; native Ollama arrays preserve batch order.
 
-The default process concurrency cap is 128; request deadline defaults 120 seconds (1–3600 supported), connection timeout ten seconds. Durable policy/price admission occurs before dispatch. Finalization has a separate bounded storage window; crashes or failures can leave started rows for lease reconciliation. No prompts/tool arguments/output bodies are stored in execution accounting.
+The default process concurrency cap is 128; request deadline defaults 120 seconds (1–3600 supported), connection timeout ten seconds, and a per-client pool idle timeout (3 to 20 seconds, below the upstream's; see [Lost connections](operations.md#lost-connections-483)). Durable policy/price admission occurs before dispatch. Finalization has a separate bounded storage window; crashes or failures can leave started rows for lease reconciliation. No prompts/tool arguments/output bodies are stored in execution accounting.
 
 Raw usage and normalized cache partitions remain separate. Missing counters/rates never become zero. Input-only embedding output zero is semantic non-applicability. Prices and conservative holds are configured estimates, not vendor billing. See [cache pricing](cache-pricing.md) and [governance](governance.md).
 

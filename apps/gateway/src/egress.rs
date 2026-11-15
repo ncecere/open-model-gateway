@@ -46,6 +46,11 @@ use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 mod client;
 pub use client::HttpClient;
 pub(crate) use client::{add_root_certificates, client_builder, pinned_client_builder};
+#[path = "egress_upstream.rs"]
+mod upstream;
+pub(crate) use upstream::UpstreamClient;
+#[cfg(test)]
+pub(crate) use upstream::count_here;
 
 /// Env var listing the private networks the gateway may reach.
 pub const PRIVATE_ALLOW_ENV: &str = "GATEWAY_EGRESS_PRIVATE_ALLOW";
@@ -697,6 +702,14 @@ mod source_scan_tests;
 #[cfg(test)]
 #[path = "egress_client_tests.rs"]
 mod client_tests;
+
+#[cfg(test)]
+#[path = "egress_idle_tests.rs"]
+mod idle_tests;
+
+#[cfg(test)]
+#[path = "egress_wiring_tests.rs"]
+mod wiring_tests;
 
 #[cfg(test)]
 mod tests {

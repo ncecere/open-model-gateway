@@ -59,6 +59,7 @@ fn signature(current: &[u8], previous: Option<&[u8]>, t: i64, body: &[u8]) -> St
     header
 }
 fn request_failure(error: &reqwest::Error) -> Failure {
+    crate::egress::UpstreamClient::Export.lost_before_response(error);
     let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
     let mut connection = false;
     while let Some(e) = source {

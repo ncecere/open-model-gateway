@@ -40,6 +40,7 @@ impl OpenRouterCatalog {
                 crate::egress::Purpose::Catalog,
             ))
             .connect_timeout(timeout)
+            .pool_idle_timeout(crate::egress::UpstreamClient::Openrouter.pool_idle_timeout())
             .build()
             .map_err(|_| anyhow::anyhow!("Unable to initialize catalog transport"))?,
             base,
@@ -75,7 +76,7 @@ impl OpenRouterCatalog {
                 .header(reqwest::header::ACCEPT, "application/json")
                 .send()
                 .await
-                .map_err(|_| ())?;
+                .map_err(crate::egress::UpstreamClient::Openrouter.count_then(()))?;
             let json = response
                 .headers()
                 .get(reqwest::header::CONTENT_TYPE)

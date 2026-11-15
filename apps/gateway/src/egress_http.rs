@@ -23,9 +23,11 @@ use std::{sync::Arc, time::Duration};
 use super::Resolver;
 
 /// An outbound HTTP client with the egress safeguards (#509): no redirects,
-/// no implicit retries, no ambient proxy, and the egress resolver (or, for an
-/// approved local endpoint, only its pinned addresses). Cloning shares the
-/// connection pool, as with reqwest.
+/// no implicit reqwest retries, no ambient proxy, and the egress resolver
+/// (or, for an approved local endpoint, only its pinned addresses). Cloning
+/// shares the connection pool, as with reqwest. The gateway and reqwest
+/// resend nothing; the pool beneath reqwest may re-dispatch a request it
+/// never wrote (docs/operations.md, "Lost connections").
 #[derive(Clone, Debug)]
 pub struct HttpClient(reqwest::Client);
 
@@ -100,6 +102,14 @@ impl HttpClientBuilder {
         Self(self.0.pool_max_idle_per_host(max))
     }
 
+    /// How long the pool keeps an unused connection. A pool idle timeout
+    /// below the upstream's closes the window in which a request is written
+    /// to a connection the upstream is closing (#483). It changes no
+    /// redirect, retry, proxy or resolver safeguard.
+    pub fn pool_idle_timeout(self, timeout: Duration) -> Self {
+        Self(self.0.pool_idle_timeout(timeout))
+    }
+
     pub fn https_only(self, enabled: bool) -> Self {
         Self(self.0.https_only(enabled))
     }
@@ -109,8 +119,8 @@ impl HttpClientBuilder {
     }
 }
 
-/// The one way to start a reqwest client (#509): redirects, implicit retries
-/// and ambient proxies (`HTTP(S)_PROXY`/`ALL_PROXY`) off, and every resolved
+/// The one way to start a reqwest client (#509): redirects, reqwest's
+/// retries (`retry::never()`; see [`HttpClient`] for the pool) and ambient proxies (`HTTP(S)_PROXY`/`ALL_PROXY`) off, and every resolved
 /// address checked by `resolver` (from [`super::resolver`] or
 /// [`super::resolver_with`]). Callers add only their own timeouts, pool and
 /// TLS-mode settings. Clippy's `disallowed-methods` and `disallowed-types`

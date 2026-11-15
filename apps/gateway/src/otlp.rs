@@ -282,9 +282,21 @@ pub(crate) fn export_http_client_with_policy(
     let client = crate::egress::client_builder(crate::egress::resolver_with(purpose, policy))
         .timeout(exchange_timeout)
         .connect_timeout(connect_timeout)
+        .pool_idle_timeout(crate::egress::UpstreamClient::Export.pool_idle_timeout())
         .build()
         .map_err(|_| anyhow::anyhow!("cannot build the export client"))?;
     Ok(client)
+}
+
+/// The audit export's category for a request that got no HTTP answer; also
+/// counts a connection lost before a complete response head (#483).
+pub(crate) fn request_category(error: &reqwest::Error) -> &'static str {
+    crate::egress::UpstreamClient::Export.lost_before_response(error);
+    if error.is_timeout() {
+        "timeout"
+    } else {
+        "connection"
+    }
 }
 
 /// One exchange, including a bounded acknowledgement. Never retry, log a
@@ -307,6 +319,7 @@ pub(crate) async fn post(
             .send()
             .await
             .map_err(|e| {
+                crate::egress::UpstreamClient::Export.lost_before_response(&e);
                 if e.is_timeout() {
                     Delivery::Timeout
                 } else {

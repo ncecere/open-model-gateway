@@ -46,6 +46,7 @@ impl HttpConnector for Connector {
                 builder = builder.header(name, value);
             }
             let response = builder.send().await.map_err(|error| {
+                crate::egress::UpstreamClient::Bedrock.lost_before_response(&error);
                 if error.is_timeout() {
                     ConnectorError::timeout(Box::new(std::io::Error::other("Provider timeout")))
                 } else {
@@ -118,6 +119,7 @@ pub(super) fn client() -> anyhow::Result<SharedHttpClient> {
     let client =
         crate::egress::client_builder(crate::egress::resolver(crate::egress::Purpose::Provider))
             .connect_timeout(Duration::from_secs(10))
+            .pool_idle_timeout(crate::egress::UpstreamClient::Bedrock.pool_idle_timeout())
             .read_timeout(Duration::from_secs(60))
             .timeout(Duration::from_secs(300))
             .build()

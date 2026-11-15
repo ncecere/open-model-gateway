@@ -47,7 +47,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
 use crate::{
-    otlp::{check_secret_env_name, export_http_client, parse_otlp_headers},
+    otlp::{check_secret_env_name, export_http_client, parse_otlp_headers, request_category},
     store::Store,
 };
 
@@ -622,15 +622,6 @@ impl Webhook {
             .await
             .map_err(|e| request_category(&e))?;
         Ok(response.status().as_u16())
-    }
-}
-
-/// A request that got no HTTP answer.
-fn request_category(error: &reqwest::Error) -> &'static str {
-    if error.is_timeout() {
-        "timeout"
-    } else {
-        "connection"
     }
 }
 

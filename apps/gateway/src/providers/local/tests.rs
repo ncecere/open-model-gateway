@@ -462,3 +462,83 @@ async fn native_embeddings_batch_and_errors_never_retry_or_use_compatibility_end
         assert_eq!(resolver.0.load(Ordering::SeqCst), 0);
     }
 }
+
+/// Reads one request (head and `content-length` body); `None` at end of input.
+async fn read_request(stream: &mut tokio::net::TcpStream) -> Option<()> {
+    use tokio::io::AsyncReadExt;
+    let mut data = Vec::new();
+    let mut buf = [0u8; 4096];
+    loop {
+        if let Some(end) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+            let head = String::from_utf8_lossy(&data[..end]).to_ascii_lowercase();
+            let length = head
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length: "))
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            if data.len() >= end + 4 + length {
+                return Some(());
+            }
+        }
+        match stream.read(&mut buf).await {
+            Ok(0) | Err(_) => return None,
+            Ok(n) => data.extend_from_slice(&buf[..n]),
+        }
+    }
+}
+
+/// #483, through the real local adapter and client: an upstream that closes
+/// a connection when the next request reaches it after its idle timeout. The
+/// lost request is counted under `local`, and the caller gets the error it
+/// always got.
+#[tokio::test]
+async fn a_request_lost_with_its_connection_is_counted_and_keeps_its_error() {
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!(
+        "http://fixture.invalid:{}/v1",
+        listener.local_addr().unwrap().port()
+    );
+    let task = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut last = std::time::Instant::now();
+                let mut answered = false;
+                while read_request(&mut stream).await.is_some() {
+                    if answered && last.elapsed() > std::time::Duration::from_millis(150) {
+                        return;
+                    }
+                    let body = json!({"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}).to_string();
+                    let answer = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+                        body.len()
+                    );
+                    if stream.write_all(answer.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    answered = true;
+                    last = std::time::Instant::now();
+                }
+            });
+        }
+    });
+    let mock = Mock {
+        base,
+        capture: Arc::default(),
+        task,
+    };
+    let adapter = mock.adapter(Profile::Vllm, Arc::new(Resolver(AtomicUsize::new(0))));
+    let target = mock.target(Profile::Vllm);
+    // Counts on this thread go to a registry of this test's own.
+    let metrics = crate::metrics::characterization_tests::fresh_registry();
+    let _sink = crate::egress::count_here(metrics);
+    adapter.execute(&target, request(false)).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // The adapter's 4 s pool idle timeout keeps the connection, which the
+    // upstream closes as this request reaches it.
+    assert!(matches!(
+        adapter.execute(&target, request(false)).await,
+        Err(InferenceError::UpstreamUnavailable)
+    ));
+    assert_eq!(metrics.upstream_connection_lost_count("local"), 1);
+}

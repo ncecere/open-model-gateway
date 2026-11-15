@@ -184,6 +184,7 @@ impl OpenRouterAdapter {
         ))
         .https_only(true)
         .connect_timeout(Duration::from_secs(10))
+        .pool_idle_timeout(crate::egress::UpstreamClient::Openrouter.pool_idle_timeout())
         .build()
         .map_err(|_| anyhow::anyhow!("Unable to initialize provider transport"))?;
         Ok(Self {
@@ -284,6 +285,7 @@ impl OpenRouterAdapter {
 }
 
 fn transport(error: reqwest::Error) -> InferenceError {
+    crate::egress::UpstreamClient::Openrouter.lost_before_response(&error);
     if error.is_timeout() {
         InferenceError::Timeout
     } else {

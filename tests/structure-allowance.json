@@ -4,7 +4,7 @@
   "markers": 44,
   "markersBaseline": 58,
   "files": {
-    "apps/gateway/src/audit_export.rs": 1342,
+    "apps/gateway/src/audit_export.rs": 1333,
     "apps/gateway/src/filestore/files.rs": 1012,
     "apps/gateway/src/jobs/schedule.rs": 970,
     "apps/gateway/src/management/alerts.rs": 1006,

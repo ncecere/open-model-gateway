@@ -65,6 +65,7 @@ gateway_settlements counter outcome Traffic
 gateway_trace_deliveries counter outcome System
 gateway_trace_dropped_spans counter reason System
 gateway_trace_rejected_spans counter - System
+gateway_upstream_connection_lost counter client System
 gateway_upstream_duration_seconds histogram model,provider Traffic
 gateway_upstream_time_to_first_token_seconds histogram model,provider Traffic
 gateway_usage_rollup_hours counter reason System
