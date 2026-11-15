@@ -51,6 +51,9 @@ use crate::{
     store::Store,
 };
 
+mod otlp_body;
+use otlp_body::otlp_body;
+
 pub const URL_ENV: &str = "GATEWAY_AUDIT_WEBHOOK_URL";
 pub const SECRET_ENV_ENV: &str = "GATEWAY_AUDIT_WEBHOOK_SECRET_ENV";
 pub const SYSLOG_URL_ENV: &str = "GATEWAY_AUDIT_SYSLOG_URL";
@@ -683,111 +686,6 @@ fn rejected_records(body: &[u8]) -> u64 {
         .unwrap_or(0)
 }
 
-/// Nanoseconds since the Unix epoch as a decimal string (the protobuf JSON
-/// mapping of a 64-bit integer); `0` (unknown) outside its range.
-fn unix_nanos(at: chrono::DateTime<chrono::Utc>) -> String {
-    at.timestamp_nanos_opt().unwrap_or(0).to_string()
-}
-
-fn string_attribute(key: &str, value: &str) -> Value {
-    json!({"key": key, "value": {"stringValue": value}})
-}
-
-fn int_attribute(key: &str, value: i64) -> Value {
-    json!({"key": key, "value": {"intValue": value.to_string()}})
-}
-
-/// One INFO LogRecord.
-fn log_record(time: String, observed: &str, body: String, attributes: Vec<Value>) -> Value {
-    json!({
-        "timeUnixNano": time,
-        "observedTimeUnixNano": observed,
-        "severityNumber": OTLP_SEVERITY_INFO,
-        "severityText": "INFO",
-        "body": {"stringValue": body},
-        "attributes": attributes,
-    })
-}
-
-/// The OTLP/HTTP JSON request body for a payload and how many records it
-/// holds: one LogRecord per event, its body the event object the webhook
-/// sends; a heartbeat or test is one record.
-fn otlp_body(payload: &Payload, now: chrono::DateTime<chrono::Utc>) -> (Value, usize) {
-    let observed = unix_nanos(now);
-    let (installation, records) = match payload {
-        Payload::Events {
-            installation,
-            events,
-        } => (
-            installation,
-            events
-                .iter()
-                .map(|event| {
-                    let time = event["occurred_at"]
-                        .as_str()
-                        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-                        .map_or_else(
-                            || "0".to_owned(),
-                            |t| unix_nanos(t.with_timezone(&chrono::Utc)),
-                        );
-                    log_record(
-                        time,
-                        &observed,
-                        event.to_string(),
-                        vec![
-                            string_attribute(
-                                "event.name",
-                                event["action"].as_str().unwrap_or_default(),
-                            ),
-                            string_attribute(
-                                "omg.audit.id",
-                                event["id"].as_str().unwrap_or_default(),
-                            ),
-                            int_attribute("omg.audit.seq", event["seq"].as_i64().unwrap_or(0)),
-                        ],
-                    )
-                })
-                .collect::<Vec<_>>(),
-        ),
-        Payload::Heartbeat {
-            installation,
-            next_seq,
-        } => (
-            installation,
-            vec![log_record(
-                observed.clone(),
-                &observed,
-                format!(r#"{{"schema":"{SCHEMA}","heartbeat":true,"next_seq":{next_seq}}}"#),
-                vec![
-                    string_attribute("event.name", "omg.audit.heartbeat"),
-                    int_attribute("omg.audit.next_seq", *next_seq),
-                ],
-            )],
-        ),
-        Payload::Test { installation } => (
-            installation,
-            vec![log_record(
-                observed.clone(),
-                &observed,
-                format!(r#"{{"schema":"{SCHEMA}","test":true}}"#),
-                vec![string_attribute("event.name", "omg.audit.test")],
-            )],
-        ),
-    };
-    let count = records.len();
-    let body = json!({"resourceLogs": [{
-        "resource": {"attributes": [
-            string_attribute("service.name", APP_NAME),
-            string_attribute("omg.installation_id", &installation.to_string()),
-        ]},
-        "scopeLogs": [{
-            "scope": {"name": OTLP_SCOPE, "version": SCHEMA},
-            "logRecords": records,
-        }],
-    }]});
-    (body, count)
-}
-
 impl Syslog {
     /// One connection for the whole batch, all within [`REQUEST_TIMEOUT`].
     async fn send(&self, frames: &[u8]) -> Result<(), &'static str> {
@@ -1226,39 +1124,51 @@ pub async fn status(store: &Store) -> Result<Value, sqlx::Error> {
 /// and back, instead of naming the destination on every attempt. A
 /// webhook/syslog destination's host is unchanged: named on every failure,
 /// which is what operators rely on to triage a misconfigured destination.
-#[cfg_attr(not(test), expect(clippy::cognitive_complexity, reason = "#499"))]
 fn log_delivery_outcome(outcome: &Outcome, exporter: &Exporter, otlp_failing: &Cell<bool>) {
     match *outcome {
         Outcome::Failed(category) if exporter.transport() == "otlp" => {
-            if !otlp_failing.replace(true) {
-                tracing::warn!(
-                    category,
-                    transport = "otlp",
-                    "audit export delivery to the OTLP collector failed; retrying with backoff (destination omitted; repeated failures are not re-logged until it recovers)"
-                );
-            }
+            log_otlp_failure(category, otlp_failing);
         }
-        Outcome::Failed(category) => {
-            tracing::warn!(
-                category,
-                host = exporter.host(),
-                transport = exporter.transport(),
-                "audit export delivery failed; retrying with backoff"
-            );
-        }
+        Outcome::Failed(category) => log_failure(category, exporter),
         // Only an actual successful attempt (a delivery or heartbeat) is a
         // recovery: `Outcome::Idle` can mean "still backing off, not
         // attempted yet" and must never clear the flag or claim recovery.
         Outcome::Delivered(_) | Outcome::Heartbeat
             if exporter.transport() == "otlp" && otlp_failing.replace(false) =>
         {
-            tracing::warn!(
-                transport = "otlp",
-                "audit export delivery to the OTLP collector is succeeding again"
-            );
+            log_otlp_recovery();
         }
         _ => {}
     }
+}
+
+/// An OTLP failure: a fixed, host-free warning, only on the transition into failure.
+fn log_otlp_failure(category: &'static str, otlp_failing: &Cell<bool>) {
+    if !otlp_failing.replace(true) {
+        tracing::warn!(
+            category,
+            transport = "otlp",
+            "audit export delivery to the OTLP collector failed; retrying with backoff (destination omitted; repeated failures are not re-logged until it recovers)"
+        );
+    }
+}
+
+/// A webhook or syslog failure: the destination host is named on every failure.
+fn log_failure(category: &'static str, exporter: &Exporter) {
+    tracing::warn!(
+        category,
+        host = exporter.host(),
+        transport = exporter.transport(),
+        "audit export delivery failed; retrying with backoff"
+    );
+}
+
+/// An OTLP delivery after a failure.
+fn log_otlp_recovery() {
+    tracing::warn!(
+        transport = "otlp",
+        "audit export delivery to the OTLP collector is succeeding again"
+    );
 }
 
 /// The exporter loop for `serve`: only the `audit_export` lease holder
