@@ -67,7 +67,7 @@ pub(crate) fn endpoint(
     environment: crate::config::Environment,
     exchange: Duration,
     ops_events: bool,
-) -> anyhow::Result<(reqwest::Url, reqwest::Client)> {
+) -> anyhow::Result<(reqwest::Url, crate::egress::HttpClient)> {
     let invalid = || {
         anyhow::anyhow!(
             "{setting} is invalid (full signal URL required; HTTPS except development loopback)"
@@ -255,7 +255,7 @@ pub(crate) fn export_http_client(
     connect_timeout: Duration,
     exchange_timeout: Duration,
     ops_events: bool,
-) -> anyhow::Result<reqwest::Client> {
+) -> anyhow::Result<crate::egress::HttpClient> {
     let policy = transport_policy(development, url.scheme());
     // The logs exporter's own resolver never emits the typed operational
     // event it transports (no feedback); every other signal is unaffected.
@@ -274,7 +274,7 @@ pub(crate) fn export_http_client_with_policy(
     policy: crate::egress::Policy,
     connect_timeout: Duration,
     exchange_timeout: Duration,
-) -> anyhow::Result<reqwest::Client> {
+) -> anyhow::Result<crate::egress::HttpClient> {
     // Every caller (traces, metrics, audit, webhooks) gets the same tightening:
     // plain HTTP may only reach canonical loopback after DNS (#313).
     let policy = export_http_policy(url, policy);
@@ -290,7 +290,7 @@ pub(crate) fn export_http_client_with_policy(
 /// One exchange, including a bounded acknowledgement. Never retry, log a
 /// collector response, or return a reqwest error containing the destination.
 pub(crate) async fn post(
-    client: &reqwest::Client,
+    client: &crate::egress::HttpClient,
     url: &reqwest::Url,
     headers: &reqwest::header::HeaderMap,
     body: Vec<u8>,

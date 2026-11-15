@@ -45,7 +45,7 @@ impl LocalAdapter {
             approvals,
         }
     }
-    fn connection(&self, target: &Deployment) -> Result<(&reqwest::Client, &str)> {
+    fn connection(&self, target: &Deployment) -> Result<(&crate::egress::HttpClient, &str)> {
         if target.provider != self.id() || target.region.as_deref().is_some_and(|s| !s.is_empty()) {
             return Err(InferenceError::Configuration);
         }

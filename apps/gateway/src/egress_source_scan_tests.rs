@@ -10,6 +10,14 @@
 //! name, see `crate::entropy`) and the transaction entries (`crate::db`), so
 //! these sanctioned sites are the only switch-offs for all of them.
 //!
+//! The `Default` impls of reqwest's client types cannot be named by that lint
+//! (#569). They are closed by type instead: clients are held only as
+//! `crate::egress::HttpClient` (no `Default`, built only by the sanctioned
+//! builders), and `disallowed-types` refuses the raw reqwest types by name
+//! outside `src/egress_http.rs`. Its switches are scanned the same way, and
+//! that file, which neither lint constrains, is held to an exact list of its
+//! contents ([`CLIENT_MODULE`]).
+//!
 //! Attributes are parsed with `syn` and lint paths compared token by token,
 //! so comments inside an attribute and raw identifiers (`r#style`) read the
 //! same as the plain form. Attributes written inside macro bodies are parsed
@@ -23,10 +31,13 @@ use syn::{Meta, Token, ext::IdentExt, punctuated::Punctuated, visit::Visit};
 /// would let the lint pass a plain `cargo clippy`.
 const LEVELS: [&str; 3] = ["allow", "expect", "warn"];
 
-/// The lint, its old name, the two groups that contain it, and `warnings`.
-const SWITCHES: [&str; 5] = [
+/// The two lints, their old names, the two groups that contain them, and
+/// `warnings`.
+const SWITCHES: [&str; 7] = [
     "clippy::disallowed_methods",
     "clippy::disallowed_method",
+    "clippy::disallowed_types",
+    "clippy::disallowed_type",
     "clippy::style",
     "clippy::all",
     "warnings",
@@ -46,7 +57,8 @@ enum Finding {
         /// `let in <fn path>`, or `other in <path>` (never sanctioned).
         on: String,
     },
-    /// Code from outside `src/`: a `#[path]` leaving it, or `include!`.
+    /// Code the scan would not read: a `#[path]` leaving `src/` or naming a
+    /// file that is not `*.rs`, or `include!`.
     Escape(String),
     /// A lint-level or `cfg_attr` attribute that does not parse.
     Unparsed(String),
@@ -174,7 +186,10 @@ impl Scan<'_> {
                         .push(Finding::Escape("#[path = <not a string literal>]".into()));
                 };
                 let target = text.value();
+                // The walk reads `*.rs` only, so a module in a file of any
+                // other name would be compiled but never scanned.
                 let inside = !Path::new(&target).is_absolute()
+                    && target.ends_with(".rs")
                     && join(self.dir, &target).is_some_and(|path| path.starts_with(self.src));
                 if !inside {
                     self.findings
@@ -334,9 +349,23 @@ fn files(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 fn level(level: &str, inner: bool, cfg: &[&str], reason: Option<&str>, on: &str) -> Finding {
+    level_of(METHODS, level, inner, cfg, reason, on)
+}
+
+const METHODS: &str = "clippy::disallowed_methods";
+const TYPES: &str = "clippy::disallowed_types";
+
+fn level_of(
+    lint: &str,
+    level: &str,
+    inner: bool,
+    cfg: &[&str],
+    reason: Option<&str>,
+    on: &str,
+) -> Finding {
     Finding::Level {
         level: level.into(),
-        lint: SWITCHES[0].into(),
+        lint: lint.into(),
         inner,
         cfg: cfg.iter().map(|c| (*c).to_owned()).collect(),
         reason: reason.map(str::to_owned),
@@ -356,7 +385,18 @@ fn sanctioned(name: &str) -> Vec<Finding> {
         )
     };
     match name {
-        "egress.rs" => vec![
+        // The one module that holds or builds a raw reqwest client (#569):
+        // the whole file may name the types; only the three constructors
+        // may call the disallowed methods.
+        "egress_http.rs" => vec![
+            level_of(
+                TYPES,
+                "expect",
+                true,
+                &[],
+                Some("the egress client newtype is the one place a reqwest client is held (#569)"),
+                "crate",
+            ),
             guarded("fn client_builder"),
             guarded("fn pinned_client_builder"),
             guarded("fn add_root_certificates"),
@@ -371,7 +411,10 @@ fn sanctioned(name: &str) -> Vec<Finding> {
             Some("tungstenite's Sec-WebSocket-Key is a handshake nonce, not a secret (#511)"),
             "fn handshake_request",
         )],
-        "lib.rs" => vec![level("allow", true, &["test"], None, "crate")],
+        "lib.rs" => vec![
+            level("allow", true, &["test"], None, "crate"),
+            level_of(TYPES, "allow", true, &["test"], None, "crate"),
+        ],
         _ => Vec::new(),
     }
 }
@@ -402,9 +445,10 @@ fn only_the_sanctioned_sites_turn_off_disallowed_methods() {
         assert_eq!(
             found,
             sanctioned(&name),
-            "{name}: a lint switch for clippy::disallowed_methods outside its sanctioned \
-             sites, or code from outside src/. Production code builds HTTP clients with \
-             crate::egress::client_builder (#509) and draws secrets with crate::entropy (#511)."
+            "{name}: a lint switch for clippy::disallowed_methods or clippy::disallowed_types \
+             outside its sanctioned sites, or code from outside src/. Production code builds \
+             HTTP clients with crate::egress::client_builder (#509), holds them as \
+             crate::egress::HttpClient (#569) and draws secrets with crate::entropy (#511)."
         );
     }
 }
@@ -427,6 +471,12 @@ fn the_scan_sees_every_spelling_of_a_lint_switch() {
         "#[allow(r#clippy::all)] fn f() {}",
         "#[allow(clippy::DISALLOWED_METHODS)] fn f() {}",
         "#[allow(clippy::disallowed_method)] fn f() {}",
+        "#[allow(clippy::disallowed_types)] struct S { c: reqwest::Client }",
+        "#[expect(clippy::disallowed_types, reason = \"x\")] fn f() {}",
+        "#[allow(clippy::disallowed_type)] fn f() {}",
+        "#![cfg_attr(not(test), allow(clippy::disallowed_types))]",
+        "mod m { #![allow(clippy::disallowed_types)] }",
+        "impl S { #[allow(clippy::r#disallowed_types)] fn f() {} }",
         "#[allow(dead_code, warnings)] fn f() {}",
         "#[expect(clippy::all, reason = \"x\")] fn f() {}",
         "#[warn(clippy::disallowed_methods)] fn f() {}",
@@ -444,6 +494,13 @@ fn the_scan_sees_every_spelling_of_a_lint_switch() {
         "#[path = \"../../../x.rs\"] mod m;",
         "#[path = \"/tmp/x.rs\"] mod m;",
         "#[cfg_attr(test, path = \"../../x.rs\")] mod m;",
+        "#[path = \"probe_hidden.inc\"] mod hidden;",
+        "#[path = \"hidden\"] mod hidden;",
+        "#[path = \"hidden.RS\"] mod hidden;",
+        "#[path = \"hidden.rs.txt\"] mod hidden;",
+        "#[cfg_attr(test, path = \"hidden.inc\")] mod hidden;",
+        "mod m { #[path = \"hidden.inc\"] mod hidden; }",
+        "macro_rules! m { () => { #[path = \"hidden.inc\"] mod hidden; } }",
         "mod m { #[path = \"../../x.rs\"] mod n; }",
         "include!(\"x.rs\");",
         "fn f() { include!(\"../../x.rs\") }",
@@ -456,6 +513,8 @@ fn the_scan_sees_every_spelling_of_a_lint_switch() {
         "#[allow(clippy::needless_return)] fn f() {}",
         "#[allow(dead_code, clippy::disallowed_methods_x)] fn f() {}",
         "#[deny(clippy::disallowed_methods)] fn f() {}",
+        "#[deny(clippy::disallowed_types)] fn f() {}",
+        "#[allow(clippy::disallowed_types_x)] fn f() {}",
         "#[forbid(warnings)] fn f() {}",
         "#[path = \"x.rs\"] mod m;",
         "#[path = \"../sibling/x.rs\"] mod m;",
@@ -500,16 +559,578 @@ fn clippy_disallows_every_unguarded_client_construction() {
         "reqwest::ClientBuilder::hickory_dns",
     ];
     for path in required {
-        let entry = format!("{{ path = \"{path}\", reason = \"");
-        let line = config
-            .lines()
-            .find(|line| line.trim_start().starts_with(&entry))
-            .unwrap_or_else(|| panic!("clippy.toml must disallow {path} (#509)"));
+        clippy_entry(&config, path);
+    }
+}
+
+/// The `Default` routes (#569): Clippy cannot name `<Client as
+/// Default>::default`, so the raw types are refused by name and the two
+/// `RequestBuilder` methods that hand out or accept a raw client are refused.
+#[test]
+fn clippy_disallows_the_raw_client_types() {
+    let config =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("clippy.toml")).unwrap();
+    let config = uncommented(&config);
+    let (methods, types) = config
+        .split_once("disallowed-types = [")
+        .expect("clippy.toml must have a disallowed-types list (#569)");
+    for path in ["reqwest::Client", "reqwest::ClientBuilder"] {
+        let line = clippy_entry(types, path);
         assert!(
-            line.contains("crate::egress::"),
-            "clippy.toml: the reason for {path} must name the egress constructor"
+            !line.contains("allow-invalid"),
+            "clippy.toml: the type {path} must resolve"
         );
     }
+    for path in [
+        "reqwest::RequestBuilder::build_split",
+        "reqwest::RequestBuilder::from_parts",
+    ] {
+        let line = clippy_entry(methods, path);
+        assert!(
+            !line.contains("allow-invalid"),
+            "clippy.toml: the method {path} must resolve"
+        );
+    }
+}
+
+/// The `clippy.toml` line that disallows `path`; its reason must point at
+/// `crate::egress`.
+fn clippy_entry<'a>(list: &'a str, path: &str) -> &'a str {
+    let entry = format!("{{ path = \"{path}\", reason = \"");
+    let line = list
+        .lines()
+        .find(|line| line.trim_start().starts_with(&entry))
+        .unwrap_or_else(|| panic!("clippy.toml must disallow {path} (#509, #569)"));
+    assert!(
+        line.contains("crate::egress::"),
+        "clippy.toml: the reason for {path} must name its crate::egress alternative"
+    );
+    line
+}
+
+/// Everything `src/egress_http.rs` may contain (#569), one entry per
+/// top-level item and per method of an inherent impl, as its tokens joined
+/// by single spaces without doc comments (see [`text`]). That file is the
+/// one place Clippy lets a raw reqwest client be named, and its three
+/// constructors may call the disallowed builder methods, so nothing in it is
+/// trusted by shape: an item, method, signature, attribute or body that is
+/// not listed here fails the test. Change this list only with the file, in a
+/// reviewed change.
+const CLIENT_MODULE: &[&str] = &[
+    "# ! [ expect ( clippy : : disallowed_types , reason = \"the egress client newtype is the one place a reqwest client is held (#569)\" ) ]",
+    "use std : : { sync : : Arc , time : : Duration } ;",
+    "use super : : Resolver ;",
+    "# [ derive ( Clone , Debug ) ] pub struct HttpClient ( reqwest : : Client ) ;",
+    "# [ derive ( Debug ) ] # [ must_use ] pub ( crate ) struct HttpClientBuilder ( reqwest : : ClientBuilder ) ;",
+    "trait AmbiguousIfDefault < A > { fn some_item ( ) { } }",
+    "impl < T : ? Sized > AmbiguousIfDefault < ( ) > for T { }",
+    "impl < T : Default > AmbiguousIfDefault < u8 > for T { }",
+    "const _ : fn ( ) = | | { let _ = < HttpClient as AmbiguousIfDefault < _ > > : : some_item ; let _ = < HttpClientBuilder as AmbiguousIfDefault < _ > > : : some_item ; } ;",
+    "impl HttpClient { }",
+    "HttpClient :: pub fn get < U : reqwest : : IntoUrl > ( & self , url : U ) - > reqwest : : RequestBuilder { self . 0 . get ( url ) }",
+    "HttpClient :: pub fn post < U : reqwest : : IntoUrl > ( & self , url : U ) - > reqwest : : RequestBuilder { self . 0 . post ( url ) }",
+    "HttpClient :: pub fn delete < U : reqwest : : IntoUrl > ( & self , url : U ) - > reqwest : : RequestBuilder { self . 0 . delete ( url ) }",
+    "HttpClient :: pub async fn execute ( & self , request : reqwest : : Request ) - > reqwest : : Result < reqwest : : Response > { self . 0 . execute ( request ) . await }",
+    "HttpClient :: pub fn request < U : reqwest : : IntoUrl > ( & self , method : reqwest : : Method , url : U , ) - > reqwest : : RequestBuilder { self . 0 . request ( method , url ) }",
+    "HttpClient :: # [ cfg ( test ) ] pub ( crate ) fn from_test_client ( client : reqwest : : Client ) - > Self { Self ( client ) }",
+    "impl HttpClientBuilder { }",
+    "HttpClientBuilder :: pub fn timeout ( self , timeout : Duration ) - > Self { Self ( self . 0 . timeout ( timeout ) ) }",
+    "HttpClientBuilder :: pub fn connect_timeout ( self , timeout : Duration ) - > Self { Self ( self . 0 . connect_timeout ( timeout ) ) }",
+    "HttpClientBuilder :: pub fn read_timeout ( self , timeout : Duration ) - > Self { Self ( self . 0 . read_timeout ( timeout ) ) }",
+    "HttpClientBuilder :: pub fn pool_max_idle_per_host ( self , max : usize ) - > Self { Self ( self . 0 . pool_max_idle_per_host ( max ) ) }",
+    "HttpClientBuilder :: pub fn https_only ( self , enabled : bool ) - > Self { Self ( self . 0 . https_only ( enabled ) ) }",
+    "HttpClientBuilder :: pub fn build ( self ) - > reqwest : : Result < HttpClient > { self . 0 . build ( ) . map ( HttpClient ) }",
+    "# [ expect ( clippy : : disallowed_methods , reason = \"the egress-guarded constructor (#509)\" ) ] pub ( crate ) fn client_builder ( resolver : Arc < Resolver > ) - > HttpClientBuilder { HttpClientBuilder ( reqwest : : Client : : builder ( ) . no_proxy ( ) . dns_resolver ( resolver ) . redirect ( reqwest : : redirect : : Policy : : none ( ) ) . retry ( reqwest : : retry : : never ( ) ) , ) }",
+    "# [ expect ( clippy : : disallowed_methods , reason = \"the egress-guarded constructor (#509)\" ) ] pub ( crate ) fn pinned_client_builder ( approved : & crate : : providers : : local : : endpoints : : ApprovedDestinations , ) - > HttpClientBuilder { HttpClientBuilder ( reqwest : : Client : : builder ( ) . no_proxy ( ) . redirect ( reqwest : : redirect : : Policy : : none ( ) ) . retry ( reqwest : : retry : : never ( ) ) . resolve_to_addrs ( approved . host ( ) , approved . addresses ( ) ) , ) }",
+    "# [ expect ( clippy : : disallowed_methods , reason = \"the egress-guarded constructor (#509)\" ) ] pub ( crate ) fn add_root_certificates ( builder : HttpClientBuilder , certificates : impl IntoIterator < Item = reqwest : : Certificate > , ) - > HttpClientBuilder { let mut builder = builder . 0 ; for certificate in certificates { builder = builder . add_root_certificate ( certificate ) ; } HttpClientBuilder ( builder ) }",
+];
+
+fn client_module_source() -> String {
+    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/egress_http.rs"))
+        .unwrap()
+}
+
+/// `tokens` joined by single spaces, without doc comments: the same text
+/// for any layout or comment, and for any `proc_macro2` version.
+fn text(tokens: TokenStream) -> String {
+    fn push(tokens: TokenStream, out: &mut Vec<String>) {
+        let tokens: Vec<TokenTree> = tokens.into_iter().collect();
+        let punct = |at: usize, c: char| matches!(tokens.get(at), Some(TokenTree::Punct(p)) if p.as_char() == c);
+        let mut at = 0;
+        while at < tokens.len() {
+            if punct(at, '#') {
+                let group = at + 1 + usize::from(punct(at + 1, '!'));
+                if let Some(TokenTree::Group(attribute)) = tokens.get(group)
+                    && attribute.delimiter() == Delimiter::Bracket
+                    && matches!(
+                        attribute.stream().into_iter().next(),
+                        Some(TokenTree::Ident(name)) if name.unraw() == "doc"
+                    )
+                {
+                    at = group + 1;
+                    continue;
+                }
+            }
+            match &tokens[at] {
+                TokenTree::Group(group) => {
+                    let (open, close) = match group.delimiter() {
+                        Delimiter::Parenthesis => ("(", ")"),
+                        Delimiter::Brace => ("{", "}"),
+                        Delimiter::Bracket => ("[", "]"),
+                        Delimiter::None => ("", ""),
+                    };
+                    out.push(open.into());
+                    push(group.stream(), out);
+                    out.push(close.into());
+                }
+                other => out.push(other.to_string()),
+            }
+            at += 1;
+        }
+    }
+    let mut out = Vec::new();
+    push(tokens, &mut out);
+    out.retain(|token| !token.is_empty());
+    out.join(" ")
+}
+
+/// The entries of a source file in [`CLIENT_MODULE`]'s form: inner
+/// attributes, then each item; an inherent impl is its header followed by
+/// one `Type :: member` entry per member.
+fn module_entries(file: &syn::File) -> Vec<String> {
+    use quote::ToTokens;
+    let mut entries: Vec<String> = file
+        .attrs
+        .iter()
+        .map(|attribute| text(attribute.to_token_stream()))
+        .filter(|entry| !entry.is_empty())
+        .collect();
+    for item in &file.items {
+        match item {
+            syn::Item::Impl(item) if item.trait_.is_none() => {
+                let mut header = item.clone();
+                header.items.clear();
+                entries.push(text(header.to_token_stream()));
+                let owner = text(item.self_ty.to_token_stream());
+                for member in &item.items {
+                    entries.push(format!("{owner} :: {}", text(member.to_token_stream())));
+                }
+            }
+            other => entries.push(text(other.to_token_stream())),
+        }
+    }
+    entries
+}
+
+/// Why `source` is not the reviewed client module: entries that are not on
+/// [`CLIENT_MODULE`] or are missing from the file, and, whatever the list
+/// says, anything in the file that could make or release an unguarded
+/// client: `Default`/`default` in any spelling (only the proof's one
+/// `T: Default` bound may name it), `take`, `transmute`, `unsafe`, an item
+/// nested in a body, and any macro call.
+fn client_module_problems(source: &str) -> Vec<String> {
+    let (Ok(file), Ok(tokens)) = (syn::parse_file(source), source.parse::<TokenStream>()) else {
+        return vec!["the file does not parse".into()];
+    };
+    let entries = module_entries(&file);
+    let mut problems: Vec<String> = entries
+        .iter()
+        .filter(|entry| !CLIENT_MODULE.contains(&entry.as_str()))
+        .map(|entry| format!("not on the list: {entry}"))
+        .collect();
+    problems.extend(
+        CLIENT_MODULE
+            .iter()
+            .filter(|listed| !entries.iter().any(|entry| entry == *listed))
+            .map(|listed| format!("missing from the file: {listed}")),
+    );
+    if problems.is_empty() && entries != CLIENT_MODULE {
+        problems.push("the listed entries are reordered or repeated".into());
+    }
+
+    fn idents(tokens: TokenStream, out: &mut Vec<String>) {
+        for token in tokens {
+            match token {
+                TokenTree::Ident(ident) => out.push(ident.unraw().to_string()),
+                TokenTree::Group(group) => idents(group.stream(), out),
+                _ => {}
+            }
+        }
+    }
+    let mut names = Vec::new();
+    idents(tokens, &mut names);
+    let bounds = names.iter().filter(|name| *name == "Default").count();
+    if bounds > 1 {
+        problems.push(format!(
+            "`Default` is named {bounds} times: only the proof's `T: Default` bound may name it"
+        ));
+    }
+    for name in names {
+        let lower = name.to_lowercase();
+        let refused =
+            (lower.contains("default") && name != "Default" && name != "AmbiguousIfDefault")
+                || ["take", "transmute", "transmute_copy", "unsafe"].contains(&name.as_str());
+        if refused {
+            problems.push(format!("`{name}` in the client module"));
+        }
+    }
+
+    struct Bodies(Vec<String>);
+    impl<'ast> Visit<'ast> for Bodies {
+        fn visit_block(&mut self, block: &'ast syn::Block) {
+            if block
+                .stmts
+                .iter()
+                .any(|statement| matches!(statement, syn::Stmt::Item(_)))
+            {
+                self.0.push("an item nested in a body".into());
+            }
+            syn::visit::visit_block(self, block);
+        }
+        fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+            self.0
+                .push(format!("a macro call: {}!", path_name(&mac.path)));
+        }
+    }
+    let mut bodies = Bodies(Vec::new());
+    bodies.visit_file(&file);
+    problems.extend(bodies.0);
+    problems
+}
+
+/// `source` with `from` (which must occur exactly once) replaced by `to`.
+fn edited(source: &str, from: &str, to: &str) -> String {
+    assert_eq!(source.matches(from).count(), 1, "not found once: {from}");
+    source.replacen(from, to, 1)
+}
+
+/// Changes to the client module that would hand out, accept or build an
+/// unguarded client, or weaken the no-`Default` proof, each with the reason
+/// the check must give. The first group are the review's planted variants
+/// (#569): none of them writes a raw type outside the file, and none was
+/// refused by Clippy or by a list of bad shapes.
+fn planted(source: &str) -> Vec<(String, &'static str)> {
+    let add = |code: &str| format!("{source}\n{code}");
+    vec![
+        (
+            add("pub type Raw = reqwest::Client; \
+                 impl HttpClient { pub fn into_raw(self) -> Raw { self.0 } }"),
+            "not on the list: pub type Raw = reqwest :: Client ;",
+        ),
+        (
+            add("pub type Raw = reqwest::Client; \
+                 impl HttpClient { pub fn into_raw(self) -> Raw { self.0 } }"),
+            "not on the list: HttpClient :: pub fn into_raw (self) -> Raw",
+        ),
+        (
+            add("use std::ops::Deref as D; impl D for HttpClient { \
+                 type Target = reqwest::Client; fn deref(&self) -> &reqwest::Client { &self.0 } }"),
+            "not on the list: impl D for HttpClient",
+        ),
+        (
+            add("use std::ops::Deref as D;"),
+            "not on the list: use std :: ops :: Deref as D ;",
+        ),
+        (
+            add("impl HttpClient { pub fn ambient() -> Self { Self(Default::default()) } }"),
+            "`Default` is named 2 times",
+        ),
+        (
+            add("impl HttpClient { pub fn ambient() -> Self { Self(Default::default()) } }"),
+            "not on the list: HttpClient :: pub fn ambient () -> Self",
+        ),
+        (
+            add("impl HttpClientBuilder { pub fn ambient() -> Self { Self(Default::default()) } }"),
+            "`default` in the client module",
+        ),
+        (
+            add("pub struct Sibling(reqwest::Client); impl Sibling { \
+                 pub fn new() -> Self { Self(reqwest::Client::default()) } }"),
+            "not on the list: pub struct Sibling (reqwest :: Client) ;",
+        ),
+        (
+            add("pub struct Sibling(reqwest::Client); impl Sibling { \
+                 pub fn new() -> Self { Self(reqwest::Client::default()) } }"),
+            "`default` in the client module",
+        ),
+        (
+            add("pub static RAW: std::sync::LazyLock<reqwest::Client> = \
+                 std::sync::LazyLock::new(reqwest::Client::new);"),
+            "not on the list: pub static RAW",
+        ),
+        (
+            add(
+                "pub async fn fetch(url: &str) -> reqwest::Result<reqwest::Response> { \
+                 reqwest::Client::default().get(url).send().await }",
+            ),
+            "not on the list: pub async fn fetch",
+        ),
+        (
+            add("impl TryFrom<u8> for HttpClient { type Error = (); \
+                 fn try_from(_: u8) -> Result<Self, ()> { Ok(Self(Default::default())) } }"),
+            "not on the list: impl TryFrom < u8 > for HttpClient",
+        ),
+        (
+            edited(
+                source,
+                "Self(self.0.timeout(timeout))",
+                "impl std::ops::Deref for HttpClient { type Target = reqwest::Client; \
+                 fn deref(&self) -> &reqwest::Client { &self.0 } } Self(self.0.timeout(timeout))",
+            ),
+            "an item nested in a body",
+        ),
+        (
+            edited(
+                source,
+                "pub fn build(self)",
+                "pub fn min_tls_version(self, version: reqwest::tls::Version) -> Self { \
+                 Self(self.0.min_tls_version(version)) } pub fn build(self)",
+            ),
+            "not on the list: HttpClientBuilder :: pub fn min_tls_version",
+        ),
+        (
+            edited(
+                source,
+                "pub fn build(self)",
+                "pub fn tls_sni(self, sni: bool) -> Self { Self(self.0.tls_sni(sni)) } \
+                 pub fn build(self)",
+            ),
+            "not on the list: HttpClientBuilder :: pub fn tls_sni",
+        ),
+        (
+            edited(
+                source,
+                "pub fn build(self)",
+                "pub fn default_headers(self, headers: reqwest::header::HeaderMap) -> Self { \
+                 Self(self.0.default_headers(headers)) } pub fn build(self)",
+            ),
+            "not on the list: HttpClientBuilder :: pub fn default_headers",
+        ),
+        // Further routes to a default or raw client.
+        (
+            add("impl HttpClient { pub fn fresh(&mut self) -> Self { \
+                 Self(std::mem::take(&mut self.0)) } }"),
+            "`take` in the client module",
+        ),
+        (
+            add("impl HttpClient { pub fn maybe(c: Option<Self>) -> Self { \
+                 Self(c.map(|c| c.0).unwrap_or_default()) } }"),
+            "`unwrap_or_default` in the client module",
+        ),
+        (
+            add("pub fn forge() -> HttpClient { unsafe { std::mem::transmute(0usize) } }"),
+            "`transmute` in the client module",
+        ),
+        (
+            add("pub fn forge() -> HttpClient { unsafe { std::mem::zeroed() } }"),
+            "`unsafe` in the client module",
+        ),
+        (
+            add("impl Default for HttpClient { fn default() -> Self { todo!() } }"),
+            "not on the list: impl Default for HttpClient",
+        ),
+        (
+            add("impl From<reqwest::Client> for HttpClient { \
+                 fn from(client: reqwest::Client) -> Self { Self(client) } }"),
+            "not on the list: impl From < reqwest :: Client > for HttpClient",
+        ),
+        (
+            add("mod inner { pub fn raw() -> reqwest::Client { reqwest::Client::new() } }"),
+            "not on the list: mod inner",
+        ),
+        (add("m! { fn f() {} }"), "a macro call: m!"),
+        (
+            add("extern \"C\" { fn raw_client() -> usize; }"),
+            "not on the list: extern",
+        ),
+        (
+            edited(
+                source,
+                "pub struct HttpClient(reqwest::Client);",
+                "pub struct HttpClient(pub reqwest::Client);",
+            ),
+            "missing from the file: # [derive (Clone , Debug)] pub struct HttpClient (reqwest :: Client) ;",
+        ),
+        (
+            edited(
+                source,
+                "#[derive(Debug)]\n#[must_use]",
+                "#[derive(Debug, Default)]\n#[must_use]",
+            ),
+            "missing from the file: # [derive (Debug)] # [must_use] pub (crate) struct HttpClientBuilder",
+        ),
+        (
+            edited(source, "    #[cfg(test)]\n", ""),
+            "missing from the file: HttpClient :: # [cfg (test)] pub (crate) fn from_test_client",
+        ),
+        (
+            edited(
+                source,
+                "pub fn get<U: reqwest::IntoUrl>(&self, url: U)",
+                "pub fn get<U: reqwest::IntoUrl>(self, url: U)",
+            ),
+            "missing from the file: HttpClient :: pub fn get",
+        ),
+        (
+            edited(source, "self.0.post(url)", "self.0.clone().post(url)"),
+            "missing from the file: HttpClient :: pub fn post",
+        ),
+        // The three constructors sit under `expect(disallowed_methods)`.
+        (
+            edited(
+                source,
+                ".dns_resolver(resolver)",
+                ".dns_resolver(resolver).danger_accept_invalid_certs(true)",
+            ),
+            "missing from the file: # [expect (clippy :: disallowed_methods , reason = \"the egress-guarded constructor (#509)\")] pub (crate) fn client_builder",
+        ),
+        (
+            edited(source, ".dns_resolver(resolver)", ""),
+            "changed: pub(crate) fn client_builder",
+        ),
+        (
+            edited(
+                source,
+                ".resolve_to_addrs(approved.host(), approved.addresses())",
+                ".resolve_to_addrs(approved.host(), approved.addresses()).proxy(reqwest::Proxy::all(\"http://127.0.0.1:1\").unwrap())",
+            ),
+            "changed: pub(crate) fn pinned_client_builder",
+        ),
+        (
+            edited(
+                source,
+                "builder = builder.add_root_certificate(certificate);",
+                "builder = builder.add_root_certificate(certificate).danger_accept_invalid_hostnames(true);",
+            ),
+            "changed: pub(crate) fn add_root_certificates",
+        ),
+        (
+            edited(
+                source,
+                "clippy::disallowed_types,",
+                "clippy::disallowed_types, clippy::disallowed_methods,",
+            ),
+            "missing from the file: # ! [ expect ( clippy : : disallowed_types , reason",
+        ),
+        // The proof that neither type implements `Default`.
+        (
+            edited(
+                source,
+                "    let _ = <HttpClient as AmbiguousIfDefault<_>>::some_item;\n",
+                "",
+            ),
+            "missing from the file: const _ : fn ()",
+        ),
+        (
+            edited(
+                source,
+                "    let _ = <HttpClientBuilder as AmbiguousIfDefault<_>>::some_item;\n",
+                "",
+            ),
+            "missing from the file: const _ : fn ()",
+        ),
+        (
+            edited(
+                source,
+                "    let _ = <HttpClient as AmbiguousIfDefault<_>>::some_item;\n",
+                "    // let _ = <HttpClient as AmbiguousIfDefault<_>>::some_item;\n",
+            ),
+            "missing from the file: const _ : fn ()",
+        ),
+        (
+            edited(
+                source,
+                "impl<T: ?Sized> AmbiguousIfDefault<()> for T {}\n",
+                "",
+            ),
+            "missing from the file: impl < T : ? Sized > AmbiguousIfDefault < () > for T { }",
+        ),
+        (
+            edited(
+                source,
+                "impl<T: Default> AmbiguousIfDefault<u8> for T {}\n",
+                "",
+            ),
+            "missing from the file: impl < T : Default > AmbiguousIfDefault < u8 > for T { }",
+        ),
+        (
+            edited(
+                source,
+                "impl<T: Default> AmbiguousIfDefault<u8>",
+                "impl<T: Copy> AmbiguousIfDefault<u8>",
+            ),
+            "missing from the file: impl < T : Default > AmbiguousIfDefault < u8 > for T { }",
+        ),
+        (
+            edited(
+                source,
+                "impl<T: Default> AmbiguousIfDefault<u8>",
+                "impl<T: Default + Copy> AmbiguousIfDefault<u8>",
+            ),
+            "missing from the file: impl < T : Default > AmbiguousIfDefault < u8 > for T { }",
+        ),
+        (
+            edited(
+                source,
+                "trait AmbiguousIfDefault<A> {\n    fn some_item() {}",
+                "trait AmbiguousIfDefault<A> {\n    fn some_item() where Self: Sized {}",
+            ),
+            "missing from the file: trait AmbiguousIfDefault < A > { fn some_item () { } }",
+        ),
+    ]
+}
+
+/// A planted change's reason with its code in [`text`]'s form, so the
+/// reasons in [`planted`] can be written as ordinary Rust.
+fn rendered(reason: &str) -> String {
+    for prefix in [
+        "not on the list: HttpClientBuilder :: ",
+        "not on the list: HttpClient :: ",
+        "missing from the file: HttpClient :: ",
+        "not on the list: ",
+        "missing from the file: ",
+        "changed: ",
+    ] {
+        if let Some(code) = reason.strip_prefix(prefix)
+            && let Ok(tokens) = code.parse::<TokenStream>()
+        {
+            return format!("{}{}", prefix.replace("changed: ", ""), text(tokens));
+        }
+    }
+    reason.to_owned()
+}
+
+/// `src/egress_http.rs` is exactly the reviewed list (#569). It is the one
+/// file where a raw reqwest client may be named and where the disallowed
+/// builder methods may be called, so the Clippy rule says nothing about it.
+#[test]
+fn the_client_module_is_exactly_the_reviewed_list() {
+    let problems = client_module_problems(&client_module_source());
+    assert!(
+        problems.is_empty(),
+        "apps/gateway/src/egress_http.rs differs from the reviewed list (CLIENT_MODULE in \
+         egress_source_scan_tests.rs). It is the only code that may hold or build a raw \
+         reqwest client, so nothing in it is accepted by shape: change the list deliberately, \
+         in a reviewed change (#569).\n{}",
+        problems.join("\n")
+    );
+}
+
+/// Every planted change to the client module is refused, for its own reason.
+#[test]
+fn the_client_module_list_refuses_every_planted_change() {
+    let source = client_module_source();
+    for (changed, reason) in planted(&source) {
+        let reason = rendered(reason);
+        let problems = client_module_problems(&changed);
+        assert!(
+            problems.iter().any(|problem| problem.contains(&reason)),
+            "expected {reason:?}, found {problems:#?}"
+        );
+    }
+    // Layout and comments are not part of the list.
+    let relaid = source.replace("\n\n", "\n// a comment\n\n/// More documentation.\n");
+    assert_eq!(client_module_problems(&relaid), Vec::<String>::new());
 }
 
 fn repository() -> PathBuf {
@@ -573,6 +1194,7 @@ fn gate_problems(text: &str) -> Vec<String> {
         "rustflags",
         "cap_lints",
         "disallowed_method",
+        "disallowed_type",
         "clippy::style",
         "clippy::all",
     ]
@@ -691,14 +1313,15 @@ fn sanctioned_attributes_count_only_on_their_own_items() {
     let src = Path::new("/repo/apps/gateway/src");
     let expect =
         "#[expect(clippy::disallowed_methods, reason = \"the egress-guarded constructor (#509)\")]";
+    let types = "#![expect(clippy::disallowed_types, reason = \"the egress client newtype is the one place a reqwest client is held (#569)\")]";
     let egress = |rogue: &str| {
         format!(
-            "{expect} fn client_builder() {{}} {expect} fn pinned_client_builder() {{}} {rogue}"
+            "{types} {expect} fn client_builder() {{}} {expect} fn pinned_client_builder() {{}} {rogue}"
         )
     };
     let finds = |name: &str, source: &str| scan(src, &src.join(name), source) == sanctioned(name);
     assert!(finds(
-        "egress.rs",
+        "egress_http.rs",
         &egress(&format!("{expect} fn add_root_certificates() {{}}"))
     ));
     for rogue in [
@@ -707,8 +1330,16 @@ fn sanctioned_attributes_count_only_on_their_own_items() {
         format!("{expect} impl S {{ fn add_root_certificates() {{}} }}"),
         format!("mod m {{ {expect} fn add_root_certificates() {{}} }}"),
         format!("fn add_root_certificates() {{ {expect} let x = 1; }}"),
+        format!("{expect} fn add_root_certificates() {{}} mod m {{ {types} }}"),
+        format!(
+            "{expect} fn add_root_certificates() {{}} \
+             #[expect(clippy::disallowed_types, reason = \"x\")] struct S;"
+        ),
     ] {
-        assert!(!finds("egress.rs", &egress(&rogue)), "accepted: {rogue}");
+        assert!(
+            !finds("egress_http.rs", &egress(&rogue)),
+            "accepted: {rogue}"
+        );
     }
     let allow = "#[allow(clippy::disallowed_methods)]";
     assert!(finds(
@@ -724,12 +1355,19 @@ fn sanctioned_attributes_count_only_on_their_own_items() {
     }
     assert!(finds(
         "lib.rs",
-        "#![cfg_attr(test, allow(clippy::disallowed_methods))]"
+        "#![cfg_attr(test, allow(clippy::disallowed_methods, clippy::disallowed_types))]"
     ));
-    assert!(!finds(
-        "lib.rs",
-        "mod m { #![cfg_attr(test, allow(clippy::disallowed_methods))] }"
-    ));
+    for rogue in [
+        "mod m { #![cfg_attr(test, allow(clippy::disallowed_methods, clippy::disallowed_types))] }",
+        "#![cfg_attr(test, allow(clippy::disallowed_methods))] #![allow(clippy::disallowed_types)]",
+        // The file-level switch for the raw types belongs to egress_http.rs only.
+        "#![cfg_attr(test, allow(clippy::disallowed_methods, clippy::disallowed_types))] \
+         #![expect(clippy::disallowed_types, reason = \"the egress client newtype is the one place a reqwest client is held (#569)\")]",
+    ] {
+        assert!(!finds("lib.rs", rogue), "accepted: {rogue}");
+    }
+    // The same switch at the top of any other file is refused.
+    assert!(!finds("providers/openai.rs", types));
 }
 
 /// CI and gate files: any case, `-` and `_` alike, and the command-line
@@ -741,6 +1379,7 @@ fn gate_files_cannot_lower_the_rule_in_any_spelling() {
         "CARGO_ENCODED_RUSTFLAGS=x",
         "clippy-conf-dir: /tmp",
         "cargo clippy -- -A clippy::disallowed-methods",
+        "cargo clippy -- -A clippy::disallowed-types",
         "cargo clippy -- -A clippy::style",
         "cargo clippy -- -Awarnings",
         "cargo clippy -- -A warnings",

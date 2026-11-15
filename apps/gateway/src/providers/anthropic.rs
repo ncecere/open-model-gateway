@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 const BASE: &str = "https://api.anthropic.com/v1";
 pub struct AnthropicAdapter {
-    client: reqwest::Client,
+    client: crate::egress::HttpClient,
     resolver: Arc<dyn SecretResolver>,
     base: String,
 }

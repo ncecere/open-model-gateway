@@ -27,7 +27,7 @@ const CACHE_ENTRIES: usize = 64;
 
 type Cache = HashMap<String, (Instant, Arc<Vec<u8>>)>;
 pub(crate) struct OpenRouterCatalog {
-    client: reqwest::Client,
+    client: crate::egress::HttpClient,
     base: String,
     timeout: Duration,
     cache: tokio::sync::Mutex<Cache>,

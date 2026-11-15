@@ -20,7 +20,7 @@ const SMALL_BODY_LIMIT: usize = 1024 * 1024;
 const REQUEST_LIMIT: usize = 64 * 1024 * 1024;
 
 #[derive(Clone)]
-struct Connector(reqwest::Client);
+struct Connector(crate::egress::HttpClient);
 impl std::fmt::Debug for Connector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("FileStoreS3Connector")

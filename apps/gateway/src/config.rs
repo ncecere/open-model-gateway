@@ -51,7 +51,7 @@ pub struct Config {
 /// Operator-only trace configuration. Never Debug: headers contain secrets.
 #[derive(Clone)]
 pub struct TraceConfig {
-    pub(crate) endpoint: Option<(reqwest::Url, reqwest::Client)>,
+    pub(crate) endpoint: Option<(reqwest::Url, crate::egress::HttpClient)>,
     pub(crate) headers: reqwest::header::HeaderMap,
     pub(crate) sample_ratio: f64,
     pub(crate) environment: Environment,
@@ -126,7 +126,7 @@ impl TraceConfig {
 /// Parsing does not spawn a task or send anything.
 #[derive(Clone)]
 pub struct MetricsExportConfig {
-    pub endpoint: Option<(reqwest::Url, reqwest::Client)>,
+    pub endpoint: Option<(reqwest::Url, crate::egress::HttpClient)>,
     pub headers: reqwest::header::HeaderMap,
     pub interval: Duration,
     /// Includes identity-free personal-workspace traffic when explicitly on.
@@ -223,7 +223,7 @@ impl MetricsExportConfig {
 /// spawn a task, draw process entropy or send anything.
 #[derive(Clone)]
 pub struct LogsExportConfig {
-    pub endpoint: Option<(reqwest::Url, reqwest::Client)>,
+    pub endpoint: Option<(reqwest::Url, crate::egress::HttpClient)>,
     pub headers: reqwest::header::HeaderMap,
     pub min_severity: crate::ops_log::Severity,
 }
