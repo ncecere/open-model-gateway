@@ -5,6 +5,7 @@ use std::collections::HashMap;
 #[cfg(all(test, feature = "integration-tests"))]
 #[path = "scheduled_snapshot_tests.rs"]
 mod scheduled_snapshot_tests;
+mod usage_sql;
 /// Supported additive projection of the live cost report. Authorization is
 /// performed by the generator before aggregation, in this same primary snapshot.
 /// Detailed/non-additive measures are explicitly unavailable, not fabricated
@@ -307,97 +308,40 @@ fn cost_centers() -> String {
         "(SELECT coalesce(jsonb_agg(v ORDER BY v->>'name',v->>'id'),'[]'::jsonb) FROM (SELECT jsonb_build_object('id',cost_center_id::text,'name',coalesce(min(cost_center_name),'Unallocated'),'totals',{TOTALS}) v FROM rows GROUP BY cost_center_id ORDER BY min(cost_center_name),cost_center_id LIMIT 100) b)"
     )
 }
-#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
-async fn report(
-    tx: &mut Transaction<'_, Postgres>,
-    f: &Filters,
-    own: Option<Uuid>,
-    platform: bool,
-) -> Result<Value, ApiError> {
-    let components = CostComponents::default();
-    let component_fields = serde_json::to_value(components)
-        .map_err(|_| invalid())?
-        .as_object()
-        .ok_or_else(invalid)?
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut meter_component_fields =
-        serde_json::to_value(crate::billing::MeterCostComponents::default())
-            .map_err(|_| invalid())?
-            .as_object()
-            .ok_or_else(invalid)?
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-    // Serialized only when nonzero (async video jobs, 0016); always reported.
-    meter_component_fields.push("output_video_microusd".to_owned());
-    // Token components come from v2 and v3 settlements; meter components only from v3.
-    let mut component_sql=component_fields.iter().map(|key|format!("'{key}',coalesce(sum((cost_components->>'{key}')::numeric) FILTER(WHERE accounting_state='settled' AND pricing_version IN(2,3)),0)::text")).chain(meter_component_fields.iter().map(|key|format!("'{key}',coalesce(sum((cost_components->>'{key}')::numeric) FILTER(WHERE accounting_state='settled' AND pricing_version=3),0)::text"))).collect::<Vec<_>>().join(",");
-    component_sql.push_str(
-        ",'legacy_microusd',coalesce(sum(actual_microusd) FILTER(WHERE pricing_version=1),0)::text",
-    );
-    // Observed meter totals; null when nothing was observed (unknown, not zero).
-    let meter_sql = crate::billing::MeterUsage::KEYS
-        .iter()
-        .map(|key| format!("'{key}',sum((meter_usage->>'{key}')::numeric)::text"))
-        .collect::<Vec<_>>()
-        .join(",");
-    // Attempts whose workload can produce each meter (unless the pinned v3
-    // price marks it not applicable), and those among them where the meter
-    // was not observed. A settled failure (a free pre-processing rejection)
-    // used nothing. Decimal strings; the meter total is a lower bound
-    // whenever its unknown count is nonzero.
-    let relevant = |key: &str| {
-        format!(
-            "workload_kind IN({}) AND NOT coalesce(price_lines @> '[{{\"meter\":\"{key}\",\"not_applicable\":true}}]'::jsonb,false)",
-            meter_workloads(key)
-        )
-    };
-    let meter_relevant_sql = crate::billing::MeterUsage::KEYS
-        .iter()
-        .map(|key| format!("'{key}',count(*) FILTER(WHERE {})::text", relevant(key)))
-        .collect::<Vec<_>>()
-        .join(",");
-    let meter_unknown_sql = crate::billing::MeterUsage::KEYS
-        .iter()
-        .map(|key| {
-            format!(
-                "'{key}',count(*) FILTER(WHERE {} AND (meter_usage->>'{key}') IS NULL AND NOT (state='failed' AND accounting_state='settled'))::text",
-                relevant(key)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    let billing_fields = [
-        "total_input_tokens",
-        "uncached_input_tokens",
-        "cache_read_input_tokens",
-        "cache_write_input_tokens",
-        "cache_write_default_input_tokens",
-        "cache_write_5m_input_tokens",
-        "cache_write_1h_input_tokens",
-    ];
-    let billing_sql = billing_fields
-        .iter()
-        .map(|key| format!("'{key}',sum((billing_usage->>'{key}')::numeric)::text"))
-        .collect::<Vec<_>>()
-        .join(",");
-    let comparison = if f.compare {
+/// The previous-period comparison, or `NULL` when none was asked for.
+fn comparison_sql(f: &Filters) -> String {
+    if f.compare {
         format!(
             "jsonb_build_object('period',jsonb_build_object('start_date',$12::date::text,'end_date',$3::date::text,'timezone','UTC','includes_partial_day',false),'totals',(SELECT {TOTALS} FROM all_rows WHERE started_at<($3::date::timestamp AT TIME ZONE 'UTC')))"
         )
     } else {
         "NULL".into()
-    };
-    let service = if platform {
+    }
+}
+/// Service accounts are a workspace breakdown only.
+fn service_accounts_sql(platform: bool) -> String {
+    if platform {
         "'[]'::jsonb".into()
     } else {
         breakdown(
             "service_account_id::text",
             "coalesce(service_account_id::text,'Human keys')",
         )
-    };
+    }
+}
+async fn report(
+    tx: &mut Transaction<'_, Postgres>,
+    f: &Filters,
+    own: Option<Uuid>,
+    platform: bool,
+) -> Result<Value, ApiError> {
+    let component_sql = usage_sql::cost_components_sql()?;
+    let meter_sql = usage_sql::meter_usage_sql();
+    let meter_relevant_sql = usage_sql::meter_relevant_counts_sql();
+    let meter_unknown_sql = usage_sql::meter_unknown_counts_sql();
+    let billing_sql = usage_sql::billing_usage_sql();
+    let comparison = comparison_sql(f);
+    let service = service_accounts_sql(platform);
     let sql = format!(
         "{BASE} SELECT jsonb_build_object('period',jsonb_build_object('start_date',$3::date::text,'end_date',$4::date::text,'timezone','UTC','includes_partial_day',$4::date>(statement_timestamp() AT TIME ZONE 'UTC')::date),'scope','{}','observed_at',statement_timestamp(),'basis','configured_rate_estimate','currency','USD','totals',(SELECT {TOTALS} FROM rows),'health',(SELECT jsonb_build_object('pending_attempts',count(*) FILTER(WHERE accounting_state='pending')::text,'unknown_attempts',count(*) FILTER(WHERE accounting_state='unknown')::text,'missing_reservation_attempts',count(*) FILTER(WHERE reservation_id IS NULL)::text,'unpriced_attempts',count(*) FILTER(WHERE price_id IS NULL)::text,'aged_hold_attempts',count(*) FILTER(WHERE accounting_state IN('pending','unknown') AND lease_expires_at<=statement_timestamp())::text,'unbounded_attempts',count(*) FILTER(WHERE coalesce(unbounded_cost,reservation_id IS NULL))::text) FROM rows),'daily',(SELECT coalesce(jsonb_agg(v ORDER BY v->>'date'),'[]'::jsonb) FROM (SELECT jsonb_build_object('date',day::date::text,'totals',{TOTALS}) v FROM generate_series($3::date::timestamp,($4::date-1)::timestamp,interval '1 day') AS calendar(day) LEFT JOIN rows ON (rows.started_at AT TIME ZONE 'UTC')::date=day::date GROUP BY day) d),'breakdowns',jsonb_build_object('models',{},'providers',{},'workspaces',{},'cost_centers',{},'service_accounts',{}),'comparison',{},'coverage',(SELECT jsonb_build_object('priced_attempts',count(*) FILTER(WHERE price_id IS NOT NULL)::text,'settled_attempts',count(*) FILTER(WHERE accounting_state='settled')::text,'total_attempts',count(*)::text,'complete_billing_attempts',count(*) FILTER(WHERE billing_usage IS NOT NULL AND (SELECT count(*)=7 AND bool_and(j.value<>'null'::jsonb) FROM jsonb_each(billing_usage) j))::text,'legacy_pricing_attempts',count(*) FILTER(WHERE pricing_version=1)::text,'incomplete_billing_attempts',count(*) FILTER(WHERE billing_usage IS NULL OR NOT (SELECT count(*)=7 AND bool_and(j.value<>'null'::jsonb) FROM jsonb_each(billing_usage) j))::text) FROM rows),'cost_components',(SELECT jsonb_build_object({component_sql}) FROM rows),'billing_usage',(SELECT jsonb_build_object({billing_sql}) FROM rows),'meter_usage',(SELECT jsonb_build_object({meter_sql}) FROM rows),'meter_relevant_attempts',(SELECT jsonb_build_object({meter_relevant_sql}) FROM rows),'meter_unknown_attempts',(SELECT jsonb_build_object({meter_unknown_sql}) FROM rows),'provider_reported_cost_microusd',(SELECT sum(provider_cost_microusd)::text FROM rows),'breakdowns_truncated',(SELECT count(DISTINCT public_model)>100 OR count(DISTINCT provider)>100 OR count(DISTINCT workspace_id)>100 OR count(DISTINCT coalesce(cost_center_id::text,'unallocated'))>100 OR {} FROM rows))",
         if platform { "platform" } else { "workspace" },
