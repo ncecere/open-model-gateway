@@ -118,10 +118,118 @@ fn function_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
+/// One wire message: role rules, then its tool calls.
+fn message(message: WireMessage) -> Result<Message, InferenceError> {
+    let invalid = InferenceError::InvalidRequest;
+    if message.role != Role::Assistant && matches!(message.refusal, NoRefusal::Null) {
+        return Err(invalid);
+    }
+    if message.role == Role::Tool {
+        if message.tool_call_id.as_ref().is_none_or(|id| id.is_empty())
+            || message.content.is_none()
+            || !message.tool_calls.is_empty()
+        {
+            return Err(invalid);
+        }
+    } else if message.tool_call_id.is_some() {
+        return Err(invalid);
+    }
+    if message.role != Role::Assistant
+        && (message.content.is_none() || !message.tool_calls.is_empty())
+    {
+        return Err(invalid);
+    }
+    if message.content.is_none() && message.tool_calls.is_empty() {
+        return Err(invalid);
+    }
+    let tool_calls = message
+        .tool_calls
+        .into_iter()
+        .map(|call| {
+            if call.kind != "function" || call.id.is_empty() || !function_name(&call.function.name)
+            {
+                return Err(invalid);
+            }
+            Ok(ToolCall {
+                id: call.id,
+                name: call.function.name,
+                arguments: call.function.arguments,
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(Message {
+        role: message.role,
+        content: message.content,
+        tool_calls,
+        tool_call_id: message.tool_call_id,
+    })
+}
+
+/// The function tools; names are distinct and recorded in `names`.
+fn function_tools(
+    tools: Vec<WireTool>,
+    names: &mut std::collections::BTreeSet<String>,
+) -> Result<Vec<FunctionTool>, InferenceError> {
+    tools
+        .into_iter()
+        .map(|tool| {
+            if tool.kind != "function"
+                || !function_name(&tool.function.name)
+                || !tool.function.parameters.is_object()
+                || !names.insert(tool.function.name.clone())
+            {
+                return Err(InferenceError::InvalidRequest);
+            }
+            Ok(FunctionTool {
+                name: tool.function.name,
+                description: tool.function.description,
+                parameters: tool.function.parameters,
+                strict: tool.function.strict,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+}
+
+/// `tool_choice`: a mode string, or a named function among the tools.
+fn tool_choice(
+    choice: Option<Value>,
+    tools: &[FunctionTool],
+    names: &std::collections::BTreeSet<String>,
+) -> Result<Option<ToolChoice>, InferenceError> {
+    let invalid = InferenceError::InvalidRequest;
+    Ok(match choice {
+        None => None,
+        Some(Value::String(s)) => Some(match s.as_str() {
+            "auto" => ToolChoice::Auto,
+            "none" => ToolChoice::None,
+            "required" if !tools.is_empty() => ToolChoice::Required,
+            _ => return Err(invalid),
+        }),
+        Some(value) => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Named {
+                #[serde(rename = "type")]
+                kind: String,
+                function: Name,
+            }
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Name {
+                name: String,
+            }
+            let choice: Named = serde_json::from_value(value).map_err(|_| invalid)?;
+            if choice.kind != "function" || !names.contains(&choice.function.name) {
+                return Err(invalid);
+            }
+            Some(ToolChoice::Function(choice.function.name))
+        }
+    })
+}
+
 impl Request {
-    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
-    fn normalize(self) -> Result<ChatRequest, InferenceError> {
-        let invalid = InferenceError::InvalidRequest;
+    /// Request-level bounds, checked before anything is consumed.
+    fn check_bounds(&self) -> Result<(), InferenceError> {
         if self.model.trim().is_empty()
             || self.model.len() > 200
             || self.messages.is_empty()
@@ -137,105 +245,22 @@ impl Request {
                 .is_some_and(|(a, b)| a != b)
             || (!self.stream && self.stream_options.is_some())
         {
-            return Err(invalid);
+            return Err(InferenceError::InvalidRequest);
         }
+        Ok(())
+    }
+
+    fn normalize(self) -> Result<ChatRequest, InferenceError> {
+        self.check_bounds()?;
         // One maximum for the upstream request and the admission reservation.
         let max_output_tokens = self.max_completion_tokens.or(self.max_tokens);
         let mut messages = Vec::with_capacity(self.messages.len());
-        for message in self.messages {
-            if message.role != Role::Assistant && matches!(message.refusal, NoRefusal::Null) {
-                return Err(invalid);
-            }
-            if message.role == Role::Tool {
-                if message.tool_call_id.as_ref().is_none_or(|id| id.is_empty())
-                    || message.content.is_none()
-                    || !message.tool_calls.is_empty()
-                {
-                    return Err(invalid);
-                }
-            } else if message.tool_call_id.is_some() {
-                return Err(invalid);
-            }
-            if message.role != Role::Assistant
-                && (message.content.is_none() || !message.tool_calls.is_empty())
-            {
-                return Err(invalid);
-            }
-            if message.content.is_none() && message.tool_calls.is_empty() {
-                return Err(invalid);
-            }
-            let tool_calls = message
-                .tool_calls
-                .into_iter()
-                .map(|call| {
-                    if call.kind != "function"
-                        || call.id.is_empty()
-                        || !function_name(&call.function.name)
-                    {
-                        return Err(invalid);
-                    }
-                    Ok(ToolCall {
-                        id: call.id,
-                        name: call.function.name,
-                        arguments: call.function.arguments,
-                    })
-                })
-                .collect::<Result<_, _>>()?;
-            messages.push(Message {
-                role: message.role,
-                content: message.content,
-                tool_calls,
-                tool_call_id: message.tool_call_id,
-            });
+        for wire in self.messages {
+            messages.push(message(wire)?);
         }
         let mut names = std::collections::BTreeSet::new();
-        let tools = self
-            .tools
-            .into_iter()
-            .map(|tool| {
-                if tool.kind != "function"
-                    || !function_name(&tool.function.name)
-                    || !tool.function.parameters.is_object()
-                    || !names.insert(tool.function.name.clone())
-                {
-                    return Err(invalid);
-                }
-                Ok(FunctionTool {
-                    name: tool.function.name,
-                    description: tool.function.description,
-                    parameters: tool.function.parameters,
-                    strict: tool.function.strict,
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let tool_choice = match self.tool_choice {
-            None => None,
-            Some(Value::String(s)) => Some(match s.as_str() {
-                "auto" => ToolChoice::Auto,
-                "none" => ToolChoice::None,
-                "required" if !tools.is_empty() => ToolChoice::Required,
-                _ => return Err(invalid),
-            }),
-            Some(value) => {
-                #[derive(Deserialize)]
-                #[serde(deny_unknown_fields)]
-                struct Named {
-                    #[serde(rename = "type")]
-                    kind: String,
-                    function: Name,
-                }
-                #[derive(Deserialize)]
-                #[serde(deny_unknown_fields)]
-                struct Name {
-                    name: String,
-                }
-                let choice: Named = serde_json::from_value(value).map_err(|_| invalid)?;
-                if choice.kind != "function" || !names.contains(&choice.function.name) {
-                    return Err(invalid);
-                }
-                Some(ToolChoice::Function(choice.function.name))
-            }
-        };
+        let tools = function_tools(self.tools, &mut names)?;
+        let tool_choice = tool_choice(self.tool_choice, &tools, &names)?;
         Ok(ChatRequest {
             messages_options: None,
             model: self.model,

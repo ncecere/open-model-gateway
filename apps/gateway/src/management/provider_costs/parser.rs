@@ -336,8 +336,41 @@ fn management_openapi_money_raw_upload_request_vectors() {
 pub(crate) fn upload_parses(input: &serde_json::Value) -> bool {
     serde_json::from_str::<Upload>(&input.to_string()).is_ok_and(|upload| parse(&upload).is_ok())
 }
-#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 pub(super) fn parse(b: &Upload) -> Result<Parsed, ApiError> {
+    check_request(b)?;
+    let Window {
+        start,
+        end,
+        exported,
+    } = window(b)?;
+    let mut walk = Walk {
+        expected: start,
+        seen_rows: BTreeSet::new(),
+        cursors: BTreeSet::new(),
+        lines: Vec::new(),
+        canonical: Vec::new(),
+    };
+    for (page_index, raw) in b.pages.iter().enumerate() {
+        walk.page(b, page_index, raw, end)?;
+    }
+    if walk.expected != end {
+        return Err(invalid());
+    }
+    // Pagination boundaries, evidence references and export timestamps are not
+    // financial identity. Preserve them in evidence, not in the fingerprint.
+    let report = serde_json::to_vec(&json!(["anthropic-cost-v1", start, end, walk.canonical]))
+        .map_err(|_| invalid())?;
+    Ok(Parsed {
+        start,
+        end,
+        exported,
+        fingerprint: Sha256::digest(&report).to_vec(),
+        lines: walk.lines,
+    })
+}
+
+/// The account, evidence reference, page count and request parameters.
+fn check_request(b: &Upload) -> Result<(), ApiError> {
     let groups: BTreeSet<&str> = b.request.group_by.iter().map(String::as_str).collect();
     if !bounded(&b.account_id, 200)
         || !bounded(&b.evidence_reference, 256)
@@ -349,6 +382,17 @@ pub(super) fn parse(b: &Upload) -> Result<Parsed, ApiError> {
     {
         return Err(invalid());
     }
+    Ok(())
+}
+
+struct Window {
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    exported: DateTime<Utc>,
+}
+/// The requested window and the export time: whole UTC days, at most 31, not
+/// in the future, exported after the window ended.
+fn window(b: &Upload) -> Result<Window, ApiError> {
     let start = timestamp(&b.request.starting_at)?;
     let end = timestamp(&b.request.ending_at)?;
     let exported = timestamp(&b.exported_at)?;
@@ -364,12 +408,32 @@ pub(super) fn parse(b: &Upload) -> Result<Parsed, ApiError> {
     {
         return Err(invalid());
     }
-    let mut expected = start;
-    let mut seen_rows = BTreeSet::new();
-    let mut cursors = BTreeSet::new();
-    let mut lines = Vec::new();
-    let mut canonical = Vec::new();
-    for (page_index, raw) in b.pages.iter().enumerate() {
+    Ok(Window {
+        start,
+        end,
+        exported,
+    })
+}
+
+/// What the walk over the pages has gathered so far.
+struct Walk {
+    /// The start the next bucket must have (buckets are contiguous days).
+    expected: DateTime<Utc>,
+    seen_rows: BTreeSet<String>,
+    cursors: BTreeSet<String>,
+    lines: Vec<Line>,
+    canonical: Vec<Value>,
+}
+impl Walk {
+    /// One page: its pagination shape, then each bucket, then its canonical
+    /// form for the fingerprint.
+    fn page(
+        &mut self,
+        b: &Upload,
+        page_index: usize,
+        raw: &serde_json::value::RawValue,
+        end: DateTime<Utc>,
+    ) -> Result<(), ApiError> {
         bounded_page(raw.get())?;
         let page: Page = serde_json::from_str(raw.get()).map_err(|_| invalid())?;
         let last = page_index + 1 == b.pages.len();
@@ -380,87 +444,104 @@ pub(super) fn parse(b: &Upload) -> Result<Parsed, ApiError> {
                 && !page
                     .next_page
                     .as_ref()
-                    .is_some_and(|s| bounded(s, 4096) && cursors.insert(s.clone())))
+                    .is_some_and(|s| bounded(s, 4096) && self.cursors.insert(s.clone())))
             || (last && page.next_page.is_some())
         {
             return Err(invalid());
         }
         for (bucket_index, bucket) in page.data.iter().enumerate() {
-            let bs = timestamp(&bucket.starting_at)?;
-            let be = timestamp(&bucket.ending_at)?;
-            if bs != expected || be != bs + Duration::days(1) || be > end {
-                return Err(invalid());
-            }
-            expected = be;
-            for (item_index, item) in bucket.results.iter().enumerate() {
-                if lines.len() == MAX_LINES || item.currency != "USD" {
-                    return Err(invalid());
-                }
-                for text in [
-                    &item.workspace_id,
-                    &item.description,
-                    &item.model,
-                    &item.service_tier,
-                    &item.context_window,
-                    &item.cost_type,
-                    &item.token_type,
-                    &item.inference_geo,
-                    &item.speed,
-                ]
-                .into_iter()
-                .flatten()
-                {
-                    if !bounded(text, 4096) {
-                        return Err(invalid());
-                    }
-                }
-                let (amount, residual) = cents(&item.amount)?;
-                let mut dimensions = serde_json::to_value(item).map_err(|_| invalid())?;
-                dimensions
-                    .as_object_mut()
-                    .ok_or_else(invalid)?
-                    .remove("amount");
-                let key =
-                    serde_json::to_string(&json!([bs, be, dimensions])).map_err(|_| invalid())?;
-                if !seen_rows.insert(key.clone()) {
-                    return Err(invalid());
-                }
-                lines.push(Line {
-                    source_page: page_index as i32,
-                    source_pointer: format!("/data/{bucket_index}/results/{item_index}"),
-                    bucket_start: bs,
-                    bucket_end: be,
-                    dimensions,
-                    original_amount: item.amount.clone(),
-                    amount_microusd: amount.to_string(),
-                    conversion_residual_microusd: residual,
-                    dimension_key: hex::encode(Sha256::digest(key.as_bytes())),
-                });
-            }
+            self.bucket(page_index, bucket_index, bucket, end)?;
         }
         for bucket in page.data {
-            let mut items: Vec<Value> = bucket
-                .results
-                .iter()
-                .map(serde_json::to_value)
-                .collect::<Result<_, _>>()
-                .map_err(|_| invalid())?;
-            items.sort_by_cached_key(Value::to_string);
-            canonical.push(json!({"starting_at":timestamp(&bucket.starting_at)?,"ending_at":timestamp(&bucket.ending_at)?,"results":items}));
+            self.canonical_bucket(bucket)?;
         }
+        Ok(())
     }
-    if expected != end {
-        return Err(invalid());
+
+    /// One bucket: the next day of the window, then each of its items.
+    fn bucket(
+        &mut self,
+        page_index: usize,
+        bucket_index: usize,
+        bucket: &Bucket,
+        end: DateTime<Utc>,
+    ) -> Result<(), ApiError> {
+        let bs = timestamp(&bucket.starting_at)?;
+        let be = timestamp(&bucket.ending_at)?;
+        if bs != self.expected || be != bs + Duration::days(1) || be > end {
+            return Err(invalid());
+        }
+        self.expected = be;
+        for (item_index, item) in bucket.results.iter().enumerate() {
+            self.item(page_index, bucket_index, item_index, item, (bs, be))?;
+        }
+        Ok(())
     }
-    // Pagination boundaries, evidence references and export timestamps are not
-    // financial identity. Preserve them in evidence, not in the fingerprint.
-    let report = serde_json::to_vec(&json!(["anthropic-cost-v1", start, end, canonical]))
-        .map_err(|_| invalid())?;
-    Ok(Parsed {
-        start,
-        end,
-        exported,
-        fingerprint: Sha256::digest(&report).to_vec(),
-        lines,
-    })
+
+    /// One item: USD only, bounded text, an exact amount, a distinct row.
+    fn item(
+        &mut self,
+        page_index: usize,
+        bucket_index: usize,
+        item_index: usize,
+        item: &Item,
+        (bs, be): (DateTime<Utc>, DateTime<Utc>),
+    ) -> Result<(), ApiError> {
+        if self.lines.len() == MAX_LINES || item.currency != "USD" {
+            return Err(invalid());
+        }
+        for text in [
+            &item.workspace_id,
+            &item.description,
+            &item.model,
+            &item.service_tier,
+            &item.context_window,
+            &item.cost_type,
+            &item.token_type,
+            &item.inference_geo,
+            &item.speed,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !bounded(text, 4096) {
+                return Err(invalid());
+            }
+        }
+        let (amount, residual) = cents(&item.amount)?;
+        let mut dimensions = serde_json::to_value(item).map_err(|_| invalid())?;
+        dimensions
+            .as_object_mut()
+            .ok_or_else(invalid)?
+            .remove("amount");
+        let key = serde_json::to_string(&json!([bs, be, dimensions])).map_err(|_| invalid())?;
+        if !self.seen_rows.insert(key.clone()) {
+            return Err(invalid());
+        }
+        self.lines.push(Line {
+            source_page: page_index as i32,
+            source_pointer: format!("/data/{bucket_index}/results/{item_index}"),
+            bucket_start: bs,
+            bucket_end: be,
+            dimensions,
+            original_amount: item.amount.clone(),
+            amount_microusd: amount.to_string(),
+            conversion_residual_microusd: residual,
+            dimension_key: hex::encode(Sha256::digest(key.as_bytes())),
+        });
+        Ok(())
+    }
+
+    /// The bucket with its items in a canonical order, for the fingerprint.
+    fn canonical_bucket(&mut self, bucket: Bucket) -> Result<(), ApiError> {
+        let mut items: Vec<Value> = bucket
+            .results
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()
+            .map_err(|_| invalid())?;
+        items.sort_by_cached_key(Value::to_string);
+        self.canonical.push(json!({"starting_at":timestamp(&bucket.starting_at)?,"ending_at":timestamp(&bucket.ending_at)?,"results":items}));
+        Ok(())
+    }
 }

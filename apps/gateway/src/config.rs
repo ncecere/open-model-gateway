@@ -437,139 +437,36 @@ impl Environment {
 pub(crate) const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(3);
 
 impl Config {
-    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     pub fn from_env() -> Result<Self> {
         let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL is required")?;
-        let listen = std::env::var("GATEWAY_LISTEN")
-            .unwrap_or_else(|_| "127.0.0.1:8080".into())
-            .parse()
-            .context("GATEWAY_LISTEN must be an IP address and port")?;
-        let environment = match std::env::var("GATEWAY_ENV").as_deref() {
-            Ok("development") => Environment::Development,
-            Ok("production") | Err(std::env::VarError::NotPresent) => Environment::Production,
-            _ => bail!("GATEWAY_ENV must be development or production"),
-        };
-        let inference_base_url = match std::env::var("GATEWAY_INFERENCE_BASE_URL") {
-            Ok(value) => InferenceBaseUrl::parse(Some(&value), environment)?,
-            Err(std::env::VarError::NotPresent) => InferenceBaseUrl::default(),
-            Err(_) => bail!("GATEWAY_INFERENCE_BASE_URL is not valid Unicode"),
-        };
-        let web_directory = std::env::var_os("GATEWAY_WEB_DIR").map(PathBuf::from);
-        if web_directory
-            .as_ref()
-            .is_some_and(|path| path.as_os_str().is_empty())
-        {
-            bail!("GATEWAY_WEB_DIR must be unset or a non-empty directory path");
-        }
-        let secret_env_allowlist: Vec<String> = std::env::var("GATEWAY_SECRET_ENV_ALLOWLIST")
-            .unwrap_or_default()
-            .split(',')
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .map(str::to_owned)
-            .collect();
-        let smtp_env_allowlist: Vec<String> = std::env::var(crate::email::SMTP_ALLOWLIST_VAR)
-            .unwrap_or_default()
-            .split(',')
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .map(str::to_owned)
-            .collect();
+        let listen = listen_from_env()?;
+        let environment = environment_from_env()?;
+        let inference_base_url = inference_base_url_from_env(environment)?;
+        let web_directory = web_directory_from_env()?;
+        let secret_env_allowlist = names_from_env("GATEWAY_SECRET_ENV_ALLOWLIST");
+        let smtp_env_allowlist = names_from_env(crate::email::SMTP_ALLOWLIST_VAR);
         // Validate metrics before generic allowlist checks: its diagnostics
         // name only the setting, never the selected secret variable or value.
         let metrics_export = MetricsExportConfig::from_env(environment)?;
         let logs_export = LogsExportConfig::from_env(environment)?;
-        let webhook_names = env_list("GATEWAY_ALERT_WEBHOOK_SECRET_ENV_ALLOWLIST")?;
-        disjoint_allowlists(
-            &secret_env_allowlist,
-            &smtp_env_allowlist,
-            &webhook_names,
-            &|name| std::env::var(name).ok(),
-        )?;
-        let webhook_urls = env_list("GATEWAY_ALERT_WEBHOOK_URL_ALLOWLIST")?;
-        let alert_webhooks = AlertWebhookPolicy::parse(&webhook_urls, webhook_names, environment)?;
+        let alert_webhooks =
+            alert_webhooks_from_env(&secret_env_allowlist, &smtp_env_allowlist, environment)?;
         // After the allowlist checks, so a trace pointer that a provider or SMTP
         // allowlist could read is reported like every other pointer: by setting
         // and variable name, never value. Trace errors themselves stay generic.
         let traces = TraceConfig::from_env(environment)?;
-        let max_concurrent = std::env::var("GATEWAY_MAX_CONCURRENT_REQUESTS")
-            .unwrap_or_else(|_| "128".into())
-            .parse::<usize>()
-            .context("GATEWAY_MAX_CONCURRENT_REQUESTS must be an integer")?;
-        let seconds = std::env::var("GATEWAY_REQUEST_TIMEOUT_SECONDS")
-            .unwrap_or_else(|_| "120".into())
-            .parse::<u64>()
-            .context("GATEWAY_REQUEST_TIMEOUT_SECONDS must be an integer")?;
-        anyhow::ensure!(
-            (1..=10_000).contains(&max_concurrent) && (1..=3600).contains(&seconds),
-            "inference limits out of range"
-        );
-        let inference_limits = crate::inference::EngineLimits {
-            max_concurrent,
-            request_timeout: Duration::from_secs(seconds),
-            workloads: crate::inference::workload::WorkloadLimits::from_lookup(|name| {
-                std::env::var(name).ok()
-            })?,
-            audio: crate::inference::audio::AudioLimits::from_lookup(|name| {
-                std::env::var(name).ok()
-            })?,
-        };
+        let inference_limits = inference_limits_from_env()?;
         let metrics_listen = crate::metrics::listen_from(
             std::env::var("GATEWAY_METRICS_ADDR").ok().as_deref(),
             listen,
         )?;
-        let database_max_connections = std::env::var("GATEWAY_DATABASE_MAX_CONNECTIONS")
-            .unwrap_or_else(|_| "10".into())
-            .parse::<u32>()
-            .ok()
-            .filter(|n| (2..=500).contains(n))
-            .context("GATEWAY_DATABASE_MAX_CONNECTIONS must be an integer from 2 to 500")?;
-        let reporting_database_url = match std::env::var("GATEWAY_REPORTING_DATABASE_URL") {
-            Ok(url) if url.trim().is_empty() => {
-                bail!("GATEWAY_REPORTING_DATABASE_URL must be unset or a PostgreSQL URL")
-            }
-            Ok(url) => {
-                // Validate now (never echo the value: it may hold credentials).
-                <sqlx::postgres::PgConnectOptions as std::str::FromStr>::from_str(&url).map_err(
-                    |_| {
-                        anyhow::anyhow!(
-                            "GATEWAY_REPORTING_DATABASE_URL is not a valid PostgreSQL URL"
-                        )
-                    },
-                )?;
-                Some(url)
-            }
-            Err(std::env::VarError::NotPresent) => None,
-            Err(_) => bail!("GATEWAY_REPORTING_DATABASE_URL is not valid Unicode"),
-        };
-        let reporting_max_lag = std::env::var("GATEWAY_REPORTING_MAX_LAG_SECONDS")
-            .unwrap_or_else(|_| "30".into())
-            .parse::<u64>()
-            .ok()
-            .filter(|n| (1..=3600).contains(n))
-            .map(Duration::from_secs)
-            .context("GATEWAY_REPORTING_MAX_LAG_SECONDS must be an integer from 1 to 3600")?;
+        let database_max_connections = database_max_connections_from_env()?;
+        let reporting_database_url =
+            optional_postgres_url_from_env("GATEWAY_REPORTING_DATABASE_URL")?;
+        let reporting_max_lag = reporting_max_lag_from_env()?;
         let admission_mode = crate::governance::locks::AdmissionMode::from_env()?;
-        let listen_database_url = match std::env::var("GATEWAY_LISTEN_DATABASE_URL") {
-            Ok(url) if url.trim().is_empty() => {
-                bail!("GATEWAY_LISTEN_DATABASE_URL must be unset or a PostgreSQL URL")
-            }
-            Ok(url) => {
-                <sqlx::postgres::PgConnectOptions as std::str::FromStr>::from_str(&url).map_err(
-                    |_| {
-                        anyhow::anyhow!("GATEWAY_LISTEN_DATABASE_URL is not a valid PostgreSQL URL")
-                    },
-                )?;
-                Some(url)
-            }
-            Err(std::env::VarError::NotPresent) => None,
-            Err(_) => bail!("GATEWAY_LISTEN_DATABASE_URL is not valid Unicode"),
-        };
-        let config_cache = match std::env::var("GATEWAY_CONFIG_CACHE").as_deref() {
-            Ok("on") | Err(std::env::VarError::NotPresent) => true,
-            Ok("off") => false,
-            _ => bail!("GATEWAY_CONFIG_CACHE must be on or off"),
-        };
+        let listen_database_url = optional_postgres_url_from_env("GATEWAY_LISTEN_DATABASE_URL")?;
+        let config_cache = config_cache_from_env()?;
         Ok(Self {
             database_url,
             listen,
@@ -649,6 +546,136 @@ impl Config {
                 })?,
         ))
     }
+}
+
+fn listen_from_env() -> Result<SocketAddr> {
+    std::env::var("GATEWAY_LISTEN")
+        .unwrap_or_else(|_| "127.0.0.1:8080".into())
+        .parse()
+        .context("GATEWAY_LISTEN must be an IP address and port")
+}
+
+fn environment_from_env() -> Result<Environment> {
+    Ok(match std::env::var("GATEWAY_ENV").as_deref() {
+        Ok("development") => Environment::Development,
+        Ok("production") | Err(std::env::VarError::NotPresent) => Environment::Production,
+        _ => bail!("GATEWAY_ENV must be development or production"),
+    })
+}
+
+fn inference_base_url_from_env(environment: Environment) -> Result<InferenceBaseUrl> {
+    match std::env::var("GATEWAY_INFERENCE_BASE_URL") {
+        Ok(value) => InferenceBaseUrl::parse(Some(&value), environment),
+        Err(std::env::VarError::NotPresent) => Ok(InferenceBaseUrl::default()),
+        Err(_) => bail!("GATEWAY_INFERENCE_BASE_URL is not valid Unicode"),
+    }
+}
+
+fn web_directory_from_env() -> Result<Option<PathBuf>> {
+    let web_directory = std::env::var_os("GATEWAY_WEB_DIR").map(PathBuf::from);
+    if web_directory
+        .as_ref()
+        .is_some_and(|path| path.as_os_str().is_empty())
+    {
+        bail!("GATEWAY_WEB_DIR must be unset or a non-empty directory path");
+    }
+    Ok(web_directory)
+}
+
+/// A comma-separated list of variable names; unset reads as empty.
+fn names_from_env(setting: &str) -> Vec<String> {
+    std::env::var(setting)
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The webhook secret allowlist, its disjointness from the provider and SMTP
+/// allowlists, then the approved webhook URLs.
+fn alert_webhooks_from_env(
+    secret_env_allowlist: &[String],
+    smtp_env_allowlist: &[String],
+    environment: Environment,
+) -> Result<AlertWebhookPolicy> {
+    let webhook_names = env_list("GATEWAY_ALERT_WEBHOOK_SECRET_ENV_ALLOWLIST")?;
+    disjoint_allowlists(
+        secret_env_allowlist,
+        smtp_env_allowlist,
+        &webhook_names,
+        &|name| std::env::var(name).ok(),
+    )?;
+    let webhook_urls = env_list("GATEWAY_ALERT_WEBHOOK_URL_ALLOWLIST")?;
+    AlertWebhookPolicy::parse(&webhook_urls, webhook_names, environment)
+}
+
+fn inference_limits_from_env() -> Result<crate::inference::EngineLimits> {
+    let max_concurrent = std::env::var("GATEWAY_MAX_CONCURRENT_REQUESTS")
+        .unwrap_or_else(|_| "128".into())
+        .parse::<usize>()
+        .context("GATEWAY_MAX_CONCURRENT_REQUESTS must be an integer")?;
+    let seconds = std::env::var("GATEWAY_REQUEST_TIMEOUT_SECONDS")
+        .unwrap_or_else(|_| "120".into())
+        .parse::<u64>()
+        .context("GATEWAY_REQUEST_TIMEOUT_SECONDS must be an integer")?;
+    anyhow::ensure!(
+        (1..=10_000).contains(&max_concurrent) && (1..=3600).contains(&seconds),
+        "inference limits out of range"
+    );
+    Ok(crate::inference::EngineLimits {
+        max_concurrent,
+        request_timeout: Duration::from_secs(seconds),
+        workloads: crate::inference::workload::WorkloadLimits::from_lookup(|name| {
+            std::env::var(name).ok()
+        })?,
+        audio: crate::inference::audio::AudioLimits::from_lookup(|name| std::env::var(name).ok())?,
+    })
+}
+
+fn database_max_connections_from_env() -> Result<u32> {
+    std::env::var("GATEWAY_DATABASE_MAX_CONNECTIONS")
+        .unwrap_or_else(|_| "10".into())
+        .parse::<u32>()
+        .ok()
+        .filter(|n| (2..=500).contains(n))
+        .context("GATEWAY_DATABASE_MAX_CONNECTIONS must be an integer from 2 to 500")
+}
+
+/// An optional PostgreSQL URL, validated now. The value is never echoed: it
+/// may hold credentials.
+fn optional_postgres_url_from_env(setting: &str) -> Result<Option<String>> {
+    match std::env::var(setting) {
+        Ok(url) if url.trim().is_empty() => {
+            bail!("{setting} must be unset or a PostgreSQL URL")
+        }
+        Ok(url) => {
+            <sqlx::postgres::PgConnectOptions as std::str::FromStr>::from_str(&url)
+                .map_err(|_| anyhow::anyhow!("{setting} is not a valid PostgreSQL URL"))?;
+            Ok(Some(url))
+        }
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(_) => bail!("{setting} is not valid Unicode"),
+    }
+}
+
+fn reporting_max_lag_from_env() -> Result<Duration> {
+    std::env::var("GATEWAY_REPORTING_MAX_LAG_SECONDS")
+        .unwrap_or_else(|_| "30".into())
+        .parse::<u64>()
+        .ok()
+        .filter(|n| (1..=3600).contains(n))
+        .map(Duration::from_secs)
+        .context("GATEWAY_REPORTING_MAX_LAG_SECONDS must be an integer from 1 to 3600")
+}
+
+fn config_cache_from_env() -> Result<bool> {
+    Ok(match std::env::var("GATEWAY_CONFIG_CACHE").as_deref() {
+        Ok("on") | Err(std::env::VarError::NotPresent) => true,
+        Ok("off") => false,
+        _ => bail!("GATEWAY_CONFIG_CACHE must be on or off"),
+    })
 }
 
 /// Each transport has a dedicated secret boundary, never a shared variable.
