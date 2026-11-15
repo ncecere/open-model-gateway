@@ -1,7 +1,7 @@
 #![cfg(feature = "integration-tests")]
 // Test clients reach loopback test servers directly (#509: production code uses
 // `egress::client_builder`).
-#![allow(clippy::disallowed_methods)]
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 //! Reproducible admission + settlement load harness (docs/operations.md).
 //!
 //! Ignored by default. It never contacts a provider: an in-process mock

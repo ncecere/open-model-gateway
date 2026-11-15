@@ -96,7 +96,7 @@ impl SignedClaims {
 
 #[derive(Clone)]
 pub(super) struct OidcHttp {
-    client: reqwest::Client,
+    client: crate::egress::HttpClient,
     allow_loopback_http: bool,
 }
 impl OidcHttp {

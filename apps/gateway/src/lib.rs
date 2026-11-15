@@ -6,7 +6,7 @@
 // Test code may begin transactions directly (production code uses `db::begin`)
 // and build HTTP clients for loopback test servers (production code uses
 // `egress::client_builder`, #509).
-#![cfg_attr(test, allow(clippy::disallowed_methods))]
+#![cfg_attr(test, allow(clippy::disallowed_methods, clippy::disallowed_types))]
 pub mod admin_tokens;
 pub mod alerts;
 pub mod archive;

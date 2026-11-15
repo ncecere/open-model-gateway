@@ -1,6 +1,6 @@
 //! Real serve process + loopback receiver, no provider or production access.
 #![cfg(feature = "integration-tests")]
-#![allow(clippy::disallowed_methods)]
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 use axum::{
     Router,
     body::Bytes,

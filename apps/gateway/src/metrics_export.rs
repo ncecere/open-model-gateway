@@ -580,7 +580,7 @@ impl Drop for Runtime {
 
 struct Exporter {
     url: reqwest::Url,
-    client: reqwest::Client,
+    client: crate::egress::HttpClient,
     headers: reqwest::header::HeaderMap,
     encoder: Encoder,
     traffic: bool,

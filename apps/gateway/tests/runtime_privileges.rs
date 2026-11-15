@@ -1,6 +1,6 @@
 #![cfg(feature = "integration-tests")]
 // Test probes may begin transactions directly (see `src/db.rs`).
-#![allow(clippy::disallowed_methods)]
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 //! Explicitly opt in only on the dedicated disposable PostgreSQL test cluster.
 use sqlx::PgPool;
 #[path = "runtime_privileges/fixture_isolation.rs"]

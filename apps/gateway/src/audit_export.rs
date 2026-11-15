@@ -99,7 +99,7 @@ enum Transport {
 struct Webhook {
     url: reqwest::Url,
     secret: zeroize::Zeroizing<Vec<u8>>,
-    client: reqwest::Client,
+    client: crate::egress::HttpClient,
 }
 
 struct Syslog {
@@ -115,7 +115,7 @@ struct Otlp {
     url: reqwest::Url,
     /// From the operator's variable; every value is marked sensitive.
     headers: reqwest::header::HeaderMap,
-    client: reqwest::Client,
+    client: crate::egress::HttpClient,
 }
 
 /// What the receiver did with a delivered payload.
@@ -481,7 +481,7 @@ fn https_client(
     url: &str,
     purpose: crate::egress::Purpose,
     development: bool,
-) -> anyhow::Result<(reqwest::Url, reqwest::Client)> {
+) -> anyhow::Result<(reqwest::Url, crate::egress::HttpClient)> {
     let url = reqwest::Url::parse(url).map_err(|_| anyhow::anyhow!("{setting} is not a URL"))?;
     let loopback = url.host_str().is_some_and(|h| {
         h == "localhost"

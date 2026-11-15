@@ -10,6 +10,14 @@
 # name resolution, so aliases, re-exports (`openidconnect::reqwest`) and
 # renamed imports are covered.
 #
+# Clippy cannot name a `Default` impl for one type (#569), so production code
+# never holds a raw reqwest client: it holds `crate::egress::HttpClient`, which
+# has no `Default` and is built only from those builders. `disallowed-types`
+# below refuses `reqwest::Client`/`reqwest::ClientBuilder` by name (fields,
+# parameters, annotations, `Client::default()`, `<ClientBuilder as
+# Default>::default()`) outside `src/egress_http.rs`, and the two
+# `RequestBuilder` methods that hand out or take a raw client are refused.
+#
 # Randomness (#511): every secret, nonce and token is drawn through
 # `crate::entropy` (the OS CSPRNG, failing closed). The entropy source scan
 # (`entropy.rs` tests) finds generators by name (`rand`, `OsRng`, ...); the
@@ -26,6 +34,8 @@ disallowed-methods = [
   { path = "reqwest::Client::new", reason = "build HTTP clients with crate::egress::client_builder (#509)" },
   { path = "reqwest::Client::builder", reason = "build HTTP clients with crate::egress::client_builder (#509)" },
   { path = "reqwest::ClientBuilder::new", reason = "build HTTP clients with crate::egress::client_builder (#509)" },
+  { path = "reqwest::RequestBuilder::build_split", reason = "it returns a raw reqwest client; send requests through crate::egress::HttpClient (#569)" },
+  { path = "reqwest::RequestBuilder::from_parts", reason = "it takes a raw reqwest client; send requests through crate::egress::HttpClient (#569)" },
   { path = "reqwest::get", reason = "send requests with a client from crate::egress::client_builder (#509)" },
   { path = "reqwest::ClientBuilder::redirect", reason = "crate::egress::client_builder disables redirects (#509)" },
   { path = "reqwest::ClientBuilder::retry", reason = "crate::egress::client_builder disables implicit retries (#509)" },
@@ -76,4 +86,9 @@ disallowed-methods = [
   { path = "rustls::crypto::ring::Ticketer::new", reason = "ticket keys come from the TLS provider's generator: secrets come from crate::entropy (#511)" },
   { path = "rustls::crypto::aws_lc_rs::Ticketer::new", reason = "ticket keys come from the TLS provider's generator: secrets come from crate::entropy (#511)", allow-invalid = true },
   { path = "rustls::server::ProducesTickets::encrypt", reason = "ticket encryption draws a nonce from the TLS provider: secrets come from crate::entropy (#511)" },
+]
+
+disallowed-types = [
+  { path = "reqwest::Client", reason = "hold outbound clients as crate::egress::HttpClient, built with crate::egress::client_builder (#569)" },
+  { path = "reqwest::ClientBuilder", reason = "build outbound clients with crate::egress::client_builder (#569)" },
 ]

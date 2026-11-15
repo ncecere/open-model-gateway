@@ -10,6 +10,12 @@
 //! name, see `crate::entropy`) and the transaction entries (`crate::db`), so
 //! these sanctioned sites are the only switch-offs for all of them.
 //!
+//! The `Default` impls of reqwest's client types cannot be named by that lint
+//! (#569). They are closed by type instead: clients are held only as
+//! `crate::egress::HttpClient` (no `Default`, built only by the sanctioned
+//! builders), and `disallowed-types` refuses the raw reqwest types by name
+//! outside `src/egress_http.rs`. Its switches are scanned the same way.
+//!
 //! Attributes are parsed with `syn` and lint paths compared token by token,
 //! so comments inside an attribute and raw identifiers (`r#style`) read the
 //! same as the plain form. Attributes written inside macro bodies are parsed
@@ -23,10 +29,13 @@ use syn::{Meta, Token, ext::IdentExt, punctuated::Punctuated, visit::Visit};
 /// would let the lint pass a plain `cargo clippy`.
 const LEVELS: [&str; 3] = ["allow", "expect", "warn"];
 
-/// The lint, its old name, the two groups that contain it, and `warnings`.
-const SWITCHES: [&str; 5] = [
+/// The two lints, their old names, the two groups that contain them, and
+/// `warnings`.
+const SWITCHES: [&str; 7] = [
     "clippy::disallowed_methods",
     "clippy::disallowed_method",
+    "clippy::disallowed_types",
+    "clippy::disallowed_type",
     "clippy::style",
     "clippy::all",
     "warnings",
@@ -334,9 +343,23 @@ fn files(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 fn level(level: &str, inner: bool, cfg: &[&str], reason: Option<&str>, on: &str) -> Finding {
+    level_of(METHODS, level, inner, cfg, reason, on)
+}
+
+const METHODS: &str = "clippy::disallowed_methods";
+const TYPES: &str = "clippy::disallowed_types";
+
+fn level_of(
+    lint: &str,
+    level: &str,
+    inner: bool,
+    cfg: &[&str],
+    reason: Option<&str>,
+    on: &str,
+) -> Finding {
     Finding::Level {
         level: level.into(),
-        lint: SWITCHES[0].into(),
+        lint: lint.into(),
         inner,
         cfg: cfg.iter().map(|c| (*c).to_owned()).collect(),
         reason: reason.map(str::to_owned),
@@ -356,7 +379,18 @@ fn sanctioned(name: &str) -> Vec<Finding> {
         )
     };
     match name {
-        "egress.rs" => vec![
+        // The one module that holds or builds a raw reqwest client (#569):
+        // the whole file may name the types; only the three constructors
+        // may call the disallowed methods.
+        "egress_http.rs" => vec![
+            level_of(
+                TYPES,
+                "expect",
+                true,
+                &[],
+                Some("the egress client newtype is the one place a reqwest client is held (#569)"),
+                "crate",
+            ),
             guarded("fn client_builder"),
             guarded("fn pinned_client_builder"),
             guarded("fn add_root_certificates"),
@@ -371,7 +405,10 @@ fn sanctioned(name: &str) -> Vec<Finding> {
             Some("tungstenite's Sec-WebSocket-Key is a handshake nonce, not a secret (#511)"),
             "fn handshake_request",
         )],
-        "lib.rs" => vec![level("allow", true, &["test"], None, "crate")],
+        "lib.rs" => vec![
+            level("allow", true, &["test"], None, "crate"),
+            level_of(TYPES, "allow", true, &["test"], None, "crate"),
+        ],
         _ => Vec::new(),
     }
 }
@@ -402,9 +439,10 @@ fn only_the_sanctioned_sites_turn_off_disallowed_methods() {
         assert_eq!(
             found,
             sanctioned(&name),
-            "{name}: a lint switch for clippy::disallowed_methods outside its sanctioned \
-             sites, or code from outside src/. Production code builds HTTP clients with \
-             crate::egress::client_builder (#509) and draws secrets with crate::entropy (#511)."
+            "{name}: a lint switch for clippy::disallowed_methods or clippy::disallowed_types \
+             outside its sanctioned sites, or code from outside src/. Production code builds \
+             HTTP clients with crate::egress::client_builder (#509), holds them as \
+             crate::egress::HttpClient (#569) and draws secrets with crate::entropy (#511)."
         );
     }
 }
@@ -427,6 +465,12 @@ fn the_scan_sees_every_spelling_of_a_lint_switch() {
         "#[allow(r#clippy::all)] fn f() {}",
         "#[allow(clippy::DISALLOWED_METHODS)] fn f() {}",
         "#[allow(clippy::disallowed_method)] fn f() {}",
+        "#[allow(clippy::disallowed_types)] struct S { c: reqwest::Client }",
+        "#[expect(clippy::disallowed_types, reason = \"x\")] fn f() {}",
+        "#[allow(clippy::disallowed_type)] fn f() {}",
+        "#![cfg_attr(not(test), allow(clippy::disallowed_types))]",
+        "mod m { #![allow(clippy::disallowed_types)] }",
+        "impl S { #[allow(clippy::r#disallowed_types)] fn f() {} }",
         "#[allow(dead_code, warnings)] fn f() {}",
         "#[expect(clippy::all, reason = \"x\")] fn f() {}",
         "#[warn(clippy::disallowed_methods)] fn f() {}",
@@ -456,6 +500,8 @@ fn the_scan_sees_every_spelling_of_a_lint_switch() {
         "#[allow(clippy::needless_return)] fn f() {}",
         "#[allow(dead_code, clippy::disallowed_methods_x)] fn f() {}",
         "#[deny(clippy::disallowed_methods)] fn f() {}",
+        "#[deny(clippy::disallowed_types)] fn f() {}",
+        "#[allow(clippy::disallowed_types_x)] fn f() {}",
         "#[forbid(warnings)] fn f() {}",
         "#[path = \"x.rs\"] mod m;",
         "#[path = \"../sibling/x.rs\"] mod m;",
@@ -510,6 +556,180 @@ fn clippy_disallows_every_unguarded_client_construction() {
             "clippy.toml: the reason for {path} must name the egress constructor"
         );
     }
+}
+
+/// The `Default` routes (#569): Clippy cannot name `<Client as
+/// Default>::default`, so the raw types are refused by name and the two
+/// `RequestBuilder` methods that hand out or accept a raw client are refused.
+#[test]
+fn clippy_disallows_the_raw_client_types() {
+    let config =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("clippy.toml")).unwrap();
+    let config = uncommented(&config);
+    let (methods, types) = config
+        .split_once("disallowed-types = [")
+        .expect("clippy.toml must have a disallowed-types list (#569)");
+    for path in ["reqwest::Client", "reqwest::ClientBuilder"] {
+        let entry = format!("{{ path = \"{path}\", reason = \"");
+        let line = types
+            .lines()
+            .find(|line| line.trim_start().starts_with(&entry))
+            .unwrap_or_else(|| panic!("clippy.toml must disallow the type {path} (#569)"));
+        assert!(
+            line.contains("crate::egress::") && !line.contains("allow-invalid"),
+            "clippy.toml: the entry for {path} must name the egress type and must resolve"
+        );
+    }
+    for path in [
+        "reqwest::RequestBuilder::build_split",
+        "reqwest::RequestBuilder::from_parts",
+    ] {
+        let entry = format!("{{ path = \"{path}\", reason = \"");
+        assert!(
+            methods.lines().any(
+                |line| line.trim_start().starts_with(&entry) && !line.contains("allow-invalid")
+            ),
+            "clippy.toml must disallow {path} (#569)"
+        );
+    }
+}
+
+/// The sanctioned module keeps what makes the type-level rule hold (#569):
+/// the compile-time proof that neither type implements `Default`, no
+/// `Deref`/`AsRef`/`From`/`Into` that would hand out or accept a raw client,
+/// a private field, and a raw-client constructor only in test builds.
+#[test]
+fn the_client_newtype_cannot_default_or_expose_a_raw_client() {
+    let source =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/egress_http.rs"))
+            .unwrap();
+    assert_eq!(newtype_problems(&source), Vec::<String>::new());
+    for (rogue, problem) in [
+        (
+            "impl Default for HttpClient { fn default() -> Self { todo!() } }",
+            "impl Default",
+        ),
+        (
+            "impl std::ops::Deref for HttpClient { type Target = reqwest::Client; }",
+            "impl Deref",
+        ),
+        (
+            "impl AsRef<reqwest::Client> for HttpClient {}",
+            "impl AsRef",
+        ),
+        ("impl From<reqwest::Client> for HttpClient {}", "impl From"),
+        ("impl From<HttpClient> for reqwest::Client {}", "impl From"),
+        (
+            "#[derive(Default)] pub struct Other(reqwest::Client);",
+            "derive(Default)",
+        ),
+        ("pub struct Open(pub reqwest::Client);", "public field"),
+        (
+            "impl HttpClient { pub fn raw(&self) -> &reqwest::Client { &self.0 } }",
+            "raw client in fn raw",
+        ),
+        (
+            "impl HttpClient { pub fn wrap(c: reqwest::Client) -> Self { Self(c) } }",
+            "raw client in fn wrap",
+        ),
+        (
+            "pub fn make() -> reqwest::ClientBuilder { todo!() }",
+            "raw client in fn make",
+        ),
+        (
+            "pub fn make() -> Client { todo!() }",
+            "raw client in fn make",
+        ),
+    ] {
+        let found = newtype_problems(&format!("{source}\n{rogue}"));
+        assert!(
+            found.iter().any(|p| p.contains(problem)),
+            "missed: {rogue} (found {found:?})"
+        );
+    }
+    let without_proof = source.replace("<HttpClient as AmbiguousIfDefault<_>>::some_item", "()");
+    assert!(
+        newtype_problems(&without_proof)
+            .iter()
+            .any(|p| p.contains("proof"))
+    );
+}
+
+/// What in `egress_http.rs` would let a default or raw reqwest client in or
+/// out. Any signature that mentions `Client`/`ClientBuilder` is a finding
+/// unless it is the test-only constructor; it fails closed on names.
+fn newtype_problems(source: &str) -> Vec<String> {
+    struct Check(Vec<String>);
+    /// Whether a signature names `Client` or `ClientBuilder` anywhere.
+    struct Raw(bool);
+    impl<'ast> Visit<'ast> for Raw {
+        fn visit_ident(&mut self, ident: &'ast proc_macro2::Ident) {
+            let name = ident.unraw().to_string();
+            self.0 |= name == "Client" || name == "ClientBuilder";
+        }
+        fn visit_macro(&mut self, _: &'ast syn::Macro) {
+            self.0 = true;
+        }
+    }
+    fn test_only(attributes: &[syn::Attribute]) -> bool {
+        attributes
+            .iter()
+            .any(|attribute| meta_text(&attribute.meta).replace(' ', "") == "cfg(test)")
+    }
+    impl Check {
+        fn signature(&mut self, attributes: &[syn::Attribute], signature: &syn::Signature) {
+            let mut raw = Raw(false);
+            raw.visit_signature(signature);
+            if raw.0 && !test_only(attributes) {
+                self.0.push(format!("raw client in fn {}", signature.ident));
+            }
+        }
+    }
+    impl<'ast> Visit<'ast> for Check {
+        fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+            if let Some((path, _)) = &item.trait_ {
+                let name = path.segments.last().unwrap().ident.unraw().to_string();
+                if [
+                    "Default", "Deref", "DerefMut", "AsRef", "AsMut", "Borrow", "From", "Into",
+                ]
+                .contains(&name.as_str())
+                {
+                    self.0.push(format!("impl {name}"));
+                }
+            }
+            syn::visit::visit_item_impl(self, item);
+        }
+        fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
+            for attribute in &item.attrs {
+                let text = meta_text(&attribute.meta);
+                if text.starts_with("derive") && text.contains("Default") {
+                    self.0.push("derive(Default)".into());
+                }
+            }
+            for field in &item.fields {
+                if !matches!(field.vis, syn::Visibility::Inherited) {
+                    self.0.push(format!("public field in {}", item.ident));
+                }
+            }
+        }
+        fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+            self.signature(&item.attrs, &item.sig);
+        }
+        fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+            self.signature(&item.attrs, &item.sig);
+        }
+        fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+            self.0.push(format!("macro {}", path_name(&mac.path)));
+        }
+    }
+    let mut check = Check(Vec::new());
+    check.visit_file(&syn::parse_file(source).unwrap());
+    for name in ["HttpClient", "HttpClientBuilder"] {
+        if !source.contains(&format!("<{name} as AmbiguousIfDefault<_>>::some_item")) {
+            check.0.push(format!("no proof that {name} has no Default"));
+        }
+    }
+    check.0
 }
 
 fn repository() -> PathBuf {
@@ -573,6 +793,7 @@ fn gate_problems(text: &str) -> Vec<String> {
         "rustflags",
         "cap_lints",
         "disallowed_method",
+        "disallowed_type",
         "clippy::style",
         "clippy::all",
     ]
@@ -691,14 +912,15 @@ fn sanctioned_attributes_count_only_on_their_own_items() {
     let src = Path::new("/repo/apps/gateway/src");
     let expect =
         "#[expect(clippy::disallowed_methods, reason = \"the egress-guarded constructor (#509)\")]";
+    let types = "#![expect(clippy::disallowed_types, reason = \"the egress client newtype is the one place a reqwest client is held (#569)\")]";
     let egress = |rogue: &str| {
         format!(
-            "{expect} fn client_builder() {{}} {expect} fn pinned_client_builder() {{}} {rogue}"
+            "{types} {expect} fn client_builder() {{}} {expect} fn pinned_client_builder() {{}} {rogue}"
         )
     };
     let finds = |name: &str, source: &str| scan(src, &src.join(name), source) == sanctioned(name);
     assert!(finds(
-        "egress.rs",
+        "egress_http.rs",
         &egress(&format!("{expect} fn add_root_certificates() {{}}"))
     ));
     for rogue in [
@@ -707,8 +929,16 @@ fn sanctioned_attributes_count_only_on_their_own_items() {
         format!("{expect} impl S {{ fn add_root_certificates() {{}} }}"),
         format!("mod m {{ {expect} fn add_root_certificates() {{}} }}"),
         format!("fn add_root_certificates() {{ {expect} let x = 1; }}"),
+        format!("{expect} fn add_root_certificates() {{}} mod m {{ {types} }}"),
+        format!(
+            "{expect} fn add_root_certificates() {{}} \
+             #[expect(clippy::disallowed_types, reason = \"x\")] struct S;"
+        ),
     ] {
-        assert!(!finds("egress.rs", &egress(&rogue)), "accepted: {rogue}");
+        assert!(
+            !finds("egress_http.rs", &egress(&rogue)),
+            "accepted: {rogue}"
+        );
     }
     let allow = "#[allow(clippy::disallowed_methods)]";
     assert!(finds(
@@ -724,12 +954,19 @@ fn sanctioned_attributes_count_only_on_their_own_items() {
     }
     assert!(finds(
         "lib.rs",
-        "#![cfg_attr(test, allow(clippy::disallowed_methods))]"
+        "#![cfg_attr(test, allow(clippy::disallowed_methods, clippy::disallowed_types))]"
     ));
-    assert!(!finds(
-        "lib.rs",
-        "mod m { #![cfg_attr(test, allow(clippy::disallowed_methods))] }"
-    ));
+    for rogue in [
+        "mod m { #![cfg_attr(test, allow(clippy::disallowed_methods, clippy::disallowed_types))] }",
+        "#![cfg_attr(test, allow(clippy::disallowed_methods))] #![allow(clippy::disallowed_types)]",
+        // The file-level switch for the raw types belongs to egress_http.rs only.
+        "#![cfg_attr(test, allow(clippy::disallowed_methods, clippy::disallowed_types))] \
+         #![expect(clippy::disallowed_types, reason = \"the egress client newtype is the one place a reqwest client is held (#569)\")]",
+    ] {
+        assert!(!finds("lib.rs", rogue), "accepted: {rogue}");
+    }
+    // The same switch at the top of any other file is refused.
+    assert!(!finds("providers/openai.rs", types));
 }
 
 /// CI and gate files: any case, `-` and `_` alike, and the command-line
@@ -741,6 +978,7 @@ fn gate_files_cannot_lower_the_rule_in_any_spelling() {
         "CARGO_ENCODED_RUSTFLAGS=x",
         "clippy-conf-dir: /tmp",
         "cargo clippy -- -A clippy::disallowed-methods",
+        "cargo clippy -- -A clippy::disallowed-types",
         "cargo clippy -- -A clippy::style",
         "cargo clippy -- -Awarnings",
         "cargo clippy -- -A warnings",

@@ -14,7 +14,7 @@ struct Approval {
     addresses: Vec<IpAddr>,
 }
 struct Endpoint {
-    client: reqwest::Client,
+    client: crate::egress::HttpClient,
     base: String,
 }
 /// One approval's host and pinned addresses, after every check in
@@ -200,7 +200,7 @@ impl ApprovedEndpoints {
     pub(super) fn approved(
         &self,
         endpoint: &str,
-    ) -> Result<(&reqwest::Client, &str), InferenceError> {
+    ) -> Result<(&crate::egress::HttpClient, &str), InferenceError> {
         let (base, _) = canonical(endpoint)?;
         let entry = self
             .endpoints
@@ -216,7 +216,7 @@ impl ApprovedEndpoints {
     pub fn metrics_endpoint(
         &self,
         url: &str,
-    ) -> Result<(&reqwest::Client, String), InferenceError> {
+    ) -> Result<(&crate::egress::HttpClient, String), InferenceError> {
         let invalid = InferenceError::Configuration;
         if url.len() > 2048 {
             return Err(invalid);

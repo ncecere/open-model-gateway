@@ -432,7 +432,7 @@ fn json_size(value: &Value) -> usize {
 
 struct Exporter {
     url: reqwest::Url,
-    client: reqwest::Client,
+    client: crate::egress::HttpClient,
     headers: reqwest::header::HeaderMap,
     environment: crate::config::Environment,
     instance: uuid::Uuid,

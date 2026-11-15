@@ -1,7 +1,7 @@
 #![cfg(feature = "integration-tests")]
 // Test clients reach loopback test servers directly (#509: production code uses
 // `egress::client_builder`).
-#![allow(clippy::disallowed_methods)]
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 // Deliberately discard errors that might embed credentials or connection URLs.
 #![allow(clippy::ok_expect)]
 //! #99 slice C: the actual `serve` process, a fresh SQLx

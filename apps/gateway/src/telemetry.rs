@@ -698,7 +698,7 @@ pub(crate) fn mark_shared_for_tests(request: Uuid, alias: &str) {
 
 struct Exporter {
     url: reqwest::Url,
-    client: reqwest::Client,
+    client: crate::egress::HttpClient,
     headers: reqwest::header::HeaderMap,
     environment: crate::config::Environment,
 }

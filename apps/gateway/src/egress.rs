@@ -42,6 +42,11 @@ use std::{
 
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
+#[path = "egress_http.rs"]
+mod http;
+pub use http::{HttpClient, HttpClientBuilder};
+pub(crate) use http::{add_root_certificates, client_builder, pinned_client_builder};
+
 /// Env var listing the private networks the gateway may reach.
 pub const PRIVATE_ALLOW_ENV: &str = "GATEWAY_EGRESS_PRIVATE_ALLOW";
 
@@ -657,63 +662,6 @@ pub fn resolver_with(purpose: Purpose, policy: Policy) -> Arc<Resolver> {
         policy: Some(Arc::new(policy)),
         refused: Arc::new(AtomicBool::new(false)),
     })
-}
-
-/// The one way to start a reqwest client (#509): redirects, implicit retries
-/// and ambient proxies (`HTTP(S)_PROXY`/`ALL_PROXY`) off, and every resolved
-/// address checked by `resolver` (from [`resolver`] or [`resolver_with`]).
-/// Callers add only their own timeouts, pool and TLS-mode settings. Clippy's
-/// `disallowed-methods` (`apps/gateway/clippy.toml`) rejects every other
-/// constructor and every method that could change these safeguards outside
-/// this module.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the egress-guarded constructor (#509)"
-)]
-pub(crate) fn client_builder(resolver: Arc<Resolver>) -> reqwest::ClientBuilder {
-    reqwest::Client::builder()
-        .no_proxy()
-        .dns_resolver(resolver)
-        .redirect(reqwest::redirect::Policy::none())
-        .retry(reqwest::retry::never())
-}
-
-/// [`client_builder`]'s counterpart for an approved local endpoint: the
-/// approval's host connects only to its pinned addresses, with the same
-/// redirect, retry and proxy safeguards. No DNS lookup happens for that host.
-/// Only `providers::local::endpoints` can construct
-/// [`ApprovedDestinations`](crate::providers::local::endpoints::ApprovedDestinations),
-/// after its approval checks, so nothing else can pin an address here.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the egress-guarded constructor (#509)"
-)]
-pub(crate) fn pinned_client_builder(
-    approved: &crate::providers::local::endpoints::ApprovedDestinations,
-) -> reqwest::ClientBuilder {
-    reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .retry(reqwest::retry::never())
-        .resolve_to_addrs(approved.host(), approved.addresses())
-}
-
-/// Adds operator-configured trust anchors (`GATEWAY_S3_CA_FILE`) to a builder
-/// from [`client_builder`]. The caller chooses the certificates; keeping the
-/// call here means a new trust-anchor site has to use this named helper, not
-/// `add_root_certificate` directly (#509).
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the egress-guarded constructor (#509)"
-)]
-pub(crate) fn add_root_certificates(
-    mut builder: reqwest::ClientBuilder,
-    certificates: impl IntoIterator<Item = reqwest::Certificate>,
-) -> reqwest::ClientBuilder {
-    for certificate in certificates {
-        builder = builder.add_root_certificate(certificate);
-    }
-    builder
 }
 
 impl Resolve for Resolver {
