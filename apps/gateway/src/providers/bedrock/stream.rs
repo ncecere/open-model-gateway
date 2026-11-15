@@ -1,5 +1,6 @@
 use super::*;
 use aws_sdk_bedrockruntime::primitives::event_stream::EventReceiver;
+use aws_smithy_types::event_stream::RawMessage;
 
 struct Block {
     tool: Option<u32>,
@@ -193,9 +194,56 @@ impl State {
     }
 }
 
+/// Classifies a failed receive. An exception frame is named by its
+/// `:exception-type` header, which AWS always sends; the SDK exposes it as the
+/// typed variant, or in the raw frame for a type the ConverseStream model does
+/// not list. Its JSON payload is `{"message": ...}` with no code, and neither
+/// that payload nor the message text is ever read for the class.
+///
+/// `messages` marks the Anthropic Messages protocol, where a provider-reported
+/// unavailability is an overload (HTTP 529 / `overloaded_error`); for the other
+/// client protocols it stays `UpstreamUnavailable`. This is the split
+/// `sdk_messages_error` applies to the same exception from an HTTP response.
+/// Anything that is not an exception frame (a transport failure, a corrupt or
+/// `:message-type: error` frame) fails closed as `InvalidUpstream`.
+fn receive_error(
+    error: &SdkError<aws::error::ConverseStreamOutputError, RawMessage>,
+    messages: bool,
+) -> InferenceError {
+    use aws::error::ConverseStreamOutputError as Exception;
+    let name = match error.as_service_error() {
+        None => return InferenceError::InvalidUpstream,
+        Some(Exception::InternalServerException(_)) => "internalServerException",
+        Some(Exception::ModelStreamErrorException(_)) => "modelStreamErrorException",
+        Some(Exception::ValidationException(_)) => "validationException",
+        Some(Exception::ThrottlingException(_)) => "throttlingException",
+        Some(Exception::ServiceUnavailableException(_)) => {
+            return if messages {
+                InferenceError::Overloaded
+            } else {
+                InferenceError::UpstreamUnavailable
+            };
+        }
+        // Not modeled here (for example `modelTimeoutException`): only the
+        // frame header names it. No header, or an unknown name, is unclassified.
+        Some(_) => match error.raw_response() {
+            Some(RawMessage::Decoded(frame)) => frame
+                .headers()
+                .iter()
+                .find(|h| h.name().as_str() == ":exception-type")
+                .and_then(|h| h.value().as_string().ok())
+                .map(|name| name.as_str()),
+            _ => None,
+        }
+        .unwrap_or_default(),
+    };
+    service_error(Some(name).filter(|name| !name.is_empty()))
+}
+
 pub(super) fn decode(
     mut receiver: EventReceiver<aws::ConverseStreamOutput, aws::error::ConverseStreamOutputError>,
     limit: usize,
+    messages: bool,
 ) -> EventStream {
     Box::pin(async_stream::try_stream! {
         let mut state = State { limit: Some(limit), ..State::default() };
@@ -203,10 +251,7 @@ pub(super) fn decode(
             // Explicit deadline for recv: SDK operation timeout ends when response headers arrive.
             let next = tokio::time::timeout(Duration::from_secs(60), receiver.recv()).await
                 .map_err(|_| InferenceError::Timeout)?
-                .map_err(|error| {
-                    if let Some(service) = error.as_service_error() { service_error(service.code()) }
-                    else { InferenceError::InvalidUpstream }
-                })?;
+                .map_err(|error| receive_error(&error, messages))?;
             match next {
                 Some(event) => for event in state.push(event)? { yield event; },
                 None => { state.end()?; yield ChatEvent::Done; break; }

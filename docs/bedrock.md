@@ -135,6 +135,41 @@ successful Done. Missing usage fields remain unknown rather than fabricated zero
 Canonical events are passed to the gateway's client-protocol/SSE serializers;
 Bedrock itself does not send SSE.
 
+### Exception frames
+
+A stream that fails before any content is still a `200` response that ends in
+an error: the gateway returns the stream as soon as the headers arrive, does
+not wait for the first content event, and never fails over or re-sends after a
+stream is returned. What changed in #486 is only the class of the terminal
+error. The class comes from the frame's `:exception-type` header (AWS sends
+`{"message": ...}` as the payload, with no code, so the payload and the message
+text are never read). The same class is reached before and after content;
+after content, what was already delivered stays delivered and the missing
+usage stays unknown (the hold stays until reconciliation, as for any failed
+stream).
+
+| `:exception-type` | AWS status | Class (chat completions) | Class (Messages) | Routing health |
+| --- | --- | --- | --- | --- |
+| `throttlingException` | 429 | `rate_limit_error` | `rate_limit_error` | counts as a failure |
+| `validationException` | 400 | `upstream_rejected` | `invalid_request_error` | no effect (a client-input error) |
+| `serviceUnavailableException` | 503 | `upstream_unavailable` | `overloaded_error` (the message says overloaded) | counts as a failure |
+| `internalServerException` | 500 | `upstream_unavailable` | `overloaded_error` | counts as a failure |
+| `modelStreamErrorException` | 424 | `upstream_unavailable` | `overloaded_error` | counts as a failure |
+| `modelTimeoutException` (not in the ConverseStream event list; named only by the header) | 408 | `timeout_error` | `api_error` | counts as a failure |
+| any other type, or an exception with no type | | `upstream_unavailable` | `overloaded_error` | counts as a failure |
+| `:message-type` `error` frame, or a corrupt frame | | `invalid_upstream_response` | `api_error` | no effect |
+
+The classes agree with the same exception arriving as an HTTP error response
+(`ThrottlingException`, `ValidationException`, `InternalServerException`,
+`ModelTimeoutException`, and `ServiceUnavailableException`). That last name is
+`overloaded_error` on Messages and `upstream_unavailable` elsewhere in both
+places, because only Messages reports a provider-reported unavailability as an
+overload. An unknown exception is not treated as a client fault or as a safe
+capacity condition: it stays `upstream_unavailable`. Unlike the stream after
+its first byte, a pre-stream HTTP failure may still fail over under the route's
+policy (`rate_limit_error` always; `upstream_unavailable` and overload only with
+`allow_ambiguous_failover`); an exception frame never does.
+
 A small reqwest-backed AWS HTTP connector enforces an **8 MiB cumulative wire-body
 limit before SDK deserialization**, including error bodies and streams. Normalized
 text/tool output is limited to 4 MiB, 256 content blocks, and 128 tool calls.

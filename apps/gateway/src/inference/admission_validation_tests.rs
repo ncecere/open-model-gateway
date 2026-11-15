@@ -43,13 +43,13 @@ impl SecretResolver for Resolver {
 
 /// Background mock/gateway server task, aborted on drop so a failed
 /// assertion never leaves a listener running past the test.
-struct Server(tokio::task::JoinHandle<()>);
+pub(crate) struct Server(tokio::task::JoinHandle<()>);
 impl Drop for Server {
     fn drop(&mut self) {
         self.0.abort();
     }
 }
-async fn serve(app: Router) -> (String, Server) {
+pub(crate) async fn serve(app: Router) -> (String, Server) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let task = tokio::spawn(async move {
@@ -94,7 +94,7 @@ async fn snapshot(pool: &PgPool) -> (i64, i64, i64, i64, i64, i64, i64) {
 /// A new, priced deployment of `provider` on `f.model`, ordered by
 /// `created_at` so candidate order (query order) is deterministic and
 /// controllable across test cases.
-async fn add_deployment(
+pub(crate) async fn add_deployment(
     f: &Fixture,
     provider: &str,
     credential_ref: &str,
@@ -118,7 +118,7 @@ async fn add_deployment(
 
 /// Issues a real API key for `f`'s workspace and points `f.principal` at it,
 /// so HTTP calls can authenticate exactly as a shared-workspace holder would.
-async fn issue_key(f: &mut Fixture) -> String {
+pub(crate) async fn issue_key(f: &mut Fixture) -> String {
     let key = NewApiKey::generate().unwrap();
     sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES($1,$2,$3,'admission validation fixture',$4)")
         .bind(key.id).bind(f.principal.workspace_id).bind(f.owner).bind(key.digest.as_slice())
@@ -127,7 +127,7 @@ async fn issue_key(f: &mut Fixture) -> String {
     key.token
 }
 
-async fn start_gateway(f: &Fixture, registry: ProviderRegistry) -> (String, Server) {
+pub(crate) async fn start_gateway(f: &Fixture, registry: ProviderRegistry) -> (String, Server) {
     let engine = Engine::new(Arc::new(f.store.clone()), registry, EngineLimits::default()).unwrap();
     let app = crate::http::router_with_engine(f.store.clone(), None, engine);
     serve(app).await

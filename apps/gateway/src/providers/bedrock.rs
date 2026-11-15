@@ -187,6 +187,7 @@ impl ProviderAdapter for BedrockAdapter {
             Ok(ProviderOutput::Stream(stream::decode(
                 output.stream,
                 request.response_limit(),
+                request.messages_options.is_some(),
             )))
         } else {
             let output = client

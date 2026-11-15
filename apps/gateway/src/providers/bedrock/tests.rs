@@ -1,6 +1,9 @@
 use super::*;
 #[path = "auth_tests.rs"]
 mod auth_tests;
+#[cfg(feature = "integration-tests")]
+#[path = "stream_error_tests.rs"]
+mod stream_error_tests;
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -547,6 +550,168 @@ async fn truncated_corrupt_exception_and_post_stop_streams_fail_closed() {
     let mut duplicate = valid.clone();
     duplicate.push(valid.last().unwrap().clone());
     assert_bad_stream(wire(duplicate)).await;
+}
+
+/// AWS event-stream frame of `:message-type` `error`: the form that carries
+/// `:error-code` and `:error-message` headers instead of `:exception-type`.
+fn error_frame(code: &str, message: &str) -> Vec<u8> {
+    let mut headers = Vec::new();
+    for (name, value) in [
+        (":message-type", "error"),
+        (":error-code", code),
+        (":error-message", message),
+    ] {
+        headers.push(name.len() as u8);
+        headers.extend(name.as_bytes());
+        headers.push(7);
+        headers.extend((value.len() as u16).to_be_bytes());
+        headers.extend(value.as_bytes());
+    }
+    let mut result = Vec::new();
+    result.extend(((16 + headers.len()) as u32).to_be_bytes());
+    result.extend((headers.len() as u32).to_be_bytes());
+    result.extend(crc32(&result).to_be_bytes());
+    result.extend(headers);
+    result.extend(crc32(&result).to_be_bytes());
+    result
+}
+/// Runs a streamed request against `frames` and returns the events the client
+/// would have received before the stream's single terminal error.
+async fn stream_failure(frames: Vec<u8>) -> (Vec<ChatEvent>, InferenceError) {
+    stream_failure_as(frames, false).await
+}
+async fn stream_failure_as(frames: Vec<u8>, messages: bool) -> (Vec<ChatEvent>, InferenceError) {
+    let mock = Mock::serve(complete(false), frames, 200).await;
+    let mut req = request();
+    req.stream = true;
+    if messages {
+        req.messages_options = Some(Box::default());
+    }
+    let Ok(ProviderOutput::Stream(mut output)) = mock.adapter().execute(&target(), req).await
+    else {
+        panic!("a 200 response must return a stream, however it later fails");
+    };
+    let mut seen = Vec::new();
+    while let Some(event) = output.next().await {
+        match event {
+            Ok(ChatEvent::Done) => panic!("a failed stream emitted Done"),
+            Ok(event) => seen.push(event),
+            Err(error) => {
+                assert!(output.next().await.is_none(), "nothing follows the error");
+                return (seen, error);
+            }
+        }
+    }
+    panic!("the stream ended without an error");
+}
+
+/// #486: the class comes from the frame's `:exception-type` header. The
+/// payload AWS sends is `{"message": ...}` with no code, so the SDK's error
+/// metadata has none; every exception used to land on `UpstreamUnavailable`.
+#[tokio::test]
+async fn exception_frames_are_classified_by_their_type_before_and_after_content() {
+    use InferenceError as E;
+    // (exception type, class for chat completions, class for Messages)
+    let cases = [
+        ("throttlingException", E::Busy, E::Busy),
+        (
+            "validationException",
+            E::UpstreamRejected,
+            E::UpstreamRejected,
+        ),
+        // Messages alone reports provider unavailability as an overload, as
+        // `sdk_messages_error` does for the same exception in an HTTP response.
+        (
+            "serviceUnavailableException",
+            E::UpstreamUnavailable,
+            E::Overloaded,
+        ),
+        (
+            "internalServerException",
+            E::UpstreamUnavailable,
+            E::UpstreamUnavailable,
+        ),
+        (
+            "modelStreamErrorException",
+            E::UpstreamUnavailable,
+            E::UpstreamUnavailable,
+        ),
+        // Not modeled on ConverseStream: only the header names it.
+        ("modelTimeoutException", E::Timeout, E::Timeout),
+        // An exception type this gateway does not know is not safe to call
+        // a client fault or a retryable capacity condition.
+        (
+            "someFutureException",
+            E::UpstreamUnavailable,
+            E::UpstreamUnavailable,
+        ),
+    ];
+    for (kind, chat, messages) in cases {
+        for (is_messages, expected) in [(false, chat), (true, messages)] {
+            let exception = frame(
+                kind,
+                "exception",
+                json!({"message":"upstream secret prompt"}),
+            );
+            // Before any content: the 200 response was already returned.
+            let (seen, error) = stream_failure_as(exception.clone(), is_messages).await;
+            assert!(seen.is_empty(), "{kind}");
+            assert_eq!(
+                error, expected,
+                "{kind} before content, messages={is_messages}"
+            );
+            // After content: what was delivered stays delivered, usage never arrives.
+            let mut bytes = wire(events(false)[..2].to_vec());
+            bytes.extend(exception);
+            let (seen, error) = stream_failure_as(bytes, is_messages).await;
+            assert_eq!(
+                error, expected,
+                "{kind} after content, messages={is_messages}"
+            );
+            assert!(matches!(
+                seen.as_slice(),
+                [ChatEvent::Delta { text: Some(text), .. }] if text == "Hello"
+            ));
+            assert!(!error.to_string().contains("secret"));
+        }
+    }
+}
+
+/// A code or type inside the payload, or words in the message, never
+/// reclassify a frame whose `:exception-type` says otherwise.
+#[tokio::test]
+async fn exception_payload_text_never_changes_the_class() {
+    for payload in [
+        json!({"message":"throttling: too many requests","__type":"ThrottlingException"}),
+        json!({"message":"validation failed","code":"validationException"}),
+        json!({"message":"Input is too long for requested model."}),
+    ] {
+        let bytes = frame("internalServerException", "exception", payload);
+        let (_, error) = stream_failure(bytes).await;
+        assert_eq!(error, InferenceError::UpstreamUnavailable);
+    }
+    // An unknown type with a known name in its payload stays unknown.
+    let bytes = frame(
+        "someFutureException",
+        "exception",
+        json!({"message":"x","__type":"ThrottlingException"}),
+    );
+    assert_eq!(
+        stream_failure(bytes).await.1,
+        InferenceError::UpstreamUnavailable
+    );
+}
+
+/// The `:message-type` `error` form is not a modeled exception: the SDK
+/// reports it as an undecodable response and the code in the frame is not
+/// read. It fails closed as an invalid response (no routing-health effect).
+#[tokio::test]
+async fn error_message_type_frames_fail_closed_as_invalid_upstream() {
+    for code in ["ThrottlingException", "InternalFailure", ""] {
+        let (seen, error) = stream_failure(error_frame(code, "upstream secret")).await;
+        assert!(seen.is_empty());
+        assert_eq!(error, InferenceError::InvalidUpstream, "{code}");
+    }
 }
 
 #[tokio::test]
