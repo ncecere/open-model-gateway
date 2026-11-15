@@ -93,8 +93,8 @@ impl From<super::types::FinishReason> for FinishLabel {
     }
 }
 
-/// Per-attempt timing and outcome telemetry. Metadata only; `None` = not
-/// observed (never a fabricated zero).
+/// Per-attempt timing and outcome telemetry; `None` = not observed (never a
+/// fabricated zero). Metadata, except `stream_returned`, which settlement reads.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AttemptTelemetry {
     pub finish_reason: Option<FinishLabel>,
@@ -102,6 +102,11 @@ pub struct AttemptTelemetry {
     pub time_to_first_token_ms: Option<u64>,
     /// Upstream dispatch to the end of the upstream response.
     pub generation_ms: Option<u64>,
+    /// A response stream had already been returned to the caller when the
+    /// attempt ended. A failure after that point is never a rejection "before
+    /// processing" (the provider accepted the request): settlement does not
+    /// treat it as a known zero (`governance::free_rejection`). Not stored.
+    pub stream_returned: bool,
 }
 impl AttemptTelemetry {
     /// The stored finish reason for an outcome: failures are `error`,

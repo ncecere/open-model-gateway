@@ -1,6 +1,11 @@
 use super::*;
 #[path = "auth_tests.rs"]
 mod auth_tests;
+#[path = "stream_decode_tests.rs"]
+mod stream_decode_tests;
+#[cfg(feature = "integration-tests")]
+#[path = "stream_error_tests.rs"]
+mod stream_error_tests;
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -180,33 +185,66 @@ fn crc32(bytes: &[u8]) -> u32 {
     }
     !crc
 }
+/// A header value in the AWS event-stream binary encoding.
+#[derive(Clone, Copy)]
+enum Hdr<'a> {
+    True,
+    Bytes(&'a [u8]),
+    Int(i32),
+    Str(&'a str),
+    Time(i64),
+}
+/// A frame with exactly these headers, in this order, and this raw payload.
+fn raw_frame(headers: &[(&str, Hdr)], payload: &[u8]) -> Vec<u8> {
+    let mut encoded = Vec::new();
+    for (name, value) in headers {
+        encoded.push(name.len() as u8);
+        encoded.extend(name.as_bytes());
+        match value {
+            Hdr::True => encoded.push(0),
+            Hdr::Bytes(bytes) => {
+                encoded.push(6);
+                encoded.extend((bytes.len() as u16).to_be_bytes());
+                encoded.extend(*bytes);
+            }
+            Hdr::Int(n) => {
+                encoded.push(4);
+                encoded.extend(n.to_be_bytes());
+            }
+            Hdr::Str(text) => {
+                encoded.push(7);
+                encoded.extend((text.len() as u16).to_be_bytes());
+                encoded.extend(text.as_bytes());
+            }
+            Hdr::Time(millis) => {
+                encoded.push(8);
+                encoded.extend(millis.to_be_bytes());
+            }
+        }
+    }
+    let mut result = Vec::new();
+    result.extend(((16 + encoded.len() + payload.len()) as u32).to_be_bytes());
+    result.extend((encoded.len() as u32).to_be_bytes());
+    result.extend(crc32(&result).to_be_bytes());
+    result.extend(encoded);
+    result.extend(payload);
+    result.extend(crc32(&result).to_be_bytes());
+    result
+}
 fn frame(kind: &str, message_type: &str, payload: Value) -> Vec<u8> {
-    let mut headers = Vec::new();
     let type_header = if message_type == "exception" {
         ":exception-type"
     } else {
         ":event-type"
     };
-    for (name, value) in [
-        (":message-type", message_type),
-        (type_header, kind),
-        (":content-type", "application/json"),
-    ] {
-        headers.push(name.len() as u8);
-        headers.extend(name.as_bytes());
-        headers.push(7);
-        headers.extend((value.len() as u16).to_be_bytes());
-        headers.extend(value.as_bytes());
-    }
-    let payload = serde_json::to_vec(&payload).unwrap();
-    let mut result = Vec::new();
-    result.extend(((16 + headers.len() + payload.len()) as u32).to_be_bytes());
-    result.extend((headers.len() as u32).to_be_bytes());
-    result.extend(crc32(&result).to_be_bytes());
-    result.extend(headers);
-    result.extend(payload);
-    result.extend(crc32(&result).to_be_bytes());
-    result
+    raw_frame(
+        &[
+            (":message-type", Hdr::Str(message_type)),
+            (type_header, Hdr::Str(kind)),
+            (":content-type", Hdr::Str("application/json")),
+        ],
+        &serde_json::to_vec(&payload).unwrap(),
+    )
 }
 fn wire(events: Vec<(&str, Value)>) -> Vec<u8> {
     events

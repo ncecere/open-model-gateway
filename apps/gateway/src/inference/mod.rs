@@ -547,7 +547,7 @@ impl Drop for ExecutionGuard {
 }
 
 #[cfg(all(test, feature = "integration-tests"))]
-mod admission_validation_tests;
+pub(crate) mod admission_validation_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod steering_tests;
 #[cfg(test)]

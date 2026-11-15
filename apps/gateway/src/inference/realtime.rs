@@ -408,6 +408,10 @@ impl RealtimeSession {
                 finish_reason: finish,
                 time_to_first_token_ms: self.first_output_ms,
                 generation_ms: Some(millis(self.dispatched.elapsed())),
+                // Not read here: a realtime session settles from its response
+                // rows (`governance::realtime::finish`), which never applies
+                // the free-rejection rule. This only feeds the metrics.
+                stream_returned: false,
             },
             unopened_request: self.requested,
             window: self

@@ -43,13 +43,13 @@ impl SecretResolver for Resolver {
 
 /// Background mock/gateway server task, aborted on drop so a failed
 /// assertion never leaves a listener running past the test.
-struct Server(tokio::task::JoinHandle<()>);
+pub(crate) struct Server(tokio::task::JoinHandle<()>);
 impl Drop for Server {
     fn drop(&mut self) {
         self.0.abort();
     }
 }
-async fn serve(app: Router) -> (String, Server) {
+pub(crate) async fn serve(app: Router) -> (String, Server) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let task = tokio::spawn(async move {
@@ -94,7 +94,24 @@ async fn snapshot(pool: &PgPool) -> (i64, i64, i64, i64, i64, i64, i64) {
 /// A new, priced deployment of `provider` on `f.model`, ordered by
 /// `created_at` so candidate order (query order) is deterministic and
 /// controllable across test cases.
-async fn add_deployment(
+pub(crate) async fn add_deployment(
+    f: &Fixture,
+    provider: &str,
+    credential_ref: &str,
+    region: Option<&str>,
+    upstream_model: &str,
+    order: i64,
+) -> Uuid {
+    let deployment =
+        add_unpriced_deployment(f, provider, credential_ref, region, upstream_model, order).await;
+    sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version) VALUES($1,$2,1000000,1000000,1000,1000,1)")
+        .bind(Uuid::new_v4()).bind(deployment)
+        .execute(&f.store.pool).await.unwrap();
+    deployment
+}
+
+/// [`add_deployment`] without a price, for a test that pins its own.
+pub(crate) async fn add_unpriced_deployment(
     f: &Fixture,
     provider: &str,
     credential_ref: &str,
@@ -110,15 +127,12 @@ async fn add_deployment(
     sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model,enabled,created_at) VALUES($1,$2,$3,$4,true,clock_timestamp()+$5*interval '1 second')")
         .bind(deployment).bind(f.model).bind(connection).bind(upstream_model).bind(order)
         .execute(&f.store.pool).await.unwrap();
-    sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version) VALUES($1,$2,1000000,1000000,1000,1000,1)")
-        .bind(Uuid::new_v4()).bind(deployment)
-        .execute(&f.store.pool).await.unwrap();
     deployment
 }
 
 /// Issues a real API key for `f`'s workspace and points `f.principal` at it,
 /// so HTTP calls can authenticate exactly as a shared-workspace holder would.
-async fn issue_key(f: &mut Fixture) -> String {
+pub(crate) async fn issue_key(f: &mut Fixture) -> String {
     let key = NewApiKey::generate().unwrap();
     sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES($1,$2,$3,'admission validation fixture',$4)")
         .bind(key.id).bind(f.principal.workspace_id).bind(f.owner).bind(key.digest.as_slice())
@@ -127,7 +141,7 @@ async fn issue_key(f: &mut Fixture) -> String {
     key.token
 }
 
-async fn start_gateway(f: &Fixture, registry: ProviderRegistry) -> (String, Server) {
+pub(crate) async fn start_gateway(f: &Fixture, registry: ProviderRegistry) -> (String, Server) {
     let engine = Engine::new(Arc::new(f.store.clone()), registry, EngineLimits::default()).unwrap();
     let app = crate::http::router_with_engine(f.store.clone(), None, engine);
     serve(app).await
