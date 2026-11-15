@@ -154,6 +154,22 @@ impl Metrics {
             .get()
     }
 
+    /// One request that failed before any response byte because its
+    /// connection was lost ([`crate::egress::UpstreamClient::lost_before_response`]).
+    pub(crate) fn upstream_connection_lost(&self, client: &'static str) {
+        self.upstream_connection_lost
+            .get_or_create(&[("client", client.to_owned())])
+            .inc();
+    }
+
+    /// Lost connections so far for one client (tests).
+    #[cfg(test)]
+    pub(crate) fn upstream_connection_lost_count(&self, client: &str) -> u64 {
+        self.upstream_connection_lost
+            .get_or_create(&[("client", client.to_owned())])
+            .get()
+    }
+
     pub(crate) fn auth_throttled(&self, endpoint: &'static str, reason: &'static str) {
         self.auth_throttled
             .get_or_create(&[

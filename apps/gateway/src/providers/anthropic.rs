@@ -22,6 +22,7 @@ impl AnthropicAdapter {
                 crate::egress::Purpose::Provider,
             ))
             .connect_timeout(Duration::from_secs(10))
+            .pool_idle_timeout(crate::egress::UpstreamClient::Anthropic.pool_idle_timeout())
             .build()
             .map_err(|_| anyhow::anyhow!("Unable to initialize provider transport"))?,
             resolver,
@@ -134,7 +135,11 @@ impl ProviderAdapter for AnthropicAdapter {
                 outbound = outbound.header("anthropic-beta", beta);
             }
         }
-        let response = outbound.json(&payload).send().await.map_err(transport)?;
+        let response = outbound
+            .json(&payload)
+            .send()
+            .await
+            .map_err(send_error(crate::egress::UpstreamClient::Anthropic))?;
         let response = if request.messages_options.is_some() {
             super::framing::anthropic_generation_status(response).await?
         } else {

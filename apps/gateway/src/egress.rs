@@ -46,6 +46,9 @@ use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 mod client;
 pub use client::HttpClient;
 pub(crate) use client::{add_root_certificates, client_builder, pinned_client_builder};
+#[path = "egress_upstream.rs"]
+mod upstream;
+pub(crate) use upstream::UpstreamClient;
 
 /// Env var listing the private networks the gateway may reach.
 pub const PRIVATE_ALLOW_ENV: &str = "GATEWAY_EGRESS_PRIVATE_ALLOW";

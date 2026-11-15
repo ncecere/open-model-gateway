@@ -241,6 +241,7 @@ pub struct Metrics {
     auth_throttled: Family<L2, Counter>,
     key_issuance_refused: Family<L2, Counter>,
     egress_denied: Family<L1, Counter>,
+    upstream_connection_lost: Family<L1, Counter>,
     audit_export_deliveries: Family<L1, Counter>,
     audit_export_rejected_records: Counter,
     trace_dropped_spans: [Counter; crate::telemetry::DropReason::COUNT],

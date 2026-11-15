@@ -84,6 +84,7 @@ impl Metrics {
             auth_throttled: Family::default(),
             key_issuance_refused: Family::default(),
             egress_denied: Family::default(),
+            upstream_connection_lost: Family::default(),
             audit_export_deliveries: Family::default(),
             audit_export_rejected_records: Counter::default(),
             trace_dropped_spans: series(&families.trace_drops, "reason", |i| {
@@ -425,6 +426,11 @@ impl Metrics {
             "egress_denied",
             "Outbound connections refused by the egress policy, by purpose (provider, oidc, storage, catalog, smtp, audit)",
             self.egress_denied.clone(),
+        );
+        registry.register(
+            "upstream_connection_lost",
+            "Requests an outbound client sent that failed before any response byte arrived because the connection was lost (reset, closed or incomplete message; not a connect failure, timeout or response-body failure), by client (openai, openrouter, anthropic, bedrock, local, s3, export). Includes connections that were not reused (#483)",
+            self.upstream_connection_lost.clone(),
         );
         registry.register(
             "auth_throttled",

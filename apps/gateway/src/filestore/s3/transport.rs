@@ -55,6 +55,7 @@ impl HttpConnector for Connector {
                 builder = builder.header(name, value);
             }
             let response = builder.send().await.map_err(|error| {
+                crate::egress::UpstreamClient::S3.lost_before_response(&error);
                 if error.is_timeout() {
                     ConnectorError::timeout(Box::new(std::io::Error::other("File store timeout")))
                 } else if error.is_connect() {
@@ -119,6 +120,7 @@ pub(super) fn client(ca_pem: Option<&[u8]>) -> anyhow::Result<SharedHttpClient> 
     let mut builder =
         crate::egress::client_builder(crate::egress::resolver(crate::egress::Purpose::Storage))
             .connect_timeout(Duration::from_secs(10))
+            .pool_idle_timeout(crate::egress::UpstreamClient::S3.pool_idle_timeout())
             .read_timeout(Duration::from_secs(60));
     if let Some(pem) = ca_pem {
         let certificates = reqwest::Certificate::from_pem_bundle(pem)

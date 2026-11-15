@@ -638,6 +638,7 @@ const CLIENT_MODULE: &[&str] = &[
     "HttpClientBuilder :: pub fn connect_timeout ( self , timeout : Duration ) - > Self { Self ( self . 0 . connect_timeout ( timeout ) ) }",
     "HttpClientBuilder :: pub fn read_timeout ( self , timeout : Duration ) - > Self { Self ( self . 0 . read_timeout ( timeout ) ) }",
     "HttpClientBuilder :: pub fn pool_max_idle_per_host ( self , max : usize ) - > Self { Self ( self . 0 . pool_max_idle_per_host ( max ) ) }",
+    "HttpClientBuilder :: pub fn pool_idle_timeout ( self , timeout : Duration ) - > Self { Self ( self . 0 . pool_idle_timeout ( timeout ) ) }",
     "HttpClientBuilder :: pub fn https_only ( self , enabled : bool ) - > Self { Self ( self . 0 . https_only ( enabled ) ) }",
     "HttpClientBuilder :: pub fn build ( self ) - > reqwest : : Result < HttpClient > { self . 0 . build ( ) . map ( HttpClient ) }",
     "# [ expect ( clippy : : disallowed_methods , reason = \"the egress-guarded constructor (#509)\" ) ] pub ( crate ) fn client_builder ( resolver : Arc < Resolver > ) - > HttpClientBuilder { HttpClientBuilder ( reqwest : : Client : : builder ( ) . no_proxy ( ) . dns_resolver ( resolver ) . redirect ( reqwest : : redirect : : Policy : : none ( ) ) . retry ( reqwest : : retry : : never ( ) ) , ) }",

@@ -160,7 +160,7 @@ Streams contain deltas, one Finish, optional cumulative Usage and one terminal D
 
 Inbound HTTP bodies are 2 MiB. Provider complete bodies are 4 MiB; SSE frames 1 MiB; Chat supports at most 128 tool-call indices. Embeddings allow 128 strings, 1 MiB aggregate input content, dimensions at most 16384, finite uniform vectors and a 4 MiB response. OpenAI-wire vectors require complete unique indices; native Ollama arrays preserve batch order.
 
-The default process concurrency cap is 128; request deadline defaults 120 seconds (1–3600 supported), connection timeout ten seconds. Durable policy/price admission occurs before dispatch. Finalization has a separate bounded storage window; crashes or failures can leave started rows for lease reconciliation. No prompts/tool arguments/output bodies are stored in execution accounting.
+The default process concurrency cap is 128; request deadline defaults 120 seconds (1–3600 supported), connection timeout ten seconds, and a per-client pool idle timeout (3 to 20 seconds, below the upstream's; see [Lost connections](operations.md#lost-connections-483)). Durable policy/price admission occurs before dispatch. Finalization has a separate bounded storage window; crashes or failures can leave started rows for lease reconciliation. No prompts/tool arguments/output bodies are stored in execution accounting.
 
 Raw usage and normalized cache partitions remain separate. Missing counters/rates never become zero. Input-only embedding output zero is semantic non-applicability. Prices and conservative holds are configured estimates, not vendor billing. See [cache pricing](cache-pricing.md) and [governance](governance.md).
 

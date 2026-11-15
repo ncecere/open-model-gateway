@@ -134,6 +134,7 @@ classes! {
     "gateway_trace_deliveries" => (System, Counter, "1", ["outcome"]),
     "gateway_trace_dropped_spans" => (System, Counter, "1", ["reason"]),
     "gateway_trace_rejected_spans" => (System, Counter, "1", []),
+    "gateway_upstream_connection_lost" => (Traffic, Counter, "1", ["client"]),
     "gateway_upstream_duration_seconds" => (Traffic, Histogram, "s", ["model", "provider"]),
     "gateway_upstream_time_to_first_token_seconds" => (Traffic, Histogram, "s", ["model", "provider"]),
     "gateway_usage_rollup_hours" => (System, Counter, "h", ["reason"]),

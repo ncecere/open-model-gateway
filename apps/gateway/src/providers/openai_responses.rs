@@ -30,7 +30,7 @@ pub(super) async fn execute(
         .json(&encode(&target.upstream_model, &request))
         .send()
         .await
-        .map_err(transport)?;
+        .map_err(send_error(crate::egress::UpstreamClient::Openai))?;
     status(response.status())?;
     if !request.stream {
         return Ok(ProviderOutput::Complete(decode(&body(response).await?)?));

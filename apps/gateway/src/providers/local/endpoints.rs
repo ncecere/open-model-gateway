@@ -167,6 +167,7 @@ impl ApprovedEndpoints {
             };
             let client = crate::egress::pinned_client_builder(&approved)
                 .connect_timeout(Duration::from_secs(10))
+                .pool_idle_timeout(crate::egress::UpstreamClient::Local.pool_idle_timeout())
                 .build()
                 .map_err(|_| Rejected::Invalid)?;
             endpoints.insert(base.clone(), Endpoint { client, base });

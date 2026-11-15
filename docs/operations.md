@@ -174,6 +174,26 @@ Not covered: the AWS SDK's own credential lookups (instance metadata at `169.254
 
 SMTP also needs its relay host on `GATEWAY_SMTP_HOST_ALLOWLIST`; a listed loopback relay (a local mail sidecar) is allowed outside development. For Kubernetes NetworkPolicy alignment see [Kubernetes › Outbound traffic](kubernetes.md#outbound-traffic).
 
+### Lost connections (#483)
+
+An upstream, or a load balancer in front of it, closes an idle keep-alive connection on its own timeout. A request written to that connection while the close is in flight is lost: the caller sees an upstream failure (`upstream_unavailable` for inference), and the gateway does not resend it. To narrow that window every pooled outbound client drops an unused connection after a fixed **pool idle timeout** below its upstream's, so the pool never reuses a connection near the upstream's limit. The values are constants in `apps/gateway/src/egress_upstream.rs`, not settings:
+
+| Client | Pool idle timeout | Basis |
+|---|---|---|
+| `openai`, `openrouter`, `anthropic`, `bedrock` | 20 s | Not published by these providers. Chosen under the 60 s that AWS documents as the Application Load Balancer default; unverified for each provider's front end. |
+| `s3` | 3 s | Not published. An AWS re:Post report (unverified) has S3 closing idle connections after 3 to 5 s. |
+| `local` | 4 s | Operator-run servers: uvicorn's `timeout_keep_alive` defaults to 5 s (vLLM's server runs on it) and llama.cpp's HTTP server also defaults to 5 s (from their documentation, not re-verified). |
+| `export` | 10 s | OTLP collectors, the audit export and alert webhooks differ and are called seconds to minutes apart; unverified. |
+| OIDC | none | One connection per request (#417). |
+
+`gateway_upstream_connection_lost_total{client}` counts the failures that remain, so the real frequency is known before anything else changes. It counts a request that failed with a reset, closed or incomplete connection before any response byte arrived. It does not count connect failures, timeouts, or a connection lost after the response head (a stream that breaks midway). reqwest and hyper do not report whether the failed request used a pooled connection, so:
+
+- the counter is **not** a count of stale pooled connections: a fresh connection that the upstream resets mid-request counts too;
+- it does not show that the upstream never started the work, since the request may have been fully written; and
+- hyper-util itself resends once a request that it never began to write on a reused connection. That request succeeds or fails like any other and is not counted.
+
+A non-zero rate that does not move with traffic and is spread over `client` values points at the network or the upstream rather than at pooling. A non-zero rate on one client, close to the number of requests that follow an idle period, points at that client's pool idle timeout being too long for its upstream (for a `local` endpoint, an operator-run server with a keep-alive shorter than 4 s). The fix is a smaller constant, a code change reviewed like any other; there is no setting. Resending a lost request is a separate decision, to be taken only if the counter shows a need (#483). A failure is not logged: the counter is the record.
+
 ## Audit export
 
 With `GATEWAY_AUDIT_WEBHOOK_URL` and `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV` set, the gateway streams the audit log to a SIEM (#106). [Syslog over TLS](#syslog-over-tls) (`GATEWAY_AUDIT_SYSLOG_URL`, #107) and [OTLP logs](#otlp-logs) (`GATEWAY_AUDIT_OTLP_URL`, #108) are the alternatives; there is one destination at a time. The operator controls the destination; Admin › Settings › Audit export shows the transport and status and sends a test, but can't change or stop it.
@@ -364,6 +384,7 @@ There are no workspace, key, user, request IDs, or prompt and response data in a
 | `gateway_inference_attempt_errors_total` | counter | `provider`, `code` |
 | `gateway_upstream_duration_seconds` | histogram | `provider`, `model` (dispatch to end of upstream response) |
 | `gateway_upstream_time_to_first_token_seconds` | histogram | `provider`, `model` (streams) |
+| `gateway_upstream_connection_lost_total` | counter | `client` (`openai`, `openrouter`, `anthropic`, `bedrock`, `local`, `s3`, `export`; `export` is the shared client of OTLP telemetry, the audit export and alert webhooks; the audit export's own failures are not counted). Requests that failed before any response byte arrived because the connection was lost (reset, closed or an incomplete message), excluding connect failures, timeouts and failures after the response head (#483). It does **not** prove the connection was reused or that the upstream never began the work: see [Lost connections](#lost-connections-483). OTLP **Traffic** class. |
 | `gateway_inference_tokens_total` | counter | `provider`, `model`, `direction` (provider-reported only; unknown usage is not counted as zero) |
 | `gateway_settlements_total` | counter | `outcome`: `settled` (exact cost), `unknown` (hold retained), `held` (finalization failed or timed out after 3 s; the reservation stays pending until reconciliation) |
 | `gateway_accounting_failures_total` | counter | `stage`, `cause`. One increment, and one `WARN` log line with the same two fields, for each failed accounting operation: the cause of `503 accounting_unavailable`. Also counted: realtime accounting deadlines, the job module's database failures, maintenance runs and key lookups. Both labels are fixed lists (11 stages and 16 causes, so at most 176 label combinations, at most 103 of them produced); no SQL, SQLSTATE, message or identifier. No series exists until the first failure. See [Accounting failures](#accounting-failures). |

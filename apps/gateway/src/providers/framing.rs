@@ -12,6 +12,17 @@ pub(super) fn transport(error: reqwest::Error) -> InferenceError {
         InferenceError::UpstreamUnavailable
     }
 }
+/// [`transport`] for the error of a `send()`, which also counts a request
+/// lost with its connection under `client` (#483). The returned error is
+/// the same as [`transport`]'s.
+pub(crate) fn send_error(
+    client: crate::egress::UpstreamClient,
+) -> impl Fn(reqwest::Error) -> InferenceError + Copy {
+    move |error| {
+        client.lost_before_response(&error);
+        transport(error)
+    }
+}
 pub(super) fn status(status: reqwest::StatusCode) -> Result<()> {
     if status.is_success() {
         return Ok(());

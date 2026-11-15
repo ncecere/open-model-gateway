@@ -100,6 +100,14 @@ impl HttpClientBuilder {
         Self(self.0.pool_max_idle_per_host(max))
     }
 
+    /// How long the pool keeps an unused connection. A pool idle timeout
+    /// below the upstream's closes the window in which a request is written
+    /// to a connection the upstream is closing (#483). It changes no
+    /// redirect, retry, proxy or resolver safeguard.
+    pub fn pool_idle_timeout(self, timeout: Duration) -> Self {
+        Self(self.0.pool_idle_timeout(timeout))
+    }
+
     pub fn https_only(self, enabled: bool) -> Self {
         Self(self.0.https_only(enabled))
     }

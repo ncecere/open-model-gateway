@@ -1,6 +1,10 @@
 //! Requests lost on a pooled connection the upstream is closing (#483), over
 //! real HTTP to a loopback server that closes idle keep-alive connections.
 use super::*;
+use crate::{
+    inference::error::InferenceError, metrics::characterization_tests::fresh_registry,
+    providers::framing,
+};
 use std::{
     sync::atomic::AtomicUsize,
     time::{Duration, Instant},
@@ -95,18 +99,231 @@ async fn run(client: &HttpClient, port: u16, rounds: usize, pause: Duration) -> 
     failed
 }
 
-/// Before #483: the pool keeps an idle connection for reqwest's 90 s default,
-/// so every request after a pause longer than the server's timeout is lost.
+/// A client whose pool keeps an idle connection for `idle`.
+fn client_with_idle(idle: Duration) -> HttpClient {
+    client_builder(loopback())
+        .pool_idle_timeout(idle)
+        .build()
+        .unwrap()
+}
+
+/// What reqwest's own 90 s default (the client before #483) does: the pool
+/// keeps the idle connection, so every request after a pause longer than the
+/// server's timeout is lost. Every second request here, as measured before
+/// the change (6 of 12).
 #[tokio::test]
-async fn default_pool_loses_the_request_after_a_pause_longer_than_the_servers_timeout() {
+async fn pool_idle_timeout_above_the_servers_loses_the_request_after_each_pause() {
     let (port, seen) = lazy_close_server(SERVER_IDLE).await;
-    let client = client_builder(loopback()).build().unwrap();
+    let client = client_with_idle(Duration::from_secs(90));
     let failed = run(&client, port, 12, PAUSE).await;
-    println!(
-        "BASELINE default pool: failed={failed}/12 connections={} dropped={}",
-        seen.connections.load(Ordering::SeqCst),
-        seen.dropped.load(Ordering::SeqCst)
+    assert_eq!(
+        failed, 6,
+        "requests 2, 4, ... 12 reuse a closing connection"
     );
-    assert_eq!(failed, seen.dropped.load(Ordering::SeqCst));
-    assert!(failed >= 5, "expected lost requests, got {failed}");
+    assert_eq!(seen.dropped.load(Ordering::SeqCst), failed);
+    assert_eq!(seen.connections.load(Ordering::SeqCst), 6);
+}
+
+/// The fix: with the pool's idle timeout below the server's, a connection
+/// older than that is dropped at checkout, so no request meets the close.
+#[tokio::test]
+async fn pool_idle_timeout_below_the_servers_loses_no_request() {
+    let (port, seen) = lazy_close_server(SERVER_IDLE).await;
+    let client = client_with_idle(Duration::from_millis(75));
+    let failed = run(&client, port, 12, PAUSE).await;
+    assert_eq!(failed, 0);
+    assert_eq!(seen.dropped.load(Ordering::SeqCst), 0);
+    assert_eq!(seen.connections.load(Ordering::SeqCst), 12, "one each");
+}
+
+/// A shorter idle timeout does not cost reuse while requests keep coming.
+#[tokio::test]
+async fn steady_load_still_reuses_one_connection() {
+    let (port, seen) = lazy_close_server(Duration::from_secs(1)).await;
+    let client = client_with_idle(Duration::from_millis(500));
+    assert_eq!(run(&client, port, 100, Duration::ZERO).await, 0);
+    assert_eq!(seen.connections.load(Ordering::SeqCst), 1);
+    assert_eq!(seen.served.load(Ordering::SeqCst), 100);
+}
+
+/// The counter counts each lost request once, under the client's label, and
+/// the caller's error is the one it was before: `UpstreamUnavailable`.
+#[tokio::test]
+async fn a_lost_request_is_counted_once_and_keeps_its_error() {
+    let (port, _) = lazy_close_server(SERVER_IDLE).await;
+    let client = client_with_idle(Duration::from_secs(90));
+    let url = format!("http://localhost:{port}/");
+    let metrics = fresh_registry();
+    let global_before = crate::metrics::METRICS.upstream_connection_lost_count("local");
+    let mut lost = 0;
+    for round in 0..6 {
+        if round > 0 {
+            tokio::time::sleep(PAUSE).await;
+        }
+        let Err(error) = client.get(&url).send().await else {
+            continue;
+        };
+        assert!(UpstreamClient::Local.count_on(metrics, &error));
+        lost += 1;
+        // The mapper the local adapter uses: same error, and it counts too.
+        assert_eq!(
+            framing::send_error(UpstreamClient::Local)(error),
+            InferenceError::UpstreamUnavailable
+        );
+    }
+    assert_eq!(lost, 3);
+    assert_eq!(metrics.upstream_connection_lost_count("local"), 3);
+    assert_eq!(metrics.upstream_connection_lost_count("openai"), 0);
+    // Other tests share the global registry, so it can only be bounded below.
+    assert!(crate::metrics::METRICS.upstream_connection_lost_count("local") >= global_before + 3);
+}
+
+async fn expect_not_counted(client: &HttpClient, url: &str) {
+    let error = match client.get(url).send().await {
+        Err(error) => error,
+        Ok(response) => response.bytes().await.unwrap_err(),
+    };
+    assert!(
+        !upstream::connection_lost_before_response(&error),
+        "{error:?}"
+    );
+}
+
+/// What is not this class: a refused connection, a timeout, a response that
+/// breaks after its head, and a response with an error status.
+#[tokio::test]
+async fn failures_that_are_not_a_lost_request_are_not_counted() {
+    let client = client_with_idle(Duration::from_secs(1));
+    // Connect failure: nothing listens.
+    let free = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let closed = free.local_addr().unwrap().port();
+    drop(free);
+    expect_not_counted(&client, &format!("http://localhost:{closed}/")).await;
+    // Timeout: the server reads the request and never answers.
+    let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let silent_port = silent.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((mut stream, _)) = silent.accept().await {
+            read_head(&mut stream).await;
+            held.push(stream);
+        }
+    });
+    let timed = client_builder(loopback())
+        .timeout(Duration::from_millis(200))
+        .build()
+        .unwrap();
+    expect_not_counted(&timed, &format!("http://localhost:{silent_port}/")).await;
+    // The response head arrives, then the connection dies mid-body: after a
+    // response byte, so not this class.
+    let cut = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let cut_port = cut.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = cut.accept().await {
+            read_head(&mut stream).await;
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 10\r\n\r\nabc")
+                .await;
+        }
+    });
+    expect_not_counted(&client, &format!("http://localhost:{cut_port}/")).await;
+    // An error status is a response, not an error.
+    let (port, _) = server_status().await;
+    let response = client.get(format!("http://localhost:{port}/")).send().await;
+    assert_eq!(response.unwrap().status(), 503);
+}
+
+async fn server_status() -> (u16, ()) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            read_head(&mut stream).await;
+            let _ = stream
+                .write_all(b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\n\r\n")
+                .await;
+        }
+    });
+    (port, ())
+}
+
+/// Each client's idle timeout is positive, below reqwest's 90 s default, and,
+/// for the one upstream with a documented default, below it (uvicorn: 5 s).
+#[test]
+fn every_client_has_a_pool_idle_timeout_below_the_default() {
+    let mut labels = std::collections::BTreeSet::new();
+    for client in UpstreamClient::ALL {
+        let idle = client.pool_idle_timeout();
+        assert!(idle >= Duration::from_secs(1) && idle < Duration::from_secs(90));
+        assert!(labels.insert(client.as_str()), "labels are unique");
+    }
+    assert!(UpstreamClient::Local.pool_idle_timeout() < Duration::from_secs(5));
+    assert!(UpstreamClient::Openai.pool_idle_timeout() < Duration::from_secs(60));
+    assert_eq!(
+        labels.into_iter().collect::<Vec<_>>(),
+        [
+            "anthropic",
+            "bedrock",
+            "export",
+            "local",
+            "openai",
+            "openrouter",
+            "s3"
+        ]
+    );
+}
+
+/// The operator reference names the counter and every label value.
+#[test]
+fn the_metric_reference_names_the_counter_and_each_client() {
+    let reference = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/operations.md"),
+    )
+    .unwrap();
+    let row = reference
+        .lines()
+        .find(|line| line.starts_with("| `gateway_upstream_connection_lost_total`"))
+        .expect("a row in the metric table");
+    for client in UpstreamClient::ALL {
+        assert!(
+            row.contains(&format!("`{}`", client.as_str())),
+            "{client:?}"
+        );
+    }
+}
+
+/// Throughput and latency of a reuse-heavy loop, for the default idle timeout
+/// and the shortest one in use. Run by hand:
+/// `cargo test -p open-model-gateway --lib -- --ignored --nocapture reuse_benchmark`
+#[tokio::test]
+#[ignore = "benchmark: prints its numbers"]
+async fn reuse_benchmark() {
+    for (name, idle) in [
+        ("idle=90s", Duration::from_secs(90)),
+        ("idle=3s", Duration::from_secs(3)),
+        ("idle=90s", Duration::from_secs(90)),
+        ("idle=3s", Duration::from_secs(3)),
+    ] {
+        let (port, seen) = lazy_close_server(Duration::from_secs(3600)).await;
+        let client = client_with_idle(idle);
+        let url = format!("http://localhost:{port}/");
+        let mut micros = Vec::new();
+        let started = Instant::now();
+        for _ in 0..5000 {
+            let sent = Instant::now();
+            let response = client.get(&url).send().await.unwrap();
+            let _ = response.bytes().await.unwrap();
+            micros.push(sent.elapsed().as_micros());
+        }
+        let total = started.elapsed();
+        micros.sort_unstable();
+        println!(
+            "BENCH {name}: {:.0} req/s p50={}us p99={}us connections={}",
+            5000.0 / total.as_secs_f64(),
+            micros[micros.len() / 2],
+            micros[micros.len() * 99 / 100],
+            seen.connections.load(Ordering::SeqCst)
+        );
+        assert_eq!(seen.connections.load(Ordering::SeqCst), 1);
+    }
 }
