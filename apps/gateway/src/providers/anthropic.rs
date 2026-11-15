@@ -163,9 +163,8 @@ impl ProviderAdapter for AnthropicAdapter {
         )))
     }
 }
-#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
-fn encode(model: &str, request: &ChatRequest) -> Result<Value> {
-    super::messages::validate(request, super::messages::ProviderClass::Anthropic)?;
+/// Refuses what the Messages API cannot take: strict tools and a temperature outside 0..=1.
+fn check_supported(request: &ChatRequest) -> Result<()> {
     if request
         .temperature
         .is_some_and(|t| !(0.0..=1.0).contains(&t))
@@ -173,6 +172,30 @@ fn encode(model: &str, request: &ChatRequest) -> Result<Value> {
     {
         return Err(InferenceError::Unsupported);
     }
+    Ok(())
+}
+/// The content blocks of one non-system message: a tool result, or text then tool calls.
+fn content_blocks(message: &Message) -> Result<Vec<Value>> {
+    let mut content = vec![];
+    if message.role == Role::Tool {
+        content.push(json!({"type":"tool_result","tool_use_id":message.tool_call_id,"content":message.content}));
+    } else {
+        if let Some(text) = &message.content {
+            content.push(json!({"type":"text","text":text}));
+        }
+        for call in &message.tool_calls {
+            let input: Value = serde_json::from_str(&call.arguments)
+                .map_err(|_| InferenceError::InvalidRequest)?;
+            if !input.is_object() {
+                return Err(InferenceError::InvalidRequest);
+            }
+            content.push(json!({"type":"tool_use","id":call.id,"name":call.name,"input":input}));
+        }
+    }
+    Ok(content)
+}
+/// Splits the messages into the system blocks and the conversation; system text may only lead.
+fn system_and_messages(request: &ChatRequest) -> Result<(Vec<Value>, Vec<Value>)> {
     let mut system = vec![];
     let mut messages = vec![];
     let mut conversation = false;
@@ -187,29 +210,13 @@ fn encode(model: &str, request: &ChatRequest) -> Result<Value> {
             continue;
         }
         conversation = true;
-        let mut content = vec![];
-        if message.role == Role::Tool {
-            content.push(json!({"type":"tool_result","tool_use_id":message.tool_call_id,"content":message.content}));
-        } else {
-            if let Some(text) = &message.content {
-                content.push(json!({"type":"text","text":text}));
-            }
-            for call in &message.tool_calls {
-                let input: Value = serde_json::from_str(&call.arguments)
-                    .map_err(|_| InferenceError::InvalidRequest)?;
-                if !input.is_object() {
-                    return Err(InferenceError::InvalidRequest);
-                }
-                content
-                    .push(json!({"type":"tool_use","id":call.id,"name":call.name,"input":input}));
-            }
-        }
+        let content = content_blocks(message)?;
         messages.push(json!({"role":if message.role == Role::Assistant { "assistant" } else { "user" },"content":content}));
     }
-    let mut value = json!({"model":model,"messages":messages,"max_tokens":request.max_output_tokens.unwrap_or(1024),"stream":request.stream});
-    if !system.is_empty() {
-        value["system"] = system.into();
-    }
+    Ok((system, messages))
+}
+/// Sampling fields carried from the Messages-API options.
+fn set_sampling(value: &mut Value, request: &ChatRequest) {
     if let Some(t) = request.temperature {
         value["temperature"] = json!(t);
     }
@@ -224,6 +231,9 @@ fn encode(model: &str, request: &ChatRequest) -> Result<Value> {
             value["stop_sequences"] = json!(stops);
         }
     }
+}
+/// The function tools in Messages form.
+fn set_tools(value: &mut Value, request: &ChatRequest) {
     if !request.tools.is_empty() {
         value["tools"] = Value::Array(
             request
@@ -239,6 +249,9 @@ fn encode(model: &str, request: &ChatRequest) -> Result<Value> {
                 .collect(),
         );
     }
+}
+/// Native Messages envelopes replace the translated ones.
+fn set_native_overrides(value: &mut Value, request: &ChatRequest) {
     if let Some(options) = &request.messages_options {
         // Only fully grammar-validated envelopes retained by the Messages
         // normalizer; metadata.user_id was intentionally never retained here.
@@ -261,6 +274,8 @@ fn encode(model: &str, request: &ChatRequest) -> Result<Value> {
             value["context_management"] = context.clone();
         }
     }
+}
+fn set_tool_choice(value: &mut Value, request: &ChatRequest) {
     if let Some(choice) = &request.tool_choice {
         value["tool_choice"] = match choice {
             ToolChoice::Auto => json!({"type":"auto"}),
@@ -269,6 +284,19 @@ fn encode(model: &str, request: &ChatRequest) -> Result<Value> {
             ToolChoice::Function(name) => json!({"type":"tool","name":name}),
         };
     }
+}
+fn encode(model: &str, request: &ChatRequest) -> Result<Value> {
+    super::messages::validate(request, super::messages::ProviderClass::Anthropic)?;
+    check_supported(request)?;
+    let (system, messages) = system_and_messages(request)?;
+    let mut value = json!({"model":model,"messages":messages,"max_tokens":request.max_output_tokens.unwrap_or(1024),"stream":request.stream});
+    if !system.is_empty() {
+        value["system"] = system.into();
+    }
+    set_sampling(&mut value, request);
+    set_tools(&mut value, request);
+    set_native_overrides(&mut value, request);
+    set_tool_choice(&mut value, request);
     Ok(value)
 }
 fn finish(value: &Value) -> Result<FinishReason> {
