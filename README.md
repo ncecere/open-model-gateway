@@ -112,7 +112,7 @@ npm run build:web
 npm run test:browser
 ```
 
-CI scans every pull request and push for committed secrets (gitleaks, pinned; `.gitleaks.toml`). An optional pre-commit hook runs the same scan locally (`python3 -I scripts/secret-scan.py staged`); what to do when it flags something is in [verification](docs/verification.md#secret-scanning).
+CI scans pull requests, pushes to `main` and `v*` tags for committed secrets (gitleaks, pinned; `.gitleaks.toml`). An optional pre-commit hook runs the same scan locally (`python3 -I scripts/secret-scan.py staged`); what to do when it flags something is in [verification](docs/verification.md#secret-scanning).
 
 Mock-provider and SDK tests require no paid calls or real enterprise IdP modifications. See [staging](docs/staging.md) for restricted runtime roles, the image, TLS rehearsal and backup/restore tooling, and [Kubernetes](docs/kubernetes.md) for the Helm chart (explicit migration Job, optional CloudNativePG Cluster/Pooler, NetworkPolicy, loadtest profile). **Use a new enterprise staging database; do not run initialization against an existing legacy deployment.** Production load/availability, real-provider certification, full live IdP acceptance, observability and off-host recovery acceptance remain unfinished. Live SCIM acceptance has passed once, against Authentik on v0.9.1 ([SCIM](docs/scim.md#operations-and-limits)), and has not been repeated on a later release.
 
