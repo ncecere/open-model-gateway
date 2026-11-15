@@ -162,7 +162,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 - Follow-up: none.
 
 **TEN-7. A workspace admin loosens a limit.** E, T · Asset: budgets, rates, storage quota · Attacker: workspace admin.
-- Mitigation: local policies are tighten-only and compose with type defaults and platform overrides; personal limits are platform-controlled (`management/governance/policies.rs`; `personal_limits()` in `management/mod.rs`). Budget rows are replaced by DELETE and INSERT; the runtime role has no UPDATE on them (`deploy/staging/runtime-grants.sql`). Changing limits never resets consumption.
+- Mitigation: local policies are tighten-only and compose with type defaults and platform overrides; personal limits are platform-controlled (`management/governance/policies.rs`; `personal_limits()` in `management/errors.rs`). Budget rows are replaced by DELETE and INSERT; the runtime role has no UPDATE on them (`deploy/staging/runtime-grants.sql`). Changing limits never resets consumption.
 - Tests: `governance/tests.rs` `override_header_replaces_live_type_default_and_local_tightens`; `management/governance/tests.rs` `delegated_admin_tighten_requires_live_membership_and_masked_caps_persist`; `governance/period_tests.rs` `changing_a_period_never_resets_or_rewrites_consumption`; `management/files_tests.rs` `storage_limit_stacks_and_is_tighten_only`; `management/project_tests.rs` `personal_workspace_name_is_fixed_and_local_limits_are_platform_controlled`.
 - Residual: none found.
 - Follow-up: none.
