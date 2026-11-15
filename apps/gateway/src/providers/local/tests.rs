@@ -529,7 +529,9 @@ async fn a_request_lost_with_its_connection_is_counted_and_keeps_its_error() {
     };
     let adapter = mock.adapter(Profile::Vllm, Arc::new(Resolver(AtomicUsize::new(0))));
     let target = mock.target(Profile::Vllm);
-    let before = crate::metrics::METRICS.upstream_connection_lost_count("local");
+    // Counts on this thread go to a registry of this test's own.
+    let metrics = crate::metrics::characterization_tests::fresh_registry();
+    let _sink = crate::egress::count_here(metrics);
     adapter.execute(&target, request(false)).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     // The adapter's 4 s pool idle timeout keeps the connection, which the
@@ -538,6 +540,5 @@ async fn a_request_lost_with_its_connection_is_counted_and_keeps_its_error() {
         adapter.execute(&target, request(false)).await,
         Err(InferenceError::UpstreamUnavailable)
     ));
-    // Shared registry: other tests may add to it, none can remove from it.
-    assert!(crate::metrics::METRICS.upstream_connection_lost_count("local") > before);
+    assert_eq!(metrics.upstream_connection_lost_count("local"), 1);
 }

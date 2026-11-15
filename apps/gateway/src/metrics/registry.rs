@@ -429,7 +429,7 @@ impl Metrics {
         );
         registry.register(
             "upstream_connection_lost",
-            "Requests an outbound client sent that failed before any response byte arrived because the connection was lost (reset, closed or incomplete message; not a connect failure, timeout or response-body failure), by client (openai, openrouter, anthropic, bedrock, local, s3, export). Includes connections that were not reused (#483)",
+            "Requests an outbound client sent that failed before a complete response head arrived because the connection was lost (reset, closed or incomplete message; not a connect failure, timeout, failure of the gateways own request body or failure after the head), by client (openai, openrouter, anthropic, bedrock, local, s3, export). Includes connections that were not reused and requests the upstream may have processed (#483)",
             self.upstream_connection_lost.clone(),
         );
         registry.register(

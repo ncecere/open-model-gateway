@@ -5,7 +5,7 @@ use serde_json::Value;
 pub(super) type Result<T> = std::result::Result<T, InferenceError>;
 pub(super) const BODY_LIMIT: usize = 4 * 1024 * 1024;
 const SSE_LIMIT: usize = 1024 * 1024;
-pub(super) fn transport(error: reqwest::Error) -> InferenceError {
+pub(crate) fn transport(error: reqwest::Error) -> InferenceError {
     if error.is_timeout() {
         InferenceError::Timeout
     } else {

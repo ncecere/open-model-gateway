@@ -2,17 +2,20 @@
 //!
 //! An upstream (or a load balancer in front of it) closes an idle keep-alive
 //! connection on its own timeout. A request written at that moment is lost,
-//! and with no retry (`reqwest::retry::never()`) the caller sees a failed
-//! request. Two things narrow and measure that, and neither resends anything:
+//! and the gateway does not resend it. Two things narrow and measure that:
 //!
-//! - every outbound client sets a pool idle timeout below its upstream's, so
-//!   the pool drops a connection before the upstream does
+//! - every pooled outbound client sets a pool idle timeout below its
+//!   upstream's, so the pool drops a connection before the upstream does
 //!   ([`UpstreamClient::pool_idle_timeout`]);
 //! - [`UpstreamClient::lost_before_response`] counts the failure class that
 //!   remains, in `gateway_upstream_connection_lost_total{client}`.
 //!
-//! What the counter proves, and what it does not, is stated on
-//! [`connection_lost_before_response`].
+//! Neither resends anything. `reqwest::retry::never()` governs only
+//! reqwest's own retry policy; the connection pool below it can re-dispatch
+//! a request it never wrote (see [`connection_lost_before_response`]).
+//! What the counter proves, and what it does not, is stated there.
+//!
+//! `tests` in `egress_wiring_tests.rs` pin which client each call site names.
 
 use std::{error::Error as _, time::Duration};
 
@@ -31,10 +34,7 @@ pub(crate) enum UpstreamClient {
     Local,
     S3,
     /// The shared export client: OTLP traces, metrics and logs, the audit
-    /// export (webhook and OTLP) and alert webhooks. Its pool idle timeout
-    /// applies to all of them; only the OTLP pushes and alert webhooks are
-    /// counted (the audit export has its own failure categories, and its
-    /// file is at its size ceiling).
+    /// export (webhook and OTLP) and alert webhooks.
     Export,
 }
 
@@ -65,26 +65,30 @@ impl UpstreamClient {
 
     /// How long the pool keeps an unused connection. It must stay below the
     /// shortest idle timeout on the path to the upstream, with a margin for
-    /// latency: the pool checks a connection's age when it is taken, so a
-    /// connection older than this is never reused. No upstream below
-    /// publishes its idle timeout except where stated; every other figure is
-    /// a conservative choice, to be tuned with
-    /// `gateway_upstream_connection_lost_total` (docs/operations.md).
+    /// latency: the pool checks a connection's age when it takes one, so a
+    /// connection older than this is never reused. The providers do not
+    /// publish their idle timeouts; every figure below is a conservative
+    /// choice to be tuned with `gateway_upstream_connection_lost_total`
+    /// (docs/operations.md, "Lost connections").
     ///
-    /// - OpenAI, OpenRouter, Anthropic: not published. 20 s is under the
-    ///   60 s that AWS documents as the Application Load Balancer default
-    ///   (unverified for these providers' front ends).
-    /// - Bedrock runtime: not published. 20 s, as above.
-    /// - S3: not published; a community report (AWS re:Post, unverified)
-    ///   sees S3 close idle connections after 3 to 5 s, so 3 s.
-    /// - Local: operator-run servers. uvicorn's `timeout_keep_alive` defaults
-    ///   to 5 s, which is what vLLM's OpenAI server runs on; llama.cpp's
-    ///   HTTP server also defaults to 5 s (both from their documentation,
-    ///   not re-verified here). 4 s keeps a 1 s margin.
-    /// - Export: collectors differ and pushes are seconds to a minute apart,
-    ///   so most pushes open a connection anyway; 10 s keeps the busy trace
-    ///   exporter's reuse and drops a connection before a typical 30 s to
-    ///   60 s collector timeout (unverified).
+    /// - OpenAI, OpenRouter, Anthropic, Bedrock: 20 s. AWS documents 60 s as
+    ///   the Application Load Balancer default idle timeout, and Cloudflare
+    ///   documents 400 s of keep-alive toward clients. Whether each provider
+    ///   sits behind either is not verified.
+    /// - S3: 3 s. Not published, and the reports conflict (3 to 5 s in one
+    ///   community answer, about 20 s in another); 3 s is the conservative
+    ///   pick and unverified.
+    /// - Local: 4 s. uvicorn's `timeout_keep_alive` defaults to 5 s
+    ///   (`uvicorn/config.py`), and vLLM passes `VLLM_HTTP_TIMEOUT_KEEP_ALIVE`
+    ///   (default 5) to it. llama.cpp's server sets no keep-alive timeout,
+    ///   so its cpp-httplib default applies (5 s, and at most 100 requests
+    ///   per connection). Ollama's Go `http.Server` sets no `IdleTimeout`, so
+    ///   it does not close idle connections. A server with a shorter
+    ///   keep-alive (gunicorn's `keepalive` defaults to 2 s) still loses
+    ///   requests; `client="local"` shows it.
+    /// - Export: 10 s. The OpenTelemetry Collector's confighttp
+    ///   `keepalive::idle_timeout` defaults to 1 minute. Pushes are seconds
+    ///   to minutes apart, so most open a connection anyway.
     pub(crate) const fn pool_idle_timeout(self) -> Duration {
         Duration::from_secs(match self {
             Self::Openai | Self::Openrouter | Self::Anthropic | Self::Bedrock => 20,
@@ -94,11 +98,25 @@ impl UpstreamClient {
         })
     }
 
-    /// Counts `error` if it is a connection lost before any response byte.
-    /// Call it where a send error is mapped; it changes nothing about the
-    /// error the caller returns.
+    /// Counts `error` if it is a connection lost before a complete response
+    /// head. Call it where a send error is mapped; it changes nothing about
+    /// the error the caller returns.
     pub(crate) fn lost_before_response(self, error: &reqwest::Error) {
+        #[cfg(test)]
+        if let Some(sink) = SINK.with(std::cell::Cell::get) {
+            self.count_on(sink, error);
+            return;
+        }
         self.count_on(&crate::metrics::METRICS, error);
+    }
+
+    /// A `map_err` function that counts the error, then returns `value`:
+    /// the mapping a call site already had, with the counting added.
+    pub(crate) fn count_then<T>(self, value: T) -> impl FnOnce(reqwest::Error) -> T {
+        move |error| {
+            self.lost_before_response(&error);
+            value
+        }
     }
 
     pub(super) fn count_on(self, metrics: &Metrics, error: &reqwest::Error) -> bool {
@@ -110,35 +128,71 @@ impl UpstreamClient {
     }
 }
 
-/// True when a request failed after it was handed to a connection and before
-/// any response byte arrived, because the connection was lost: the error is a
-/// request error (not a connect, redirect, body or decode error), not a
-/// timeout, and its cause chain holds a closed or incomplete hyper message or
-/// a reset, aborted, broken-pipe or end-of-file I/O error.
+#[cfg(test)]
+thread_local! {
+    static SINK: std::cell::Cell<Option<&'static Metrics>> = const { std::cell::Cell::new(None) };
+}
+
+/// Test only: counts on this thread go to `metrics` until the guard drops,
+/// so a test asserts an exact count that no parallel test can change.
+#[cfg(test)]
+pub(crate) fn count_here(metrics: &'static Metrics) -> impl Drop {
+    struct Restore(Option<&'static Metrics>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SINK.with(|sink| sink.set(self.0));
+        }
+    }
+    Restore(SINK.with(|sink| sink.replace(Some(metrics))))
+}
+
+/// True when a request failed after the gateway handed it to a connection
+/// and before a complete response head arrived, because the connection was
+/// lost: a request error (not connect, redirect, body or decode), not a
+/// timeout, not the gateway's own request body failing, whose cause chain
+/// holds a closed, incomplete or canceled hyper message or a reset, aborted,
+/// broken-pipe or end-of-file I/O error.
 ///
 /// This is what reqwest 0.12 and hyper 1 let us establish, and no more:
 ///
 /// - It does not prove the connection was reused. Neither reqwest nor
-///   hyper-util says whether a failed request used a pooled connection, so a
-///   fresh connection that the upstream reset mid-request is counted too.
-///   (hyper-util itself resends, once, a request it never began to write on a
-///   reused connection; such a request is not an error and is not counted.)
-/// - It does not prove the upstream never began the work. The request may
-///   have been fully written before the connection was lost.
-/// - The class is the one a stale pooled connection produces, so a rise that
-///   follows a pool idle timeout near the upstream's points at that cause.
-///   It is not proof of it.
+///   hyper-util says whether a failed request used a pooled connection. A
+///   stale idle connection is one cause among several. The class also holds
+///   a fresh connection reset or closed (an accept and close is counted
+///   with the server seeing no byte), an upstream crash, restart or drain
+///   mid-request, a middlebox or NAT cutting a long non-streaming wait, a
+///   reset during a large upload, and a partial response head (partial
+///   status line or headers).
+/// - It does not say whether the upstream saw the request. A counted
+///   request may have been fully written and processed, or never written.
+/// - A request error from the gateway's own request body stream is a
+///   `hyper::Error` that `is_user()`, whatever its I/O kind, and is not
+///   counted.
 /// - HTTP/1 only: the gateway's reqwest has no `http2` feature.
+///
+/// Nothing is resent by the gateway or by reqwest (`retry::never()`). The
+/// connection pool beneath reqwest can re-dispatch a request that had not
+/// left it: hyper-util 0.1.21's `send_request` loops while a failure is
+/// retryable, the connection was reused and `retry_canceled_requests` (on by
+/// default, and reqwest 0.12.28 offers no switch) is true, so a request
+/// handed back unwritten may go to a new connection, once per stale idle
+/// connection until a fresh one is used. It is never written twice. That
+/// predates #483, such a request is not an error and is not counted, and a
+/// shorter pool idle timeout makes it rarer.
 pub(crate) fn connection_lost_before_response(error: &reqwest::Error) -> bool {
     if !error.is_request() || error.is_connect() || error.is_timeout() {
         return false;
     }
     let mut source: Option<&(dyn std::error::Error + 'static)> = error.source();
     while let Some(cause) = source {
-        if let Some(hyper) = cause.downcast_ref::<hyper::Error>()
-            && (hyper.is_closed() || hyper.is_incomplete_message() || hyper.is_canceled())
-        {
-            return true;
+        if let Some(hyper) = cause.downcast_ref::<hyper::Error>() {
+            // The gateway's own request body failed: not the connection.
+            if hyper.is_user() {
+                return false;
+            }
+            if hyper.is_closed() || hyper.is_incomplete_message() || hyper.is_canceled() {
+                return true;
+            }
         }
         if let Some(io) = cause.downcast_ref::<std::io::Error>()
             && matches!(

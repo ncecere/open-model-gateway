@@ -64,7 +64,8 @@ endpoint, for example
 exact HTTPS origin (no credentials, path, query, fragment or trailing slash) that
 appears on `GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST` (comma-separated origins; default
 empty). Requests are still signed for `bedrock` in the connection region. Redirects,
-ambient proxies and implicit retries stay disabled. The override applies to Bedrock
+ambient proxies and implicit retries (reqwest's retry policy; see
+[Lost connections](operations.md#lost-connections-483) for the pool) stay disabled. The override applies to Bedrock
 Runtime only; STS for assumed roles uses its regional endpoint.
 
 ### Allowlists are enforced twice
@@ -138,7 +139,8 @@ A small reqwest-backed AWS HTTP connector enforces an **8 MiB cumulative wire-bo
 limit before SDK deserialization**, including error bodies and streams. Normalized
 text/tool output is limited to 4 MiB, 256 content blocks, and 128 tool calls.
 Requests are also bounded. Inference requests use one SDK attempt, no reqwest
-retries, no redirects, no ambient proxy, a 10-second connection limit, a 60-second
+retries (the connection pool may re-dispatch a request it never wrote; see
+[Lost connections](operations.md#lost-connections-483)), no redirects, no ambient proxy, a 10-second connection limit, a 60-second
 read/stream-event limit, and a 300-second transport/operation deadline. Existing
 gateway deadlines can cancel sooner. No adapter producer task is spawned;
 dropping the returned stream drops the AWS receiver and upstream response body.

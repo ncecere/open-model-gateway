@@ -930,6 +930,8 @@ fn verify_receipt(
         "gateway_egress_denied",
         "gateway_lock_deadlock_retries",
         "gateway_metrics_collection_errors",
+        // #483: counted only when a request loses its connection.
+        "gateway_upstream_connection_lost",
         "gateway_usage_rollup_hours",
         // #102: report email send outcomes exist only after a send attempt.
         "gateway_report_email_attempts",

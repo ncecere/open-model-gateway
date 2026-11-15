@@ -273,7 +273,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 **OIDC-5. JWKS rotation, outage or key-ID flooding.** D, S · Asset: sign-in availability · Attacker: unauthenticated internet client; IdP outage.
 - Mitigation: `identity/jwks.rs` clamps the cache TTL to 5 minutes–24 hours, refetches unknown `kid`s at most once a minute with single-flight, and keeps the last good keys for 6 hours during an outage, then fails closed. Empty key sets are failures.
 - Tests: `identity/tests.rs` `jwks_rotation_refetch_is_rate_limited_single_flight_and_survives_outages`; `identity/jwks.rs` `cache_control_is_parsed_and_bounded`, `expiry_unknown_kid_rate_limit_and_grace`, `empty_key_sets_are_failures_not_replacements`, `concurrent_refreshes_are_single_flight`.
-- Residual: none for the transport. The OIDC HTTP client (`IdentityState::build`) disables redirects, ambient proxies and implicit retries and checks HTTPS on every request (`OidcHttp::send`), like the provider clients (#144; test `apps/gateway/tests/oidc_proxy.rs`).
+- Residual: none for the transport. The OIDC HTTP client (`IdentityState::build`) disables redirects, ambient proxies and implicit retries (reqwest's retry policy; see [Lost connections](operations.md#lost-connections-483)) and checks HTTPS on every request (`OidcHttp::send`), like the provider clients (#144; test `apps/gateway/tests/oidc_proxy.rs`).
 - Follow-up: none (fixed in #144).
 
 **OIDC-6. Login and callback abuse.** D · Asset: database, sign-in availability · Attacker: unauthenticated internet client.
@@ -425,7 +425,7 @@ Not covered end to end: Bedrock (its SigV4 SDK transport has no loopback test co
 - Follow-up: #169 (network policy). The realtime WebSocket and SMTP use the same policy since #168.
 
 **EGR-4. Redirects, proxies or retries leak credentials or duplicate work.** I, T · Asset: provider credentials, spend · Attacker: malicious upstream.
-- Mitigation: the OpenAI, Anthropic, OpenRouter, local, Bedrock, S3 and OpenRouter-catalog clients set `redirect::Policy::none()`, `.no_proxy()` and `.retry(never())` (`providers/openai.rs` `OpenAiAdapter::new`, `providers/anthropic.rs`, `providers/openrouter.rs`, `providers/local/endpoints.rs`, `providers/bedrock/transport.rs` `client`, `filestore/s3/transport.rs` `client`, `management/governance/suggestion.rs`).
+- Mitigation: the OpenAI, Anthropic, OpenRouter, local, Bedrock, S3 and OpenRouter-catalog clients set `redirect::Policy::none()`, `.no_proxy()` and `.retry(never())` (`providers/openai.rs` `OpenAiAdapter::new`, `providers/anthropic.rs`, `providers/openrouter.rs`, `providers/local/endpoints.rs`, `providers/bedrock/transport.rs` `client`, `filestore/s3/transport.rs` `client`, `management/governance/suggestion.rs`). `.retry(never())` is reqwest's own retry policy: the gateway and reqwest resend nothing, but the connection pool beneath reqwest (hyper-util) may re-dispatch a request it never wrote to a new connection, and it is never written twice (see [Lost connections](operations.md#lost-connections-483)).
 - Tests: `providers/openai/tests.rs` `redirects_are_not_followed_or_given_credentials`; `providers/local/tests.rs` `redirects_and_eof_do_not_succeed_or_follow_credentials`; `providers/openrouter/tests.rs` `redirects_are_refused_and_never_followed`; `filestore/s3/tests.rs` `one_attempt_no_redirects_and_safe_errors`; `management/governance/suggestion.rs` `fetch_is_capped_unredirected_bounded_and_cached`.
 - Residual: none known; the OIDC client now matches the provider clients (#144).
 - Follow-up: none (fixed in #144).

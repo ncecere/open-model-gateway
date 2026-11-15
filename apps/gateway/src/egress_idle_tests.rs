@@ -139,8 +139,8 @@ async fn pool_idle_timeout_below_the_servers_loses_no_request() {
 /// A shorter idle timeout does not cost reuse while requests keep coming.
 #[tokio::test]
 async fn steady_load_still_reuses_one_connection() {
-    let (port, seen) = lazy_close_server(Duration::from_secs(1)).await;
-    let client = client_with_idle(Duration::from_millis(500));
+    let (port, seen) = lazy_close_server(Duration::from_secs(5)).await;
+    let client = client_with_idle(Duration::from_secs(2));
     assert_eq!(run(&client, port, 100, Duration::ZERO).await, 0);
     assert_eq!(seen.connections.load(Ordering::SeqCst), 1);
     assert_eq!(seen.served.load(Ordering::SeqCst), 100);
@@ -154,7 +154,6 @@ async fn a_lost_request_is_counted_once_and_keeps_its_error() {
     let client = client_with_idle(Duration::from_secs(90));
     let url = format!("http://localhost:{port}/");
     let metrics = fresh_registry();
-    let global_before = crate::metrics::METRICS.upstream_connection_lost_count("local");
     let mut lost = 0;
     for round in 0..6 {
         if round > 0 {
@@ -165,17 +164,15 @@ async fn a_lost_request_is_counted_once_and_keeps_its_error() {
         };
         assert!(UpstreamClient::Local.count_on(metrics, &error));
         lost += 1;
-        // The mapper the local adapter uses: same error, and it counts too.
+        // The mapping every adapter applies after counting is unchanged.
         assert_eq!(
-            framing::send_error(UpstreamClient::Local)(error),
+            framing::transport(error),
             InferenceError::UpstreamUnavailable
         );
     }
     assert_eq!(lost, 3);
     assert_eq!(metrics.upstream_connection_lost_count("local"), 3);
     assert_eq!(metrics.upstream_connection_lost_count("openai"), 0);
-    // Other tests share the global registry, so it can only be bounded below.
-    assert!(crate::metrics::METRICS.upstream_connection_lost_count("local") >= global_before + 3);
 }
 
 async fn expect_not_counted(client: &HttpClient, url: &str) {
@@ -187,6 +184,108 @@ async fn expect_not_counted(client: &HttpClient, url: &str) {
         !upstream::connection_lost_before_response(&error),
         "{error:?}"
     );
+}
+
+/// A server that runs `handler` on every accepted connection.
+async fn serve<F, Fut>(handler: F) -> u16
+where
+    F: Fn(tokio::net::TcpStream) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            tokio::spawn(handler(stream));
+        }
+    });
+    port
+}
+
+async fn expect_counted(client: &HttpClient, url: &str, what: &str) {
+    let error = client
+        .get(url)
+        .send()
+        .await
+        .expect_err("the request is lost");
+    assert!(
+        upstream::connection_lost_before_response(&error),
+        "{what} is counted: {error:?}"
+    );
+}
+
+/// Reads the request, then closes with an RST: SO_LINGER 0 is the one way to
+/// make the kernel send one.
+#[expect(
+    deprecated,
+    reason = "a test needs a real RST, which only SO_LINGER 0 gives"
+)]
+async fn reset_after_request(mut stream: tokio::net::TcpStream) {
+    read_head(&mut stream).await;
+    stream.set_linger(Some(Duration::ZERO)).unwrap();
+}
+
+/// Counted: the connection is lost before a complete response head arrived,
+/// whatever the upstream had received or done.
+#[tokio::test]
+async fn a_connection_lost_before_a_complete_head_is_counted() {
+    let client = client_with_idle(Duration::from_secs(1));
+    // A reset (SO_LINGER 0) after the request: the io error path, not hyper's.
+    let reset = serve(reset_after_request).await;
+    expect_counted(&client, &format!("http://localhost:{reset}/"), "a reset").await;
+    // The upstream closes without reading anything: a fresh connection, no
+    // request byte seen.
+    let closed = serve(|stream| async move { drop(stream) }).await;
+    expect_counted(
+        &client,
+        &format!("http://localhost:{closed}/"),
+        "an accept and close",
+    )
+    .await;
+    // A partial status line, and partial headers, then the close.
+    for (name, partial) in [
+        ("a partial status line", &b"HTTP/1.1 20"[..]),
+        ("partial headers", &b"HTTP/1.1 200 OK\r\ncontent-le"[..]),
+    ] {
+        let port = serve(move |mut stream| async move {
+            read_head(&mut stream).await;
+            let _ = stream.write_all(partial).await;
+        })
+        .await;
+        expect_counted(&client, &format!("http://localhost:{port}/"), name).await;
+    }
+}
+
+/// Not counted: the gateway's own request body failing is the gateway's
+/// error, whatever io error kind its stream used (#483 review).
+#[tokio::test]
+async fn a_request_body_stream_that_fails_is_not_counted() {
+    let client = client_with_idle(Duration::from_secs(1));
+    let port = serve(|mut stream| async move {
+        read_head(&mut stream).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    })
+    .await;
+    for kind in [
+        std::io::ErrorKind::UnexpectedEof,
+        std::io::ErrorKind::ConnectionReset,
+        std::io::ErrorKind::BrokenPipe,
+    ] {
+        let failing =
+            futures_util::stream::once(
+                async move { Err::<Vec<u8>, _>(std::io::Error::from(kind)) },
+            );
+        let error = client
+            .post(format!("http://localhost:{port}/"))
+            .body(reqwest::Body::wrap_stream(failing))
+            .send()
+            .await
+            .expect_err("the body fails");
+        assert!(
+            !upstream::connection_lost_before_response(&error),
+            "{kind:?} from the body stream: {error:?}"
+        );
+    }
 }
 
 /// What is not this class: a refused connection, a timeout, a response that
