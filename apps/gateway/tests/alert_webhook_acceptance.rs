@@ -1,6 +1,9 @@
 //! Real serve process + loopback receiver, no provider or production access.
 #![cfg(feature = "integration-tests")]
-#![allow(clippy::disallowed_methods)]
+// Test clients reach the loopback receiver and gateway directly, as raw
+// reqwest clients (#509, #569: production code uses `egress::client_builder`
+// and holds `egress::HttpClient`).
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 use axum::{
     Router,
     body::Bytes,

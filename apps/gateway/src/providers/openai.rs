@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use reqwest::{Client, StatusCode, header};
+use reqwest::{StatusCode, header};
 use serde_json::{Map, Value, json};
 
 use super::{ProviderAdapter, secrets::SecretResolver};
@@ -22,7 +22,7 @@ const MAX_TOOL_CALLS: usize = 128;
 type Result<T> = std::result::Result<T, InferenceError>;
 
 pub struct OpenAiAdapter {
-    pub(super) client: Client,
+    pub(super) client: crate::egress::HttpClient,
     pub(super) resolver: Arc<dyn SecretResolver>,
     // Only the private test constructor can replace the production origin.
     pub(super) base: String,

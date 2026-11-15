@@ -22,10 +22,7 @@ use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use reqwest::{
-    Client,
-    header::{self, HeaderValue},
-};
+use reqwest::header::{self, HeaderValue};
 use serde::Deserialize;
 use serde_json::{Value, json, value::RawValue};
 
@@ -169,7 +166,7 @@ impl OpenRouterConfig {
 }
 
 pub struct OpenRouterAdapter {
-    client: Client,
+    client: crate::egress::HttpClient,
     resolver: Arc<dyn SecretResolver>,
     // Only the private test constructor can replace the production origin.
     base: String,
@@ -207,12 +204,14 @@ impl OpenRouterAdapter {
         assert_eq!(url.scheme(), "http");
         assert_eq!(url.host_str(), Some("127.0.0.1"));
         let mut adapter = Self::new(resolver, config).unwrap();
-        adapter.client = Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .no_proxy()
-            .build()
-            .unwrap();
+        adapter.client = crate::egress::HttpClient::from_test_client(
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .retry(reqwest::retry::never())
+                .no_proxy()
+                .build()
+                .unwrap(),
+        );
         adapter.base = base;
         adapter
     }

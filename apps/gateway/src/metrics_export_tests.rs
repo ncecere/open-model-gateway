@@ -825,7 +825,7 @@ async fn runtime_entropy_failure_child() {
     let config = crate::config::MetricsExportConfig {
         endpoint: Some((
             "http://127.0.0.1:1/v1/metrics".parse().unwrap(),
-            reqwest::Client::new(),
+            crate::egress::HttpClient::from_test_client(reqwest::Client::new()),
         )),
         headers: Default::default(),
         interval: Duration::from_secs(10),
@@ -932,7 +932,9 @@ async fn slow_push_skips_overdue_ticks_without_catch_up_bursts() {
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let exporter = Exporter {
         url: url.parse().unwrap(),
-        client: reqwest::Client::builder().no_proxy().build().unwrap(),
+        client: crate::egress::HttpClient::from_test_client(
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+        ),
         headers: Default::default(),
         encoder: encoder(),
         traffic: false,

@@ -7,7 +7,9 @@ use serde_json::Value;
 fn exporter(url: &str) -> Exporter {
     Exporter {
         url: url.parse().unwrap(),
-        client: reqwest::Client::builder().no_proxy().build().unwrap(),
+        client: crate::egress::HttpClient::from_test_client(
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+        ),
         headers: Default::default(),
         environment: crate::config::Environment::Development,
         instance: uuid::Uuid::nil(),
@@ -692,7 +694,10 @@ async fn shutdown_closes_admission_before_draining_and_sends_at_most_one_final_b
     let _guard = test_lock();
     let (url, seen, task) = collector(axum::http::StatusCode::OK, "{}", Duration::ZERO).await;
     let config = crate::config::LogsExportConfig {
-        endpoint: Some((url.parse().unwrap(), reqwest::Client::new())),
+        endpoint: Some((
+            url.parse().unwrap(),
+            crate::egress::HttpClient::from_test_client(reqwest::Client::new()),
+        )),
         headers: Default::default(),
         min_severity: Severity::Warn,
     };
