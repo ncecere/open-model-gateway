@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { readLocalFromRepo, root, stepsOf } from "./lib.mjs";
-import { CONFIG_FILE, FETCH, copy, fakes, gitEnv, installStep, jobOf, pinOf, readConfig, scanStep } from "./secret-scan-lib.mjs";
+import { CONFIG_FILE, FETCH, commitAll, copy, fakes, git, gitEnv, installStep, jobOf, pinOf, readConfig, scanStep } from "./secret-scan-lib.mjs";
 
 // ---- the CI job ----
 
@@ -516,33 +516,50 @@ test("the made-up credential generators produce the shapes the rules look for", 
   assert.match(fakes.fileKey(), /^GATEWAY_FILE_KEYS=k\d{4}:[A-Za-z0-9]{43}=$/);
 });
 
-// git sets GIT_DIR and GIT_INDEX_FILE when it runs a hook. A `git init` that inherits them
-// re-initialises that repository (from a linked worktree it is marked bare) and never
-// creates the scratch one, so every git call of the suites under tests/ drops the
-// inherited GIT_* variables. Found when this suite, run that way, did it to a real clone.
-test("no test file runs git with the inherited GIT_* environment", () => {
-  const gitDir = mkdtempSync(join(tmpdir(), "inherited-git-"));
+// git sets GIT_DIR and GIT_INDEX_FILE when it runs a hook, and neither `cwd` nor `git -C`
+// overrides them: a `git init` that inherits them re-initialises that repository (from a
+// linked worktree it is marked bare) and never creates the scratch one. Found when this
+// suite, run that way, did it to a real clone. So the suites' git calls drop every inherited
+// GIT_* variable (gitEnv here, the same filter in the other fixtures).
+test("the git fixtures act on their own repository when GIT_DIR is inherited", t => {
+  const sentinel = mkdtempSync(join(tmpdir(), "inherited-git-"));
+  const scratch = mkdtempSync(join(tmpdir(), "inherited-git-"));
+  t.after(() => { rmSync(sentinel, { recursive: true, force: true }); rmSync(scratch, { recursive: true, force: true }); });
+  git(sentinel, "init", "--quiet");
+  const state = () => `${git(sentinel, "config", "--local", "--list")}\n${git(sentinel, "for-each-ref")}\n${git(sentinel, "status", "--porcelain")}`;
+  const before = state();
+  const inherited = { GIT_DIR: process.env.GIT_DIR, GIT_INDEX_FILE: process.env.GIT_INDEX_FILE };
+  // As from a hook of a linked worktree: a git directory that does not end in /.git.
+  process.env.GIT_DIR = join(sentinel, ".git", "worktrees", "none");
+  process.env.GIT_INDEX_FILE = join(sentinel, ".git", "index");
   try {
-    assert.equal(spawnSync("git", ["init", "--quiet", gitDir], { encoding: "utf8", env: gitEnv() }).status, 0);
-    const config = () => spawnSync("git", ["config", "--file", join(gitDir, ".git", "config"), "--get", "core.bare"], { encoding: "utf8", env: gitEnv() }).stdout.trim();
-    assert.equal(config(), "false");
-    const inherited = { ...process.env, GIT_DIR: join(gitDir, ".git", "worktrees", "none") };
-    assert.equal(Object.keys(gitEnv()).some(key => key === "GIT_DIR" || key === "GIT_INDEX_FILE" || key === "GIT_WORK_TREE"), false);
-    const before = process.env.GIT_DIR;
-    process.env.GIT_DIR = inherited.GIT_DIR;
-    try {
-      assert.equal(gitEnv().GIT_DIR, undefined, "gitEnv drops an inherited GIT_DIR");
-    } finally {
-      if (before === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = before;
-    }
-    assert.equal(config(), "false");
+    assert.deepEqual(Object.keys(gitEnv()).filter(key => ["GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_COMMON_DIR"].includes(key)), []);
+    git(scratch, "init", "--quiet");
+    writeFileSync(join(scratch, "a.txt"), "a\n");
+    commitAll(scratch, "fixture");
   } finally {
-    rmSync(gitDir, { recursive: true, force: true });
+    for (const [key, value] of Object.entries(inherited)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
   }
-  // Every direct git call in the test files that create or read repositories names its environment.
-  for (const file of ["tests/supply-chain/secret-scan.test.mjs", "tests/supply-chain/secret-scan-lib.mjs", "tests/supply-chain/secret-scan-run.test.mjs", "tests/vendored-advisories.test.mjs", "tests/bash-preflight.test.mjs"]) {
-    const lines = readLocalFromRepo(file).split("\n").filter(line => /spawnSync\("git",/.test(line) && !/env: gitEnv\(\)|env: \{ \.\.\.gitEnv\(\)/.test(line));
-    assert.deepEqual(lines, [], `${file} runs git with the inherited environment`);
+  assert.ok(existsSync(join(scratch, ".git")), "the scratch repository was created");
+  assert.equal(state(), before, "the inherited repository was not touched");
+});
+
+// Every direct git call in a test file names its environment. The whole call is read, so
+// one spread over several lines counts, and so does a new test file.
+test("no test file runs git with the inherited GIT_* environment", () => {
+  const files = spawnSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "tests"], { cwd: root, encoding: "utf8", env: gitEnv() });
+  assert.equal(files.status, 0, files.stderr);
+  const READ_ONLY = { "tests/supply-chain/policy.mjs": 2, "tests/conflict-markers.test.mjs": 1 }; // `git ls-files` of the checkout, nothing written
+  const bare = {};
+  for (const file of files.stdout.split("\0").filter(name => /\.(?:[cm]?[jt]sx?)$/.test(name) && existsSync(join(root, name)))) {
+    const text = readLocalFromRepo(file);
+    for (const match of text.matchAll(/\b(?:spawnSync|execFileSync|spawn|execFile)\(\s*["']git["']/g)) {
+      let depth = 0, end = match.index;
+      for (; end < text.length; end++) { if (text[end] === "(") depth++; else if (text[end] === ")" && --depth === 0) break; }
+      if (!/\benv:\s*(?:gitEnv\(\)|\{\s*\.\.\.gitEnv\(\))/.test(text.slice(match.index, end))) bare[file] = (bare[file] ?? 0) + 1;
+    }
   }
+  assert.deepEqual(bare, READ_ONLY, "git calls without env: gitEnv() (listed read-only calls excepted)");
   assert.match(readLocalFromRepo("tests/vendored-advisories.test.mjs"), /filter\(\(\[key\]\) => !key\.startsWith\("GIT_"\)\)/, "the vendored-advisories fixture drops inherited GIT_* variables");
+  assert.match(readLocalFromRepo("tests/spark-env.test.py"), /for _name in \[name for name in os\.environ if name\.startswith\("GIT_"\)\]:\n    del os\.environ\[_name\]/, "the spark-env tests drop inherited GIT_* variables");
 });
