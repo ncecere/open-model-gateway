@@ -9,7 +9,7 @@
 //! `expires_at` or the purpose group's current retention, whichever is first).
 //!
 //! Storage quota (0020): a workspace file's upload reserves bytes as it streams
-//! (see [`reserve`]); the reservation counts against the workspace's stacked
+//! (see [`quota::reserve`]); the reservation counts against the workspace's stacked
 //! `storage_bytes` limit until the file commits (then its size counts) or is
 //! abandoned. Concurrent uploads therefore never jointly exceed the quota.
 use std::sync::{
@@ -29,6 +29,9 @@ use crate::{
     store::Store,
     visibility::{Viewer, visible_sql},
 };
+
+mod quota;
+use quota::Meter;
 
 /// Client-facing file id prefix (`file-<32 lowercase hex>`).
 pub const FILE_ID_PREFIX: &str = "file-";
@@ -433,117 +436,6 @@ impl Row {
     }
 }
 
-/// Grows the reservation of pending upload `id` in workspace `ws` to cover
-/// `needed` bytes (reserving ahead by [`RESERVE_STEP`], bounded by the remaining
-/// quota and `cap`). Returns the new reservation.
-///
-/// Locking: the catalog advisory lock (shared), then a per-workspace
-/// transaction advisory lock, the same global order as admission (catalog
-/// first). The transaction does no I/O besides these statements, so concurrent
-/// uploads to one workspace serialize only for a few milliseconds per step and
-/// can never jointly exceed the quota.
-pub(crate) async fn reserve(
-    db: &Store,
-    ws: Uuid,
-    id: Uuid,
-    needed: u64,
-    cap: Option<u64>,
-    mode: QuotaMode,
-) -> Result<u64, FileError> {
-    let mut tx = crate::db::begin(&db.pool).await?;
-    sqlx::query("SELECT pg_advisory_xact_lock_shared(72419502)")
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('storage_quota:'||$1::text,0))")
-        .bind(ws)
-        .execute(&mut *tx)
-        .await?;
-    let quota: Option<Option<i64>> = sqlx::query_scalar(QUOTA_SQL)
-        .bind(ws)
-        .fetch_optional(&mut *tx)
-        .await?;
-    let quota = quota.ok_or(FileError::Invalid)?;
-    let used: i64 = sqlx::query_scalar(&used_sql())
-        .bind(ws)
-        .bind(id)
-        .fetch_one(&mut *tx)
-        .await?;
-    let used = u64::try_from(used).unwrap_or_default();
-    let mut ahead = needed.saturating_add(RESERVE_STEP);
-    if let Some(cap) = cap {
-        ahead = ahead.min(cap.max(needed));
-    }
-    let reserved = match (mode, quota.and_then(|q| u64::try_from(q).ok())) {
-        (QuotaMode::Enforce, Some(quota)) => {
-            let available = quota.saturating_sub(used);
-            if needed > available {
-                return Err(FileError::QuotaExceeded);
-            }
-            ahead.min(available)
-        }
-        _ => ahead,
-    };
-    let updated = sqlx::query("UPDATE stored_files SET reserved_bytes=greatest(reserved_bytes,$2) WHERE id=$1 AND workspace_id=$3 AND committed_at IS NULL AND deleted_at IS NULL")
-        .bind(id)
-        .bind(i64::try_from(reserved).map_err(|_| FileError::TooLarge)?)
-        .bind(ws)
-        .execute(&mut *tx)
-        .await?;
-    if updated.rows_affected() != 1 {
-        return Err(FileError::Database);
-    }
-    tx.commit().await?;
-    Ok(reserved)
-}
-
-/// Quota metering of one workspace upload.
-struct Meter {
-    db: Store,
-    ws: Uuid,
-    id: Uuid,
-    cap: Option<u64>,
-    mode: QuotaMode,
-    /// Set when the quota refused the upload.
-    exceeded: Arc<AtomicBool>,
-    /// Set when the reservation could not be recorded.
-    failed: Arc<AtomicBool>,
-}
-
-impl Meter {
-    /// Grows the reservation before each chunk that would exceed it. On a
-    /// refusal the stream fails (the store then discards the partial object).
-    fn wrap(self, body: ByteStream) -> ByteStream {
-        async_stream::stream! {
-            let mut body = body;
-            let (mut total, mut reserved) = (0u64, 0u64);
-            while let Some(item) = body.next().await {
-                match item {
-                    Ok(chunk) => {
-                        total = total.saturating_add(chunk.len() as u64);
-                        if total > reserved {
-                            match reserve(&self.db, self.ws, self.id, total, self.cap, self.mode).await {
-                                Ok(n) => reserved = n,
-                                Err(e) => {
-                                    let flag = if e == FileError::QuotaExceeded { &self.exceeded } else { &self.failed };
-                                    flag.store(true, Ordering::SeqCst);
-                                    yield Err(FileStoreError::Source);
-                                    return;
-                                }
-                            }
-                        }
-                        yield Ok(chunk);
-                    }
-                    Err(e) => {
-                        yield Err(e);
-                        return;
-                    }
-                }
-            }
-        }
-        .boxed()
-    }
-}
-
 /// Cleans up an upload whose future was dropped (client disconnect, deadline):
 /// deletes any object (idempotent) and marks the pending row deleted, which
 /// also releases its quota reservation.
@@ -602,6 +494,26 @@ pub struct FileStorage {
     runtime: FileStoreRuntime,
 }
 
+/// The object key of a new file; refuses an API key without a workspace and
+/// an expiry that is not in the future.
+fn staged_key(new: &NewFile) -> Result<ObjectKey, FileError> {
+    let scope = new
+        .workspace_id
+        .map_or(Scope::Installation, Scope::Workspace);
+    let key = ObjectKey::new(new.purpose, scope).map_err(|_| FileError::Invalid)?;
+    if new.created_by_api_key_id.is_some() && new.workspace_id.is_none() {
+        return Err(FileError::Invalid);
+    }
+    if new.expires_at.is_some_and(|at| at <= Utc::now())
+        || new
+            .expires_after
+            .is_some_and(|d| d <= chrono::TimeDelta::zero())
+    {
+        return Err(FileError::Invalid);
+    }
+    Ok(key)
+}
+
 impl FileStorage {
     pub fn new(db: Store, runtime: FileStoreRuntime) -> Self {
         Self { db, runtime }
@@ -636,7 +548,6 @@ impl FileStorage {
     /// first two steps of the write path). The purpose's Settings toggle is
     /// **not** checked: callers check [`Self::accepts`] before [`Self::commit`].
     /// Dropping the result unfinished deletes the object and the reservation.
-    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     pub(crate) async fn stage(
         &self,
         new: NewFile,
@@ -649,21 +560,7 @@ impl FileStorage {
             .ok_or(FileError::Disabled)?
             .to_owned();
         let purpose = new.purpose;
-        let scope = new
-            .workspace_id
-            .map_or(Scope::Installation, Scope::Workspace);
-        let key = ObjectKey::new(purpose, scope).map_err(|_| FileError::Invalid)?;
-        if new.created_by_api_key_id.is_some() && new.workspace_id.is_none() {
-            return Err(FileError::Invalid);
-        }
-        if new.expires_at.is_some_and(|at| at <= Utc::now())
-            || new
-                .expires_after
-                .is_some_and(|d| d <= chrono::TimeDelta::zero())
-        {
-            return Err(FileError::Invalid);
-        }
-        let expires_after_ms = new.expires_after.map(|d| d.num_milliseconds());
+        let key = staged_key(&new)?;
         // Staged uploads whose purpose is still unknown carry no API purpose yet.
         let api_purpose = match new.api_purpose.as_deref() {
             Some("") => None,
@@ -671,50 +568,22 @@ impl FileStorage {
         };
         let filename = new.filename.as_deref().and_then(sanitize_filename);
         let content_type = new.content_type.as_deref().and_then(normalize_content_type);
-        sqlx::query("INSERT INTO stored_files(id,object_key,purpose,workspace_id,created_by_user_id,created_by_api_key_id,filename,content_type,backend,encryption_key_id,expires_at,api_purpose) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,least($11::timestamptz,now()+make_interval(secs => $13::bigint/1000.0)),$12)")
-            .bind(key.id())
-            .bind(key.as_str())
-            .bind(purpose.as_str())
-            .bind(new.workspace_id)
-            .bind(new.created_by_user_id)
-            .bind(new.created_by_api_key_id)
-            .bind(&filename)
-            .bind(&content_type)
-            .bind(self.runtime.backend_name())
-            .bind(&key_id)
-            .bind(new.expires_at)
-            .bind(api_purpose)
-            .bind(expires_after_ms)
-            .execute(&self.db.pool)
-            .await
-            .map_err(|e| {
-                if e.as_database_error().is_some_and(|d| d.code().as_deref() == Some("23503")) {
-                    FileError::Invalid
-                } else {
-                    FileError::Database
-                }
-            })?;
+        self.insert_pending(
+            &new,
+            &key,
+            &key_id,
+            api_purpose,
+            filename.as_deref(),
+            content_type.as_deref(),
+        )
+        .await?;
         let mut guard = PendingUpload {
             db: self.db.clone(),
             store: store.clone(),
             key: key.clone(),
             armed: true,
         };
-        let exceeded = Arc::new(AtomicBool::new(false));
-        let failed = Arc::new(AtomicBool::new(false));
-        let body = match new.workspace_id {
-            Some(ws) => Meter {
-                db: self.db.clone(),
-                ws,
-                id: key.id(),
-                cap: new.max_bytes,
-                mode: new.quota,
-                exceeded: exceeded.clone(),
-                failed: failed.clone(),
-            }
-            .wrap(body),
-            None => body,
-        };
+        let (body, exceeded, failed) = self.metered(&new, &key, body);
         let put = store
             .put(
                 &key,
@@ -748,6 +617,70 @@ impl FileStorage {
                 })
             }
         }
+    }
+
+    /// The pending row of a new file, before its object is written. A scope
+    /// the database does not know (a foreign-key violation) is `Invalid`.
+    async fn insert_pending(
+        &self,
+        new: &NewFile,
+        key: &ObjectKey,
+        key_id: &str,
+        api_purpose: Option<&'static str>,
+        filename: Option<&str>,
+        content_type: Option<&str>,
+    ) -> Result<(), FileError> {
+        let expires_after_ms = new.expires_after.map(|d| d.num_milliseconds());
+        sqlx::query("INSERT INTO stored_files(id,object_key,purpose,workspace_id,created_by_user_id,created_by_api_key_id,filename,content_type,backend,encryption_key_id,expires_at,api_purpose) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,least($11::timestamptz,now()+make_interval(secs => $13::bigint/1000.0)),$12)")
+            .bind(key.id())
+            .bind(key.as_str())
+            .bind(new.purpose.as_str())
+            .bind(new.workspace_id)
+            .bind(new.created_by_user_id)
+            .bind(new.created_by_api_key_id)
+            .bind(filename)
+            .bind(content_type)
+            .bind(self.runtime.backend_name())
+            .bind(key_id)
+            .bind(new.expires_at)
+            .bind(api_purpose)
+            .bind(expires_after_ms)
+            .execute(&self.db.pool)
+            .await
+            .map_err(|e| {
+                if e.as_database_error().is_some_and(|d| d.code().as_deref() == Some("23503")) {
+                    FileError::Invalid
+                } else {
+                    FileError::Database
+                }
+            })?;
+        Ok(())
+    }
+
+    /// Wraps the body in the workspace quota meter; the flags say why a failed
+    /// upload failed (quota refused, or the reservation could not be recorded).
+    fn metered(
+        &self,
+        new: &NewFile,
+        key: &ObjectKey,
+        body: ByteStream,
+    ) -> (ByteStream, Arc<AtomicBool>, Arc<AtomicBool>) {
+        let exceeded = Arc::new(AtomicBool::new(false));
+        let failed = Arc::new(AtomicBool::new(false));
+        let body = match new.workspace_id {
+            Some(ws) => Meter {
+                db: self.db.clone(),
+                ws,
+                id: key.id(),
+                cap: new.max_bytes,
+                mode: new.quota,
+                exceeded: exceeded.clone(),
+                failed: failed.clone(),
+            }
+            .wrap(body),
+            None => body,
+        };
+        (body, exceeded, failed)
     }
 
     /// Records a staged file's size and SHA-256 once (`committed_at`). A staged
