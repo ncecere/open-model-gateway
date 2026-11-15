@@ -178,52 +178,53 @@ pub(super) async fn items(
     Ok(Json(json!({"data":data})))
 }
 
-/// `POST /api/v1/platform/access-reviews`: starts a campaign and snapshots
-/// its items in one statement.
-#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
-pub(super) async fn create(
-    State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
-    Json(b): Json<NewCampaign>,
-) -> Result<Json<Value>, ManagementError> {
-    let due = b.due_in_days.unwrap_or(DEFAULT_DUE_DAYS);
-    let subjects: std::collections::BTreeSet<&str> =
-        b.subjects.iter().map(String::as_str).collect();
-    let filter: std::collections::BTreeSet<Uuid> = b.workspace_ids.iter().copied().collect();
-    if !valid_name(&b.name)
-        || subjects.is_empty()
-        || subjects.len() != b.subjects.len()
-        || !subjects.iter().all(|s| {
+/// The campaign body is within bounds: a name, known distinct subjects, a due
+/// date within 90 days and at most 50 distinct workspaces (only for subjects
+/// that have workspaces).
+fn campaign_body_valid(
+    b: &NewCampaign,
+    due: i32,
+    subjects: &std::collections::BTreeSet<&str>,
+    filter: &std::collections::BTreeSet<Uuid>,
+) -> bool {
+    valid_name(&b.name)
+        && !subjects.is_empty()
+        && subjects.len() == b.subjects.len()
+        && subjects.iter().all(|s| {
             matches!(
                 *s,
                 "workspace_memberships" | "platform_roles" | "workspace_keys"
             )
         })
-        || !(1..=90).contains(&due)
-        || filter.len() != b.workspace_ids.len()
-        || b.workspace_ids.len() > MAX_WORKSPACES
-        || (!filter.is_empty()
-            && !subjects.contains("workspace_memberships")
-            && !subjects.contains("workspace_keys"))
-    {
+        && (1..=90).contains(&due)
+        && filter.len() == b.workspace_ids.len()
+        && b.workspace_ids.len() <= MAX_WORKSPACES
+        && (filter.is_empty()
+            || subjects.contains("workspace_memberships")
+            || subjects.contains("workspace_keys"))
+}
+/// Every workspace in a filter is an existing Team or Project.
+async fn check_workspace_filter(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace_ids: &[Uuid],
+    distinct: usize,
+) -> Result<(), ManagementError> {
+    let shared: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM workspaces WHERE id=ANY($1) AND kind IN ('team','project')",
+    )
+    .bind(workspace_ids)
+    .fetch_one(&mut **tx)
+    .await?;
+    if shared as usize != distinct {
         return Err(invalid().into());
     }
-    let mut tx = resources::installation_tx(&s).await?;
-    resources::platform_write(&mut tx, &u).await?;
-    if !filter.is_empty() {
-        let shared: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM workspaces WHERE id=ANY($1) AND kind IN ('team','project')",
-        )
-        .bind(&b.workspace_ids)
-        .fetch_one(&mut *tx)
-        .await?;
-        if shared as usize != filter.len() {
-            return Err(invalid().into());
-        }
-    }
+    Ok(())
+}
+/// At most 20 campaigns are open at once.
+async fn check_open_limit(tx: &mut Transaction<'_, Postgres>) -> Result<(), ManagementError> {
     let open: i64 =
         sqlx::query_scalar("SELECT count(*) FROM access_review_campaigns WHERE closed_at IS NULL")
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut **tx)
             .await?;
     if open >= MAX_OPEN {
         return Err(ManagementError::detailed(
@@ -233,28 +234,24 @@ pub(super) async fn create(
             json!({}),
         ));
     }
-    let id = Uuid::now_v7();
-    let subject_list: Vec<String> = subjects.iter().map(|s| (*s).to_owned()).collect();
-    sqlx::query("INSERT INTO access_review_campaigns(id,name,subjects,workspace_ids,created_by,due_at) VALUES($1,$2,$3,$4,$5,now()+make_interval(days=>$6))")
-        .bind(id)
-        .bind(&b.name)
-        .bind(&subject_list)
-        .bind(&b.workspace_ids)
-        .bind(u.user_id)
-        .bind(due)
-        .execute(&mut *tx)
-        .await?;
-    // One statement, so one snapshot of the grants. The guard copies each
-    // item's fields from its grant and rechecks the same rules.
-    // Keys: one live key per lineage (a rotation revokes the key it replaces).
+    Ok(())
+}
+/// Snapshots the campaign's items; returns how many were inserted (up to one
+/// past the maximum).
+async fn snapshot_items(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+    subjects: &std::collections::BTreeSet<&str>,
+    workspace_ids: &[Uuid],
+) -> Result<i64, ManagementError> {
     let inserted = sqlx::query("WITH m AS (SELECT 'workspace_membership' AS kind, g.id AS membership_grant_id, NULL::uuid AS platform_grant_id, NULL::uuid AS api_key_id FROM workspace_membership_grants g JOIN workspaces w ON w.id=g.workspace_id JOIN users u ON u.id=g.user_id WHERE $2 AND g.revoked_at IS NULL AND w.kind IN ('team','project') AND w.disabled_at IS NULL AND (cardinality($4::uuid[])=0 OR w.id=ANY($4)) AND u.disabled_at IS NULL AND u.cleaned_at IS NULL), p AS (SELECT 'platform_role', NULL::uuid, g.id, NULL::uuid FROM platform_role_grants g JOIN users u ON u.id=g.user_id WHERE $3 AND g.revoked_at IS NULL AND g.role IN ('admin','auditor') AND u.disabled_at IS NULL AND u.cleaned_at IS NULL), k AS (SELECT DISTINCT ON (k.workspace_id,k.governance_key_id) 'workspace_key', NULL::uuid, NULL::uuid, k.id FROM api_keys k JOIN workspaces w ON w.id=k.workspace_id LEFT JOIN users u ON u.id=k.issued_to_user_id WHERE $6 AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now()) AND w.kind IN ('team','project') AND w.disabled_at IS NULL AND (cardinality($4::uuid[])=0 OR w.id=ANY($4)) AND (k.issued_to_user_id IS NULL OR (u.disabled_at IS NULL AND u.cleaned_at IS NULL)) ORDER BY k.workspace_id,k.governance_key_id,k.created_at DESC,k.id), s AS (SELECT * FROM m UNION ALL SELECT * FROM p UNION ALL SELECT * FROM k LIMIT $5) INSERT INTO access_review_items(id,campaign_id,subject_kind,membership_grant_id,platform_grant_id,api_key_id) SELECT gen_random_uuid(),$1,kind,membership_grant_id,platform_grant_id,api_key_id FROM s")
         .bind(id)
         .bind(subjects.contains("workspace_memberships"))
         .bind(subjects.contains("platform_roles"))
-        .bind(&b.workspace_ids)
+        .bind(workspace_ids)
         .bind(MAX_ITEMS + 1)
         .bind(subjects.contains("workspace_keys"))
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await
         .map_err(|e| {
             // The guard rechecks each grant in its own snapshot: a grant
@@ -272,6 +269,40 @@ pub(super) async fn create(
             }
         })?
         .rows_affected() as i64;
+    Ok(inserted)
+}
+/// `POST /api/v1/platform/access-reviews`: starts a campaign and snapshots
+/// its items in one statement.
+pub(super) async fn create(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    Json(b): Json<NewCampaign>,
+) -> Result<Json<Value>, ManagementError> {
+    let due = b.due_in_days.unwrap_or(DEFAULT_DUE_DAYS);
+    let subjects: std::collections::BTreeSet<&str> =
+        b.subjects.iter().map(String::as_str).collect();
+    let filter: std::collections::BTreeSet<Uuid> = b.workspace_ids.iter().copied().collect();
+    if !campaign_body_valid(&b, due, &subjects, &filter) {
+        return Err(invalid().into());
+    }
+    let mut tx = resources::installation_tx(&s).await?;
+    resources::platform_write(&mut tx, &u).await?;
+    if !filter.is_empty() {
+        check_workspace_filter(&mut tx, &b.workspace_ids, filter.len()).await?;
+    }
+    check_open_limit(&mut tx).await?;
+    let id = Uuid::now_v7();
+    let subject_list: Vec<String> = subjects.iter().map(|s| (*s).to_owned()).collect();
+    sqlx::query("INSERT INTO access_review_campaigns(id,name,subjects,workspace_ids,created_by,due_at) VALUES($1,$2,$3,$4,$5,now()+make_interval(days=>$6))")
+        .bind(id)
+        .bind(&b.name)
+        .bind(&subject_list)
+        .bind(&b.workspace_ids)
+        .bind(u.user_id)
+        .bind(due)
+        .execute(&mut *tx)
+        .await?;
+    let inserted = snapshot_items(&mut tx, id, &subjects, &b.workspace_ids).await?;
     if inserted > MAX_ITEMS {
         return Err(ManagementError::detailed(
             StatusCode::CONFLICT,
