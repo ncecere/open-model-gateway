@@ -176,9 +176,17 @@ pub fn upload_router(identity: IdentityState) -> Router<Store> {
             authenticate_management,
         ))
 }
-#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 fn routes() -> Router<Store> {
-    Router::new()
+    let router = feature_routes(Router::new());
+    let router = self_service_routes(router);
+    let router = member_routes(router);
+    let router = key_routes(router);
+    let router = platform_member_routes(router);
+    account_and_activity_routes(router)
+}
+/// The feature modules' own route sets.
+fn feature_routes(router: Router<Store>) -> Router<Store> {
+    router
         .merge(scheduled_reports::routes())
         .merge(access_requests::routes())
         .merge(workspace_templates::routes())
@@ -204,6 +212,10 @@ fn routes() -> Router<Store> {
         .merge(files::routes())
         .merge(batches::routes())
         .merge(batch_scheduling::routes())
+}
+/// The caller's own context, workspace access and catalog, and usage reads.
+fn self_service_routes(router: Router<Store>) -> Router<Store> {
+    router
         .route("/api/v1/me", get(me))
         .route("/api/v1/me/summary", get(me::summary))
         .route("/api/v1/me/keys", get(me::my_keys))
@@ -244,6 +256,10 @@ fn routes() -> Router<Store> {
             "/api/v1/platform/usage/explore",
             get(usage::platform_explore),
         )
+}
+/// Workspace members and invitations.
+fn member_routes(router: Router<Store>) -> Router<Store> {
+    router
         .route(
             "/api/v1/workspaces/{ws}/members",
             get(members::workspace_members).post(members::add_workspace_member),
@@ -261,6 +277,10 @@ fn routes() -> Router<Store> {
             axum::routing::delete(members::revoke_invite),
         )
         .route("/api/v1/invitations/accept", post(members::accept_invite))
+}
+/// Workspace key listing, issuance, detail and statistics.
+fn key_routes(router: Router<Store>) -> Router<Store> {
+    router
         .route(
             "/api/v1/workspaces/{ws}/keys",
             get(keys::keys).post(keys::create_key),
@@ -279,6 +299,10 @@ fn routes() -> Router<Store> {
             "/api/v1/workspaces/{ws}/keys/{key}/stats",
             get(keys::key_stats),
         )
+}
+/// Member candidates and the platform-side workspace member routes.
+fn platform_member_routes(router: Router<Store>) -> Router<Store> {
+    router
         .route(
             "/api/v1/workspaces/{ws}/member-candidates",
             get(members::member_candidates),
@@ -295,6 +319,11 @@ fn routes() -> Router<Store> {
             "/api/v1/platform/workspaces/{ws}/members/{user}",
             axum::routing::delete(members::platform_remove_member),
         )
+}
+/// Key rotation, service accounts, and the workspace executions, usage and
+/// audit reads.
+fn account_and_activity_routes(router: Router<Store>) -> Router<Store> {
+    router
         .route(
             "/api/v1/workspaces/{ws}/keys/{key}/rotate",
             post(keys::rotate_key),
