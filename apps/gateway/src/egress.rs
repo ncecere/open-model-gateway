@@ -699,6 +699,10 @@ mod source_scan_tests;
 mod client_tests;
 
 #[cfg(test)]
+#[path = "egress_idle_tests.rs"]
+mod idle_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
