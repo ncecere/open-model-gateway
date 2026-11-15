@@ -357,7 +357,7 @@ test("omg-url-credentials matches a long password in a URL and leaves placeholde
   for (const text of [
     "postgres://postgres:postgres@db:5432/gateway", "postgres://gateway:gateway@127.0.0.1:5432/gateway", "postgres://user:pass@host/db", "postgres://u:password@localhost/db",
     "postgres://u:${DB_PASSWORD_VALUE}@h/db", "postgres://u:$DB_PASSWORD_VALUE@h/db", "postgres://u:<your-password-here>@h/db", "postgres://u:*************@h/db", "https://example.com/path:with@at",
-    "postgres://u:{{ .Values.password }}@h/db", "postgres://u:%(password)s_long_name@h/db".replace("%", "$"),
+    "postgres://u:{{ .Values.password }}@h/db", "postgres://u:%(password)s_long_name@h/db".replaceAll("%", "$"),
   ]) assert.equal(re.test(text), false, text);
   assert.equal(rule("omg-url-credentials").entropy, 3);
   assert.equal(rule("omg-url-credentials").secretGroup, 1);
