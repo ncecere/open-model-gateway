@@ -46,10 +46,7 @@ fn meter_relevant(key: &str) -> String {
     )
 }
 /// Attempts whose workload can produce each meter (unless the pinned v3
-/// price marks it not applicable), and those among them where the meter
-/// was not observed. A settled failure (a free pre-processing rejection)
-/// used nothing. Decimal strings; the meter total is a lower bound
-/// whenever its unknown count is nonzero.
+/// price marks it not applicable). Decimal strings.
 pub(super) fn meter_relevant_counts_sql() -> String {
     crate::billing::MeterUsage::KEYS
         .iter()
@@ -62,6 +59,9 @@ pub(super) fn meter_relevant_counts_sql() -> String {
         .collect::<Vec<_>>()
         .join(",")
 }
+/// Those relevant attempts where the meter was not observed. A settled
+/// failure (a free pre-processing rejection) used nothing. Decimal strings;
+/// the meter total is a lower bound whenever its unknown count is nonzero.
 pub(super) fn meter_unknown_counts_sql() -> String {
     crate::billing::MeterUsage::KEYS
         .iter()
