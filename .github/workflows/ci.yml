@@ -195,7 +195,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Prebuilt, checksum-verified binary instead of the Docker-based
       # cargo-deny action (which pulls its image from Docker Hub).
-      - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-deny@0.20.2
       - run: cargo deny --all-features check
@@ -368,7 +368,7 @@ jobs:
       # ignore file in the checkout applies, and by full path.
       - name: Scan the candidate image and the arm64 runtime base
         env:
-          APPROVED_RUNTIME: gcr.io/distroless/cc-debian13:nonroot@sha256:cc66d222f0a7ec996b78a99fe76a969bc80b539a5016ad866c14d1949bc6d0ab
+          APPROVED_RUNTIME: gcr.io/distroless/cc-debian13:nonroot@sha256:cb87acc574abe719b6e5c547384defa2f7b1f24af9605d3f618cf852495d8be2
         run: |
           set -euo pipefail
           cd "$(mktemp -d)"

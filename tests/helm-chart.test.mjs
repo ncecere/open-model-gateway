@@ -578,3 +578,29 @@ test("an extraEgress rule for the OTLP collector port renders in the egress Netw
   assert.match(egress, /cidr: 10\.50\.0\.10\/32/);
   assert.match(egress, /port: 4318/);
 });
+
+// scripts/spark-env.py installs the chart with deploy/spark/values.yaml (#599). Chart drift that
+// would break that path (a renamed value, a changed role Secret key, a new migrate step) fails here.
+test("the Spark test platform's values render the database and migrate Job it relies on (#599)", () => {
+  const rendered = helmTemplate(["-n", "coder-03-omg-x", "-f", join(root, "deploy/spark/values.yaml"), "--set", `image.digest=sha256:${"a".repeat(64)}`]);
+  const [gateway] = docsOfKind(rendered, "Deployment");
+  assert.match(gateway, /^  replicas: 0$/m, "the chart's gateway stays off; deploy/spark/demo.yaml runs the loopback demo gateway");
+  const [cluster] = docsOfKind(rendered, "Cluster");
+  assert.match(cluster, /^  name: omg-db$/m);
+  assert.match(cluster, /^  instances: 1$/m);
+  assert.match(cluster, /^  imageName: ghcr\.io\/cloudnative-pg\/postgresql:17\.\d+@sha256:[0-9a-f]{64}$/m);
+  assert.match(cluster, /^      database: "gateway_enterprise_demo"$/m);
+  assert.match(cluster, /storageClass: local-path/);
+  assert.match(cluster, /^        name: omg-migrator-role$/m);
+  assert.match(cluster, /^          name: omg-runtime-role$/m);
+  assert.match(cluster, /^    limits:\n      cpu: "?1"?\n      memory: 1Gi$/m, "one CPU limit, not the chart's two");
+  assert.match(cluster, /minSyncReplicas: 0\n  maxSyncReplicas: 0/);
+  assert.equal(docsOfKind(rendered, "Pooler").length, 0);
+  assert.equal(docsOfKind(rendered, "PodDisruptionBudget").length, 0);
+  assert.equal(docsOfKind(rendered, "NetworkPolicy").length, 0);
+  const [job] = docsOfKind(rendered, "Job");
+  assert.match(job, /^  name: omg-migrate-1$/m);
+  assert.match(job, new RegExp(`image: ghcr\\.io/ncecere/open-model-gateway@sha256:${"a".repeat(64)}`));
+  assert.deepEqual([...job.matchAll(/^\s+args: (\[.*\])$/gm)].map(m => m[1]), ['["wait-for-database"]', '["migrate"]', '["grants", "apply"]'], "wait, migrate, then the runtime grants");
+  assert.match(job, /name: OMG_DB_MIGRATOR_USERNAME[\s\S]*name: omg-migrator-role/);
+});

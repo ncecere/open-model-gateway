@@ -1,6 +1,6 @@
-# Deletes old development images (branch-images.yml's dev-<12 hex> tags) from the GHCR packages.
+# Deletes old development images (branch-images.yml's dev-<12 hex> and dev-<12 hex>-arm64 tags) from the GHCR packages.
 #
-# Only a version whose tags are ALL dev-<12 hex digits> is ever a candidate. Untagged versions are
+# Only a version whose tags are ALL dev-<12 hex digits>, optionally followed by -arm64, is ever a candidate. Untagged versions are
 # never touched (the per-architecture children of a release's multi-platform index are untagged), and
 # neither is any version that carries another tag (a release, sha-<short>, latest...).
 #
@@ -58,10 +58,10 @@ jobs:
             [ -n "$package" ] || continue
             echo "## $package"
             versions="$(gh api --paginate "/users/$OWNER/packages/container/$package/versions?per_page=100" | jq -s 'add // []')"
-            # candidates: tagged, every tag is dev-<12 hex>, older than the cutoff
+            # candidates: tagged, every tag is dev-<12 hex>[-arm64], older than the cutoff
             ids="$(jq -r --arg cutoff "$cutoff" '
               .[] | select((.metadata.container.tags | length) > 0)
-                  | select(all(.metadata.container.tags[]; test("^dev-[0-9a-f]{12}$")))
+                  | select(all(.metadata.container.tags[]; test("^dev-[0-9a-f]{12}(-arm64)?$")))
                   | select(.created_at < $cutoff)
                   | "\(.id) \(.metadata.container.tags | join(","))"' <<<"$versions")"
             total="$(jq 'length' <<<"$versions")"

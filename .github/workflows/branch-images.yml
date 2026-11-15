@@ -1,7 +1,11 @@
 # Development images: ghcr.io/ncecere/open-model-gateway:dev-<commit SHA12>.
 # Builds do not wait for ci.yml and are NOT scanned, rehearsed or signed.
-# linux/amd64 only; never latest or a version tag. SPDX/SLSA data now accompanies
-# each build for the validated OCI handoff; it does not certify a development image.
+# Each architecture is built on its own native runner and published under its own tag:
+# dev-<SHA12> is the linux/amd64 image (unchanged: image.yml's acceptance probe resolves
+# exactly this tag and requires a single amd64 child) and dev-<SHA12>-arm64 is the
+# linux/arm64 image the Spark k3s test platform runs (scripts/spark-env.py). Never latest
+# or a version tag. SPDX/SLSA data now accompanies each build for the validated OCI
+# handoff; it does not certify a development image.
 # Release and main sha-<short> images are published separately by image.yml.
 name: branch-images
 
@@ -24,15 +28,32 @@ concurrency:
 
 jobs:
   build:
-    name: Build open-model-gateway (read-only)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    name: build (${{ matrix.platform }})
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # pair is the cache scope: from the matrix, which no step can rewrite
+          # (a scope from env could be redirected through $GITHUB_ENV, #488).
+          - platform: linux/amd64
+            pair: linux-amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            pair: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
     permissions:
       contents: read
+    # Distinct names avoid last-finisher-wins matrix outputs. Each leg reports the
+    # revision it built; publish refuses the pair unless they are the same commit.
     outputs:
-      artifact_id: ${{ steps.record.outputs.artifact_id }}
-      digest: ${{ steps.record.outputs.digest }}
-      source_revision: ${{ steps.name.outputs.sha }}
+      digest_linux_amd64: ${{ steps.record.outputs.digest_linux_amd64 }}
+      digest_linux_arm64: ${{ steps.record.outputs.digest_linux_arm64 }}
+      artifact_id_linux_amd64: ${{ steps.record.outputs.artifact_id_linux_amd64 }}
+      artifact_id_linux_arm64: ${{ steps.record.outputs.artifact_id_linux_arm64 }}
+      source_revision_linux_amd64: ${{ steps.record.outputs.source_revision_linux_amd64 }}
+      source_revision_linux_arm64: ${{ steps.record.outputs.source_revision_linux_arm64 }}
     steps:
       # Only image source uses the optional ref. Importer control code never does.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,6 +69,11 @@ jobs:
           [[ "${sha}" =~ ^[0-9a-f]{40}$ ]]
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
 
+      - name: Platform name
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: echo "PLATFORM_PAIR=${PLATFORM//\//-}" >> "$GITHUB_ENV"
+
       - name: Require the runner's own Buildx
         run: docker buildx version
 
@@ -55,12 +81,12 @@ jobs:
         with:
           driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
 
-      - name: Build a complete OCI archive without registry credentials
+      - name: Build a complete OCI archive without registry credentials (${{ matrix.platform }})
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           outputs: type=oci,dest=${{ runner.temp }}/image.tar,oci-mediatypes=true
           attests: type=sbom,generator=mirror.gcr.io/docker/buildkit-syft-scanner:stable-1@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9
           provenance: mode=max
@@ -69,45 +95,61 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.name.outputs.sha }}
             org.opencontainers.image.licenses=MIT
-          cache-from: type=gha,scope=image-linux-amd64
-          cache-to: type=gha,mode=max,scope=image-linux-amd64
+          cache-from: type=gha,scope=image-${{ matrix.pair }}
+          cache-to: type=gha,mode=max,scope=image-${{ matrix.pair }}
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: upload
         with:
-          name: branch-image-${{ github.run_attempt }}
+          name: branch-image-${{ env.PLATFORM_PAIR }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/image.tar
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
 
-      - name: Record immutable image handoff
+      - name: Record immutable per-platform handoff
         id: record
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          SOURCE_REVISION: ${{ steps.name.outputs.sha }}
         run: |
           set -euo pipefail
           [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "${ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]]
-          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
-          echo "artifact_id=${ARTIFACT_ID}" >> "$GITHUB_OUTPUT"
+          [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          echo "digest_${PLATFORM_PAIR//-/_}=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "artifact_id_${PLATFORM_PAIR//-/_}=${ARTIFACT_ID}" >> "$GITHUB_OUTPUT"
+          echo "source_revision_${PLATFORM_PAIR//-/_}=${SOURCE_REVISION}" >> "$GITHUB_OUTPUT"
 
-  import:
+  import-amd64:
     needs: [build]
     permissions:
       contents: read
       packages: write
     uses: ./.github/workflows/oci-import.yml
     with:
-      artifact_id: ${{ needs.build.outputs.artifact_id }}
-      root_digest: ${{ needs.build.outputs.digest }}
+      artifact_id: ${{ needs.build.outputs.artifact_id_linux_amd64 }}
+      root_digest: ${{ needs.build.outputs.digest_linux_amd64 }}
       platform: linux/amd64
       image_repository: ghcr.io/ncecere/open-model-gateway
-      source_revision: ${{ needs.build.outputs.source_revision }}
+      source_revision: ${{ needs.build.outputs.source_revision_linux_amd64 }}
+
+  import-arm64:
+    needs: [build]
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/oci-import.yml
+    with:
+      artifact_id: ${{ needs.build.outputs.artifact_id_linux_arm64 }}
+      root_digest: ${{ needs.build.outputs.digest_linux_arm64 }}
+      platform: linux/arm64
+      image_repository: ghcr.io/ncecere/open-model-gateway
+      source_revision: ${{ needs.build.outputs.source_revision_linux_arm64 }}
 
   publish:
-    needs: [build, import]
+    needs: [build, import-amd64, import-arm64]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -115,8 +157,10 @@ jobs:
       packages: write
     env:
       IMAGE: ghcr.io/ncecere/open-model-gateway
-      DIGEST: ${{ needs.import.outputs.digest }}
-      SOURCE_REVISION: ${{ needs.build.outputs.source_revision }}
+      DIGEST_AMD64: ${{ needs.import-amd64.outputs.digest }}
+      DIGEST_ARM64: ${{ needs.import-arm64.outputs.digest }}
+      SOURCE_REVISION: ${{ needs.build.outputs.source_revision_linux_amd64 }}
+      SOURCE_REVISION_ARM64: ${{ needs.build.outputs.source_revision_linux_arm64 }}
     steps:
       # imagetools is registry-only; no BuildKit builder or Docker-owned action.
       - name: Require the runner's own Buildx
@@ -127,24 +171,58 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${DIGEST_AMD64}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${DIGEST_ARM64}" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          # Both architectures must be the same commit, or neither is tagged.
+          [ "${SOURCE_REVISION_ARM64}" = "${SOURCE_REVISION}" ]
           umask 077
           export DOCKER_CONFIG
           DOCKER_CONFIG=$(mktemp -d "${RUNNER_TEMP}/docker-auth.XXXXXXXX")
           echo "DOCKER_CONFIG=${DOCKER_CONFIG}" >> "$GITHUB_ENV"
           printf '%s' "${GITHUB_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
 
-      - name: Tag only the imported root as dev-SHA12
+      - name: Tag only the imported amd64 root as dev-SHA12
         run: |
           set -euo pipefail
-          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${DIGEST_AMD64}" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
           tag="${IMAGE}:dev-${SOURCE_REVISION:0:12}"
-          docker buildx imagetools create --prefer-index=false --tag "${tag}" "${IMAGE}@${DIGEST}"
-          got=$(docker buildx imagetools inspect "${tag}" --format '{{json .Manifest}}' | jq -er .digest)
-          [ "${got}" = "${DIGEST}" ]
-          printf '`%s`\n\ndigest `%s`\n' "${tag}" "${DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+          docker buildx imagetools create --prefer-index=false --tag "${tag}" "${IMAGE}@${DIGEST_AMD64}"
+          # Read back the raw manifest, as image.yml checks its tags: the registry can answer 404 for a
+          # tag a moment after the push, so only this read is repeated (never the push), a few times.
+          raw=$(mktemp "${RUNNER_TEMP}/tag.XXXXXXXX")
+          for attempt in 1 2 3 4 5; do
+            docker buildx imagetools inspect --raw "${tag}" > "${raw}" && break
+            [ "${attempt}" -lt 5 ] || { echo "::error::${tag} is not readable after the push"; exit 1; }
+            sleep 3
+          done
+          hashed=$(sha256sum "${raw}")
+          [ "sha256:${hashed%% *}" = "${DIGEST_AMD64}" ]
+          jq -e '.manifests | any(.platform.os == "linux" and .platform.architecture == "amd64")' "${raw}" > /dev/null
+          rm -f "${raw}"
+          printf '`%s`\n\ndigest `%s`\n' "${tag}" "${DIGEST_AMD64}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Tag only the imported arm64 root as dev-SHA12-arm64
+        run: |
+          set -euo pipefail
+          [[ "${DIGEST_ARM64}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          tag="${IMAGE}:dev-${SOURCE_REVISION:0:12}-arm64"
+          docker buildx imagetools create --prefer-index=false --tag "${tag}" "${IMAGE}@${DIGEST_ARM64}"
+          # Read back the raw manifest, as image.yml checks its tags: the registry can answer 404 for a
+          # tag a moment after the push, so only this read is repeated (never the push), a few times.
+          raw=$(mktemp "${RUNNER_TEMP}/tag.XXXXXXXX")
+          for attempt in 1 2 3 4 5; do
+            docker buildx imagetools inspect --raw "${tag}" > "${raw}" && break
+            [ "${attempt}" -lt 5 ] || { echo "::error::${tag} is not readable after the push"; exit 1; }
+            sleep 3
+          done
+          hashed=$(sha256sum "${raw}")
+          [ "sha256:${hashed%% *}" = "${DIGEST_ARM64}" ]
+          jq -e '.manifests | any(.platform.os == "linux" and .platform.architecture == "arm64")' "${raw}" > /dev/null
+          rm -f "${raw}"
+          printf '`%s`\n\ndigest `%s`\n' "${tag}" "${DIGEST_ARM64}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Remove registry credentials
         if: always()

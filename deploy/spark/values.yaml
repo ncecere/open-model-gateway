@@ -1,0 +1,41 @@
+# Helm values for scripts/spark-env.py (the Spark k3s test platform): chart-managed
+# CloudNativePG Cluster on local-path storage, the explicit migrate Job (migrate +
+# runtime grants), and no chart-managed gateway pods. The passwordless demo issuer needs
+# a loopback listener and database host, so the gateway runs from deploy/spark/demo.yaml
+# instead. Image tag/digest and the role Secrets are set by the script.
+fullnameOverride: omg
+replicaCount: 0
+pdb:
+  enabled: false
+networkPolicy:
+  enabled: false
+migrations:
+  run: true
+cnpg:
+  cluster:
+    enabled: true
+    instances: 1
+    # One instance cannot satisfy the legacy synchronous-replica default.
+    minSyncReplicas: 0
+    maxSyncReplicas: 0
+    storageClass: local-path
+    storageSize: 2Gi
+    walStorageSize: 1Gi
+    # The demo commands refuse any other database name.
+    database: gateway_enterprise_demo
+    additionalPodAntiAffinity: false
+    # PostgreSQL 17.6, like CI and deploy/staging: the multi-arch index (amd64 and arm64) pinned by digest.
+    image: ghcr.io/cloudnative-pg/postgresql:17.6@sha256:30b304a2e300ed80b6d1b740e4369e9b0f25599fb518de78c01fd9f25531791b
+    resources:
+      requests: {cpu: 200m, memory: 512Mi}
+      # The chart's own default limit is 2 CPU: three environments must fit the 8 CPU limit quota.
+      limits: {cpu: "1", memory: 1Gi}
+    roles:
+      migrator: {existingSecret: omg-migrator-role}
+      runtime: {existingSecret: omg-runtime-role}
+    postgresql:
+      parameters:
+        # CNPG rejects a value that exceeds the WAL volume.
+        max_wal_size: 512MB
+  pooler:
+    enabled: false

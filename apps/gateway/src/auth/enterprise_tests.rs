@@ -193,3 +193,59 @@ async fn workspace_foreign_keys_and_personal_privacy_are_enforced(pool: sqlx::Pg
         None
     );
 }
+
+/// #497 on real PostgreSQL: a key lookup with every pooled connection busy,
+/// or whose statement times out on a lock, is counted once at the
+/// `key_authentication` stage with its cause; a lookup that runs records nothing.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_failed_key_lookup_names_its_cause(pool: sqlx::PgPool) {
+    use crate::db::{
+        accounting_failure::tests::labels,
+        diagnostics::{self, Handle},
+    };
+    use sqlx::Connection;
+    let store = Store::new(
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(std::time::Duration::from_millis(300))
+            .after_connect(|connection, _| {
+                Box::pin(async move {
+                    sqlx::query("SET lock_timeout = '200ms'")
+                        .execute(connection)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect_with((*pool.connect_options()).clone())
+            .await
+            .unwrap(),
+    );
+    let token = NewApiKey::generate().unwrap().token;
+    let lookup = || async {
+        let handle = Handle::new();
+        let result = diagnostics::scope(handle.clone(), store.authenticate(&token)).await;
+        (result, labels(&handle.signals()))
+    };
+    let (found, signals) = lookup().await;
+    assert!(matches!(found, Ok(None)), "an unknown key is not found");
+    assert!(signals.is_empty(), "nothing is recorded on success");
+
+    let held = store.pool.acquire().await.unwrap();
+    let (refused, signals) = lookup().await;
+    drop(held);
+    assert!(matches!(refused, Err(sqlx::Error::PoolTimedOut)));
+    assert_eq!(signals, [("key_authentication", "pool_timeout")]);
+
+    let mut blocker = sqlx::PgConnection::connect_with(&pool.connect_options())
+        .await
+        .unwrap();
+    sqlx::raw_sql("BEGIN; LOCK TABLE api_keys IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut blocker)
+        .await
+        .unwrap();
+    let (refused, signals) = lookup().await;
+    sqlx::query("ROLLBACK").execute(&mut blocker).await.unwrap();
+    blocker.close().await.unwrap();
+    assert!(refused.is_err());
+    assert_eq!(signals, [("key_authentication", "lock_timeout")]);
+}

@@ -2083,16 +2083,22 @@ function assertPublicationGraph(flows) {
     assert.equal(action.with.provenance, "mode=max");
     assert.match(action.with.attests, /^type=sbom,generator=mirror\.gcr\.io\/docker\/buildkit-syft-scanner:stable-1@sha256:[0-9a-f]{64}$/);
     const upload = stepsOf(build).find(s => actionName(s.uses) === "actions/upload-artifact");
+    assert.equal(upload.with.name, { image: "image-${{ env.PLATFORM_PAIR }}-${{ github.run_attempt }}", "branch-images": "branch-image-${{ env.PLATFORM_PAIR }}-${{ github.run_attempt }}", "loadtest-image": "loadtest-image-${{ github.run_attempt }}" }[name], `${name}: an artifact name unique per platform and attempt`);
+    // The build reads the repository with no credential left behind, and every leg reads the same ref.
+    const checkouts = stepsOf(build).filter(s => actionName(s.uses) === "actions/checkout");
+    assert.equal(checkouts.length, 1, `${name}: one checkout in the build`);
+    assert.deepEqual(checkouts[0].with, name === "image" ? { "persist-credentials": false } : { ref: "${{ inputs.ref || github.sha }}", "persist-credentials": false }, `${name}: build checkout`);
     assert.equal(upload.with.path, "${{ runner.temp }}/image.tar");
     assert.equal(upload.with["if-no-files-found"], "error");
     assert.equal(upload.with.overwrite, undefined);
     assert.match(executable(build), /\^sha256:\[0-9a-f\]\{64\}\$/);
     const calls = Object.values(data.jobs).filter(j => j.uses === "./.github/workflows/oci-import.yml");
-    assert.equal(calls.length, name === "image" ? 2 : 1);
+    assert.equal(calls.length, name === "image" || name === "branch-images" ? 2 : 1);
     for (const call of calls) {
       assert.deepEqual(call.permissions, { contents: "read", packages: "write" });
       assert.deepEqual(call.needs, ["build"]);
-      assert.equal(call.with.source_revision, name === "image" ? "${{ github.sha }}" : "${{ needs.build.outputs.source_revision }}");
+      const arch = call.with.platform.slice(6);
+      assert.equal(call.with.source_revision, { image: "${{ github.sha }}", "branch-images": `\${{ needs.build.outputs.source_revision_linux_${arch} }}` }[name] ?? "${{ needs.build.outputs.source_revision }}");
       assert.match(call.with.artifact_id, /^\$\{\{ needs\.build\.outputs\.artifact_id(?:_linux_(?:amd64|arm64))? \}\}$/);
       assert.match(call.with.root_digest, /^\$\{\{ needs\.build\.outputs\.digest(?:_linux_(?:amd64|arm64))? \}\}$/);
       assert.equal(call.with.image_repository, `ghcr.io/ncecere/open-model-gateway${name === "loadtest-image" ? "-loadtest" : ""}`);
@@ -2110,6 +2116,9 @@ function assertPublicationGraph(flows) {
   const image = flows.image;
   for (const name of ["build", "import-amd64", "import-arm64", "verify", "publish"]) {
     assertRequiredPublication(image.jobs[name], name === "verify" ? ["Stop isolated staging"] : name === "publish" ? ["Job summary", "Remove registry credentials"] : []);
+  }
+  for (const name of ["build", "import-amd64", "import-arm64", "publish"]) {
+    assertRequiredPublication(flows["branch-images"].jobs[name], name === "publish" ? ["Remove registry credentials"] : []);
   }
   const architectures = [
     { platform: "linux/amd64", pair: "linux-amd64", runner: "ubuntu-24.04" },
@@ -2154,13 +2163,57 @@ function assertPublicationGraph(flows) {
   assert.match(executable(image.jobs.verify), /trivy image/);
   assertCosignPublishPolicy(image);
   assert.equal(flows["loadtest-image"].jobs.build.steps.find(s => actionName(s.uses) === "docker/build-push-action").with["build-args"], "CARGO_BUILD_JOBS=4");
-  for (const name of ["branch-images", "loadtest-image"]) {
-    const publish = flows[name].jobs.publish;
+  {
+    const publish = flows["loadtest-image"].jobs.publish;
     assert.deepEqual(publish.needs, ["build", "import"]);
     assert.match(executable(publish), /\^\[0-9a-f\]\{40\}\$/);
     assert.match(executable(publish), /dev-\$\{SOURCE_REVISION:0:12\}/);
     assert.doesNotMatch(executable(publish), /latest|cosign|trivy/);
   }
+  // branch-images: one native build and one import per architecture, two tags, no index.
+  const branch = flows["branch-images"];
+  assert.deepEqual(branch.jobs.build.strategy, { "fail-fast": true, matrix: { include: architectures } });
+  assert.equal(branch.jobs.build["runs-on"], "${{ matrix.runner }}");
+  assert.deepEqual(branch.jobs.build.outputs, Object.fromEntries(["amd64", "arm64"].flatMap(arch =>
+    ["digest", "artifact_id", "source_revision"].map(key => [`${key}_linux_${arch}`, `\${{ steps.record.outputs.${key}_linux_${arch} }}`]))));
+  const branchBuild = stepsOf(branch.jobs.build).find(s => actionName(s.uses) === "docker/build-push-action");
+  assert.equal(branchBuild.with.platforms, "${{ matrix.platform }}");
+  assert.equal(branchBuild.with["cache-from"], "type=gha,scope=image-${{ matrix.pair }}");
+  assert.equal(branchBuild.with["cache-to"], "type=gha,mode=max,scope=image-${{ matrix.pair }}");
+  assert.deepEqual(branch.jobs.build.steps.find(s => s.id === "record").env, {
+    DIGEST: "${{ steps.build.outputs.digest }}", ARTIFACT_ID: "${{ steps.upload.outputs.artifact-id }}", SOURCE_REVISION: "${{ steps.name.outputs.sha }}",
+  });
+  for (const arch of ["amd64", "arm64"]) {
+    assert.deepEqual(branch.jobs[`import-${arch}`].with, {
+      artifact_id: `\${{ needs.build.outputs.artifact_id_linux_${arch} }}`,
+      root_digest: `\${{ needs.build.outputs.digest_linux_${arch} }}`,
+      platform: `linux/${arch}`, image_repository: "ghcr.io/ncecere/open-model-gateway",
+      source_revision: `\${{ needs.build.outputs.source_revision_linux_${arch} }}`,
+    });
+  }
+  const branchPublish = branch.jobs.publish;
+  assert.deepEqual(branchPublish.needs, ["build", "import-amd64", "import-arm64"]);
+  assert.deepEqual(branchPublish.env, {
+    IMAGE: "ghcr.io/ncecere/open-model-gateway",
+    DIGEST_AMD64: "${{ needs.import-amd64.outputs.digest }}", DIGEST_ARM64: "${{ needs.import-arm64.outputs.digest }}",
+    SOURCE_REVISION: "${{ needs.build.outputs.source_revision_linux_amd64 }}", SOURCE_REVISION_ARM64: "${{ needs.build.outputs.source_revision_linux_arm64 }}",
+  });
+  assert.deepEqual(branchPublish.permissions, { contents: "read", packages: "write" }, "publish may write packages only: no id-token, no contents");
+  assert.equal(branchBuild.with.labels.includes("org.opencontainers.image.revision=${{ steps.name.outputs.sha }}"), true, "the revision label is the commit this leg checked out");
+  const tagging = executable(branchPublish);
+  assert.match(tagging, /\^\[0-9a-f\]\{40\}\$/);
+  assert.ok(tagging.includes('[ "${SOURCE_REVISION_ARM64}" = "${SOURCE_REVISION}" ]'), "both architectures are the same commit");
+  assert.ok(tagging.includes('tag="${IMAGE}:dev-${SOURCE_REVISION:0:12}"\ndocker buildx imagetools create --prefer-index=false --tag "${tag}" "${IMAGE}@${DIGEST_AMD64}"'));
+  assert.ok(tagging.includes('tag="${IMAGE}:dev-${SOURCE_REVISION:0:12}-arm64"\ndocker buildx imagetools create --prefer-index=false --tag "${tag}" "${IMAGE}@${DIGEST_ARM64}"'));
+  assert.equal(tagging.match(/imagetools create/g).length, 2);
+  // The read-back is the raw manifest's SHA-256, as image.yml checks its tags, and the tag must hold the platform it is named for.
+  for (const [arch, name] of [["AMD64", "amd64"], ["ARM64", "arm64"]]) {
+    assert.ok(tagging.includes(`[ "sha256:\${hashed%% *}" = "\${DIGEST_${arch}}" ]`), `${name}: the tag resolves to the imported digest`);
+    assert.ok(tagging.includes(`.platform.os == "linux" and .platform.architecture == "${name}"`), `${name}: the tag holds that platform`);
+  }
+  assert.equal(tagging.match(/imagetools inspect --raw "\$\{tag\}"/g).length, 2);
+  assert.doesNotMatch(tagging, /--format/);
+  assert.doesNotMatch(tagging, /latest|cosign|trivy/);
   const importer = flows["oci-import"];
   assert.deepEqual(Object.keys(importer.on.workflow_call.inputs).sort(), ["artifact_id", "image_repository", "platform", "root_digest", "source_revision"]);
   for (const input of Object.values(importer.on.workflow_call.inputs)) assert.deepEqual(input, { required: true, type: "string" });
@@ -2486,6 +2539,26 @@ const imageVerificationMutants = [
   ["optional ARM import", f => { f.image.jobs["import-arm64"].if = "false"; }],
   ["optional publisher", f => { f.image.jobs.publish["continue-on-error"] = true; }],
   ["always-run native publication", f => { f.image.jobs.publish.steps.find(s => s.id === "index").if = "always()"; }],
+  ["branch ARM publisher tags the AMD digest", f => { f["branch-images"].jobs.publish.env.DIGEST_ARM64 = "${{ needs.import-amd64.outputs.digest }}"; }],
+  ["branch ARM import uses the AMD artifact", f => { Object.assign(f["branch-images"].jobs["import-arm64"].with, {
+    artifact_id: "${{ needs.build.outputs.artifact_id_linux_amd64 }}", root_digest: "${{ needs.build.outputs.digest_linux_amd64 }}",
+  }); }],
+  ["branch ARM import trusts the AMD revision", f => { f["branch-images"].jobs["import-arm64"].with.source_revision = "${{ needs.build.outputs.source_revision_linux_amd64 }}"; }],
+  ["branch builds share one cache scope", f => { stepsOf(f["branch-images"].jobs.build).find(s => actionName(s.uses) === "docker/build-push-action").with["cache-from"] = "type=gha,scope=image-linux-amd64"; }],
+  ["branch builds only amd64", f => { f["branch-images"].jobs.build.strategy.matrix.include.pop(); }],
+  ["branch publish drops the same-commit check", f => { const s = f["branch-images"].jobs.publish.steps.find(s => s.name?.startsWith("Authenticate")); s.run = s.run.replace('[ "${SOURCE_REVISION_ARM64}" = "${SOURCE_REVISION}" ]', "true"); }],
+  ["branch publish tags the arm64 image without its suffix", f => { const s = f["branch-images"].jobs.publish.steps.find(s => s.name?.includes("arm64")); s.run = s.run.replace("-arm64\"", '"'); }],
+  ["branch publish loses its package-only token", f => { f["branch-images"].jobs.publish.permissions["id-token"] = "write"; }],
+  ["branch publish may write contents", f => { f["branch-images"].jobs.publish.permissions.contents = "write"; }],
+  ["branch publish read-back replaced by true", f => { const s = f["branch-images"].jobs.publish.steps.find(s => s.name?.includes("arm64")); s.run = s.run.replace('[ "sha256:${hashed%% *}" = "${DIGEST_ARM64}" ]', "true"); }],
+  ["branch publish no longer checks the arm64 platform", f => { const s = f["branch-images"].jobs.publish.steps.find(s => s.name?.includes("arm64")); s.run = s.run.replace(/^jq -e .*$/m, "true"); }],
+  ["branch artifact name loses its platform", f => { stepsOf(f["branch-images"].jobs.build).find(s => actionName(s.uses) === "actions/upload-artifact").with.name = "branch-image-${{ github.run_attempt }}"; }],
+  ["image artifact name loses its attempt", f => { stepsOf(f.image.jobs.build).find(s => actionName(s.uses) === "actions/upload-artifact").with.name = "image-${{ env.PLATFORM_PAIR }}"; }],
+  ["branch revision label from github.sha", f => { const a = stepsOf(f["branch-images"].jobs.build).find(s => actionName(s.uses) === "docker/build-push-action"); a.with.labels = a.with.labels.replace("steps.name.outputs.sha", "github.sha"); }],
+  ["branch build checkout ref fixed for one leg", f => { stepsOf(f["branch-images"].jobs.build).find(s => actionName(s.uses) === "actions/checkout").with.ref = "main"; }],
+  ["branch build checkout keeps credentials", f => { stepsOf(f["branch-images"].jobs.build).find(s => actionName(s.uses) === "actions/checkout").with["persist-credentials"] = true; }],
+  ["image build checkout keeps credentials", f => { stepsOf(f.image.jobs.build).find(s => actionName(s.uses) === "actions/checkout").with["persist-credentials"] = true; }],
+  ["branch publish waits for the AMD import only", f => { f["branch-images"].jobs.publish.needs.pop(); }],
 ];
 for (const [name, mutate] of imageVerificationMutants) {
   test(`publication graph refuses ${name}`, () => {
@@ -3234,4 +3307,34 @@ test("fixtures: a .dockerignore is not a Dockerfile, and an unknown Dockerfile n
   }
   assert.match(unknownDockerfileViolations(["Dockerfile", "docs/Dockerfile.md"]).join(), /^docs\/Dockerfile\.md is named like a Dockerfile but is not one of the known Dockerfiles .*rename it/);
   assert.deepEqual(unknownDockerfileViolations([...KNOWN_DOCKERFILES]), []);
+});
+
+// ---- prune-dev-images selects only dev images (#599) ----
+
+// Runs the workflow's own jq program, so loosening its pattern changes this result.
+function pruneSelection(text, versions) {
+  const run = stepsOf(toData(parseStrict(text, "prune-dev-images.yml")).jobs.prune).find(s => s.name === "Prune").run;
+  const start = run.indexOf("jq -r --arg cutoff \"$cutoff\" '");
+  assert.notEqual(start, -1, "the prune step still names its jq filter");
+  const program = run.slice(start + "jq -r --arg cutoff \"$cutoff\" '".length, run.indexOf("' <<<\"$versions\")", start));
+  const result = spawnSync("jq", ["-r", "--arg", "cutoff", "2026-11-01T00:00:00Z", program], { input: JSON.stringify(versions), encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.split("\n").filter(Boolean).map(line => line.split(" ")[0]);
+}
+const versionOf = (id, tags, created_at = "2026-10-01T00:00:00Z") => ({ id, created_at, metadata: { container: { tags } } });
+const PRUNE_FIXTURE = [
+  versionOf(1, ["dev-0123456789ab"]), versionOf(2, ["dev-0123456789ab-arm64"]), versionOf(3, ["dev-0123456789ab", "v0.16.0"]),
+  versionOf(4, ["dev-0123456789ab-arm64", "sha-abc1234"]), versionOf(5, ["v0.16.0"]), versionOf(6, []), versionOf(7, ["dev-0123456789AB"]),
+  versionOf(8, ["dev-0123456789abc"]), versionOf(9, ["dev-0123456789ab-arm64x"]), versionOf(10, ["dev-0123456789ab-amd64"]), versionOf(11, ["latest"]),
+  versionOf(12, ["dev-0123456789ab"], "2026-11-10T00:00:00Z"), versionOf(13, ["dev-0123456789ab", "dev-fedcba987654-arm64"]), versionOf(14, ["xdev-0123456789ab"]),
+];
+test("prune-dev-images deletes only old versions whose tags are all dev-<12 hex>[-arm64]", () => {
+  const text = readLocalFromRepo(".github/workflows/prune-dev-images.yml");
+  assert.deepEqual(pruneSelection(text, PRUNE_FIXTURE), ["1", "2", "13"]);
+  // A loosened pattern selects more than the fixture allows.
+  for (const loose of [s => s.replace('test("^dev-[0-9a-f]{12}(-arm64)?$")', 'test("^dev-")'), s => s.replace("(-arm64)?$", "(-arm64)?"), s => s.replace("^dev-", "dev-"), s => s.replace("{12}", "{12,}"), s => s.replace("[0-9a-f]", "[0-9a-fA-F]")]) {
+    const mutated = loose(text);
+    assert.notEqual(mutated, text);
+    assert.notDeepEqual(pruneSelection(mutated, PRUNE_FIXTURE), ["1", "2", "13"]);
+  }
 });
