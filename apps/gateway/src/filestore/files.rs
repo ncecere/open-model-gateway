@@ -9,7 +9,7 @@
 //! `expires_at` or the purpose group's current retention, whichever is first).
 //!
 //! Storage quota (0020): a workspace file's upload reserves bytes as it streams
-//! (see [`quota::reserve`]); the reservation counts against the workspace's stacked
+//! (see `quota::reserve`); the reservation counts against the workspace's stacked
 //! `storage_bytes` limit until the file commits (then its size counts) or is
 //! abandoned. Concurrent uploads therefore never jointly exceed the quota.
 use std::sync::{
@@ -880,7 +880,7 @@ impl FileStorage {
         Ok(u64::try_from(total).unwrap_or_default())
     }
 
-    /// Quota usage of a workspace: what [`reserve`] counts, against its effective quota.
+    /// Quota usage of a workspace: what `quota::reserve` counts, against its effective quota.
     pub async fn workspace_storage(&self, workspace_id: Uuid) -> Result<StorageUse, FileError> {
         workspace_storage(&self.db.pool, workspace_id).await
     }
