@@ -217,7 +217,7 @@ To lower an allowance after shrinking a file, set its number in `files` to the n
 
 **Splitting a listed file.** A listed file cannot be renamed while it is still over 800 lines: rule 3 refuses the old path and rule 1 refuses the new one. Keep the file at its path and move code out into child modules (`x.rs` plus `x/part.rs`). Lower its ceiling as it shrinks.
 
-**Why the remaining files are still listed.** None of these has a reason to be large beyond not having been split yet (#499 goes file by file, and each move is a pure move of whole items into child modules with the old paths re-exported). This is what each holds and where the cut would go:
+**Why the remaining files are still listed.** None of these has a reason to be large beyond not having been split yet (#499 goes file by file, and each move is a pure move of whole items into child modules, with no caller changed). This is what each holds and where the cut would go:
 
 - `audit_export.rs`: the SIEM exporter (webhook, syslog over TLS and OTLP transports, the delivery loop and the nested `pki` module) in one file. Not yet done; one module per transport is the obvious cut.
 - `filestore/files.rs`: file metadata, the storage-quota SQL and the `FileStorage` upload/read/delete path (about 400 lines of one `impl`). Not yet done; the quota and policy SQL and the upload path are separable.
@@ -227,7 +227,7 @@ To lower an allowance after shrinking a file, set its number in `files` to the n
 - `management/directory.rs`: workspace, user, group-mapping and cost-centre handlers. Not yet done; one module per resource is the cut.
 - `management/governance/policies.rs`: limit and budget types, layered policy storage and the policy handlers. Not yet done.
 - `management/resources.rs`: the transaction helpers every management module calls (`platform_write`, `platform_read_tx`, workspace access) together with provider, deployment and model handlers. Not yet done; the shared helpers have the most callers, so that cut touches the most paths.
-- `providers/openai.rs`: the OpenAI adapter with the chat wire decoder and the SSE stream decoder, 68 lines over the limit. Not yet done.
+- `providers/openai.rs`: the OpenAI adapter with the chat wire decoder and the SSE stream decoder, 66 lines over the limit. Not yet done.
 - `telemetry.rs`: the OTLP trace recorder, alias registry, exporter and worker, 90 lines over. Not yet done.
 
 The test also reads the raw text of the list and fails when a key is written twice in one section. `JSON.parse` would keep the last one and say nothing.

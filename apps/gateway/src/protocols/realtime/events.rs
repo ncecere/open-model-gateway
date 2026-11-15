@@ -1,5 +1,6 @@
 //! The client-event allowlist: every client text frame is validated here before
-//! it is forwarded, and a rejected event becomes an `error` event and a close.
+//! it is forwarded. A rejected event is returned as a [`Rejection`]; `relay` turns
+//! it into an `error` event and a close.
 use super::*;
 
 /// A rejected client event: an `error` event, then (if `fatal`) a close.
