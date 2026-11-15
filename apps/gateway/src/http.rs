@@ -65,120 +65,18 @@ pub fn router_with_identity(
     build_router(store, web, engine, Some(identity))
 }
 
-#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 fn build_router(
     store: Store,
     web: Option<WebAssets>,
     engine: Engine,
     identity: Option<IdentityState>,
 ) -> Router {
-    let inference = Router::new()
-        .route("/v1/models", get(models))
-        .route("/v1/chat/completions", post(chat_completions::handle))
-        .route("/v1/responses", post(responses::handle))
-        .route("/v1/messages", post(messages::handle))
-        .route("/v1/embeddings", post(embeddings::handle))
-        // Explicitly unsupported realtime companions (never minted upstream).
-        .route(
-            "/v1/realtime/client_secrets",
-            post(realtime::unsupported_route),
-        )
-        .route("/v1/realtime/calls", post(realtime::unsupported_route))
-        .route_layer(middleware::from_fn(client_labels))
-        .route_layer(middleware::from_fn_with_state(
-            store.clone(),
-            authenticate_engine,
-        ));
-    // Non-generation workloads carry their own configured body caps instead
-    // of the shared 2 MiB limit (transcriptions also cap the file part).
-    let limits = engine.limits().workloads;
-    let capped = |kind: WorkloadKind, route: MethodRouter<Store>| -> MethodRouter<Store> {
-        let bytes = limits.body_bytes(kind).expect("workload body cap");
-        route
-            .layer::<_, std::convert::Infallible>(DefaultBodyLimit::max(bytes))
-            .layer(RequestBodyLimitLayer::new(bytes))
-    };
-    let workloads = Router::new()
-        .route(
-            "/v1/images/generations",
-            capped(WorkloadKind::Images, post(images::handle)),
-        )
-        .route(
-            "/v1/rerank",
-            capped(WorkloadKind::Rerank, post(rerank::handle)),
-        )
-        .route(
-            "/v1/systemone",
-            capped(WorkloadKind::Systemone, post(systemone::handle)),
-        )
-        .route(
-            "/v1/audio/transcriptions",
-            capped(
-                WorkloadKind::AudioTranscriptions,
-                post(audio::transcriptions),
-            ),
-        )
-        .route(
-            "/v1/audio/speech",
-            capped(WorkloadKind::AudioSpeech, post(audio::speech)),
-        )
-        .route_layer(middleware::from_fn(client_labels))
-        .route_layer(middleware::from_fn_with_state(
-            store.clone(),
-            authenticate_engine,
-        ));
-    // Async jobs (`crate::jobs`): video create and the streamed batch-file
-    // upload have their own caps; everything else keeps 2 MiB.
-    let job_limits = crate::jobs::limits();
-    let cap = |bytes: usize, route: MethodRouter<Store>| -> MethodRouter<Store> {
-        route
-            .layer::<_, std::convert::Infallible>(DefaultBodyLimit::max(bytes))
-            .layer(RequestBodyLimitLayer::new(bytes))
-    };
-    let file_bytes = crate::filestore::upload::limits().body_bytes();
-    let small = 2 * 1024 * 1024;
-    let jobs = Router::new()
-        .route(
-            "/v1/videos",
-            cap(
-                job_limits.video_body_bytes,
-                post(videos::create).get(videos::list),
-            ),
-        )
-        .route(
-            "/v1/videos/{id}",
-            cap(small, get(videos::retrieve).delete(videos::delete)),
-        )
-        .route("/v1/videos/{id}/content", cap(small, get(videos::content)))
-        // Gateway-owned Files API on the encrypted file store (docs/files-api.md).
-        .route(
-            "/v1/files",
-            cap(file_bytes, post(files::upload).get(files::list)),
-        )
-        .route(
-            "/v1/files/{id}",
-            cap(small, get(files::retrieve).delete(files::delete)),
-        )
-        .route("/v1/files/{id}/content", cap(small, get(files::content)))
-        .route(
-            "/v1/batches",
-            cap(small, post(batches::create).get(batches::list)),
-        )
-        .route("/v1/batches/{id}", cap(small, get(batches::retrieve)))
-        .route("/v1/batches/{id}/cancel", cap(small, post(batches::cancel)))
-        .route_layer(middleware::from_fn(client_labels))
-        .route_layer(middleware::from_fn_with_state(store.clone(), authenticate));
+    let inference = inference_routes(&store);
+    let workloads = workload_routes(&store, &engine);
+    let jobs = job_routes(&store);
 
     let ready_web = web.clone();
-    let mut root = Router::new();
-    // Dashboard file uploads carry their own cap (GATEWAY_FILES_MAX_BYTES).
-    let mut uploads = Router::new();
-    if let Some(identity) = identity {
-        uploads = crate::management::upload_router(identity.clone());
-        root = root
-            .merge(crate::identity::router(identity.clone()))
-            .merge(crate::management::router(identity));
-    }
+    let (root, uploads) = dashboard_routes(identity);
     root.route(
         "/health/live",
         get(|| async { Json(json!({"status": "ok"})) }),
@@ -209,6 +107,131 @@ fn build_router(
     .layer(Extension(engine))
     .layer(middleware::from_fn(request_context))
     .with_state(store)
+}
+
+/// The generation endpoints under the shared 2 MiB body limit, behind the
+/// client labels and engine-key authentication.
+fn inference_routes(store: &Store) -> Router<Store> {
+    Router::new()
+        .route("/v1/models", get(models))
+        .route("/v1/chat/completions", post(chat_completions::handle))
+        .route("/v1/responses", post(responses::handle))
+        .route("/v1/messages", post(messages::handle))
+        .route("/v1/embeddings", post(embeddings::handle))
+        // Explicitly unsupported realtime companions (never minted upstream).
+        .route(
+            "/v1/realtime/client_secrets",
+            post(realtime::unsupported_route),
+        )
+        .route("/v1/realtime/calls", post(realtime::unsupported_route))
+        .route_layer(middleware::from_fn(client_labels))
+        .route_layer(middleware::from_fn_with_state(
+            store.clone(),
+            authenticate_engine,
+        ))
+}
+
+/// The non-generation workloads, each with its own configured body cap.
+fn workload_routes(store: &Store, engine: &Engine) -> Router<Store> {
+    // Non-generation workloads carry their own configured body caps instead
+    // of the shared 2 MiB limit (transcriptions also cap the file part).
+    let limits = engine.limits().workloads;
+    let capped = |kind: WorkloadKind, route: MethodRouter<Store>| -> MethodRouter<Store> {
+        let bytes = limits.body_bytes(kind).expect("workload body cap");
+        route
+            .layer::<_, std::convert::Infallible>(DefaultBodyLimit::max(bytes))
+            .layer(RequestBodyLimitLayer::new(bytes))
+    };
+    Router::new()
+        .route(
+            "/v1/images/generations",
+            capped(WorkloadKind::Images, post(images::handle)),
+        )
+        .route(
+            "/v1/rerank",
+            capped(WorkloadKind::Rerank, post(rerank::handle)),
+        )
+        .route(
+            "/v1/systemone",
+            capped(WorkloadKind::Systemone, post(systemone::handle)),
+        )
+        .route(
+            "/v1/audio/transcriptions",
+            capped(
+                WorkloadKind::AudioTranscriptions,
+                post(audio::transcriptions),
+            ),
+        )
+        .route(
+            "/v1/audio/speech",
+            capped(WorkloadKind::AudioSpeech, post(audio::speech)),
+        )
+        .route_layer(middleware::from_fn(client_labels))
+        .route_layer(middleware::from_fn_with_state(
+            store.clone(),
+            authenticate_engine,
+        ))
+}
+
+/// The async-job endpoints (videos, files, batches), each with its own cap,
+/// behind the client labels and gateway-key authentication.
+fn job_routes(store: &Store) -> Router<Store> {
+    // Async jobs (`crate::jobs`): video create and the streamed batch-file
+    // upload have their own caps; everything else keeps 2 MiB.
+    let job_limits = crate::jobs::limits();
+    let cap = |bytes: usize, route: MethodRouter<Store>| -> MethodRouter<Store> {
+        route
+            .layer::<_, std::convert::Infallible>(DefaultBodyLimit::max(bytes))
+            .layer(RequestBodyLimitLayer::new(bytes))
+    };
+    let file_bytes = crate::filestore::upload::limits().body_bytes();
+    let small = 2 * 1024 * 1024;
+    Router::new()
+        .route(
+            "/v1/videos",
+            cap(
+                job_limits.video_body_bytes,
+                post(videos::create).get(videos::list),
+            ),
+        )
+        .route(
+            "/v1/videos/{id}",
+            cap(small, get(videos::retrieve).delete(videos::delete)),
+        )
+        .route("/v1/videos/{id}/content", cap(small, get(videos::content)))
+        // Gateway-owned Files API on the encrypted file store (docs/files-api.md).
+        .route(
+            "/v1/files",
+            cap(file_bytes, post(files::upload).get(files::list)),
+        )
+        .route(
+            "/v1/files/{id}",
+            cap(small, get(files::retrieve).delete(files::delete)),
+        )
+        .route("/v1/files/{id}/content", cap(small, get(files::content)))
+        .route(
+            "/v1/batches",
+            cap(small, post(batches::create).get(batches::list)),
+        )
+        .route("/v1/batches/{id}", cap(small, get(batches::retrieve)))
+        .route("/v1/batches/{id}/cancel", cap(small, post(batches::cancel)))
+        .route_layer(middleware::from_fn(client_labels))
+        .route_layer(middleware::from_fn_with_state(store.clone(), authenticate))
+}
+
+/// The identity and management routers (present only with an identity
+/// configuration) and the dashboard upload router, in that order.
+fn dashboard_routes(identity: Option<IdentityState>) -> (Router<Store>, Router<Store>) {
+    let mut root = Router::new();
+    // Dashboard file uploads carry their own cap (GATEWAY_FILES_MAX_BYTES).
+    let mut uploads = Router::new();
+    if let Some(identity) = identity {
+        uploads = crate::management::upload_router(identity.clone());
+        root = root
+            .merge(crate::identity::router(identity.clone()))
+            .merge(crate::management::router(identity));
+    }
+    (root, uploads)
 }
 
 /// Response extension: keep the handler's own `Cache-Control` (public,
