@@ -5,7 +5,6 @@
   "markersBaseline": 58,
   "files": {
     "apps/gateway/src/audit_export.rs": 1342,
-    "apps/gateway/src/billing/v3.rs": 966,
     "apps/gateway/src/filestore/files.rs": 1012,
     "apps/gateway/src/jobs/schedule.rs": 970,
     "apps/gateway/src/management/alerts.rs": 1006,
@@ -18,7 +17,6 @@
   },
   "baseline": {
     "apps/gateway/src/audit_export.rs": 1342,
-    "apps/gateway/src/billing/v3.rs": 966,
     "apps/gateway/src/filestore/files.rs": 1012,
     "apps/gateway/src/jobs/schedule.rs": 1003,
     "apps/gateway/src/management/alerts.rs": 1006,
