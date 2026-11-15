@@ -11,6 +11,9 @@
 use super::*;
 use serde::Serialize;
 
+mod apply_steps;
+use apply_steps::*;
+
 const MAX_REFERENCES: usize = 50;
 /// Admin and member slots besides the owner.
 const MAX_EXTRA_SLOTS: usize = 9;
@@ -486,193 +489,41 @@ fn assignment_plan<'a>(c: &'a Content, b: &ApplyInput) -> Result<Vec<Planned<'a>
 /// selections, the local limits (tighten-only against the live platform
 /// layers) and the slot members. Any failure rolls everything back. The
 /// application is recorded immutably; a replay returns it.
-#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 pub(super) async fn apply(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
     Path(id): Path<Uuid>,
     Json(b): Json<ApplyInput>,
 ) -> Result<Json<Value>, ManagementError> {
-    // Body-only limits before any lock: at most 10 slots listed, each once,
-    // at most 100 people, nobody twice (the canonical digest below relies on it).
-    let people: usize = b.assignments.iter().map(|a| a.user_ids.len()).sum();
-    let distinct_slots = b
-        .assignments
-        .iter()
-        .map(|a| a.slot.as_str())
-        .collect::<std::collections::BTreeSet<_>>()
-        .len();
-    let distinct_people = b
-        .assignments
-        .iter()
-        .flat_map(|a| a.user_ids.iter())
-        .collect::<std::collections::BTreeSet<_>>()
-        .len();
-    if !valid_name(&b.name)
-        || b.version < 1
-        || b.assignments.is_empty()
-        || b.assignments.len() > 10
-        || distinct_slots != b.assignments.len()
-        || people > 100
-        || distinct_people != people
-        || !(1..=128).contains(&b.idempotency_key.len())
-        || !b.idempotency_key.bytes().all(|c| c.is_ascii_graphic())
-    {
-        return Err(invalid().into());
-    }
-    use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(b.idempotency_key.as_bytes()).to_vec();
-    // Canonical: slots by name, each slot's people as a set, so a retry
-    // that lists the same assignments in another order is the same payload.
-    let canonical: std::collections::BTreeMap<&str, std::collections::BTreeSet<Uuid>> = b
-        .assignments
-        .iter()
-        .map(|a| (a.slot.as_str(), a.user_ids.iter().copied().collect()))
-        .collect();
-    let payload = Sha256::digest(
-        serde_json::to_vec(
-            &json!({"template":id,"version":b.version,"name":b.name,"assignments":canonical}),
-        )
-        .map_err(|_| invalid())?,
-    )
-    .to_vec();
+    check_apply_body(&b)?;
+    let (digest, payload) = apply_digests(id, &b)?;
     // The exclusive catalog lock, as workspace creation, and live authority.
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
-    let recorded: Option<(Uuid, Vec<u8>, i32)> = sqlx::query_as("SELECT workspace_id,payload_digest,version FROM workspace_template_applications WHERE applied_by=$1 AND idempotency_digest=$2")
-        .bind(u.user_id)
-        .bind(&digest)
-        .fetch_optional(&mut *tx)
-        .await?;
-    if let Some((ws, old, version)) = recorded {
+    if let Some(recorded) = recorded_application(&mut tx, u.user_id, &digest).await? {
         tx.commit().await?;
-        if old != payload {
-            return Err(ApiError(
-                StatusCode::CONFLICT,
-                "This idempotency key was used for another application",
-            )
-            .into());
-        }
-        return Ok(Json(
-            json!({"workspace_id":ws,"template_id":id,"version":version,"replayed":true}),
-        ));
+        return replay(id, recorded, &payload);
     }
-    let published: Option<(i32, Value, Vec<u8>)> = sqlx::query_as("SELECT version,content,content_hash FROM workspace_template_versions WHERE template_id=$1 AND published_at IS NOT NULL AND retired_at IS NULL")
-        .bind(id)
-        .fetch_optional(&mut *tx)
-        .await?;
-    let exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workspace_templates WHERE id=$1)")
-            .bind(id)
-            .fetch_one(&mut *tx)
-            .await?;
-    if !exists {
-        return Err(missing().into());
-    }
-    // Bound to the version the applier reviewed: a newer, retired or
-    // unpublished version is not applied.
-    let Some((version, content, hash)) = published.filter(|(v, _, _)| *v == b.version) else {
-        return Err(ManagementError::detailed(
-            StatusCode::CONFLICT,
-            "template_version_stale",
-            "This template version is not the published one; review the template again".into(),
-            json!({}),
-        ));
-    };
-    // Re-validated now: references must still exist.
-    // Only a validation refusal is "no longer fits"; storage errors propagate.
-    let c = match validate_content(&mut tx, &content).await {
-        Ok(c) => c,
-        Err(e) if e.0 == StatusCode::BAD_REQUEST => {
-            return Err(ManagementError::detailed(
-                StatusCode::CONFLICT,
-                "template_reference_unavailable",
-                "A catalog or model in this template no longer exists".into(),
-                json!({}),
-            ));
-        }
-        Err(e) => return Err(e.into()),
-    };
+    let (version, content, hash) = reviewed_version(&mut tx, id, b.version).await?;
+    let c = revalidated_content(&mut tx, &content).await?;
     let plan = assignment_plan(&c, &b)?;
     let kind = locks::WorkspaceType::parse(&c.kind).ok_or_else(invalid)?;
     let ws = Uuid::new_v4();
-    // Type and workspace scopes before the first write. The workspace's own
-    // writes below (override, selections, policy) re-take its Workspace scope
-    // through triggers, so the users' scopes, a later class, come after them.
-    locks::exclusive(
+    create_workspace(&mut tx, &u, ws, kind, &c, &b.name).await?;
+    apply_configuration(&mut tx, &u, ws, &c).await?;
+    add_members(&mut tx, &u, ws, &plan).await?;
+    record_application(
         &mut tx,
-        [locks::Scope::Type(kind), locks::Scope::Workspace(ws)],
+        &Application {
+            template: id,
+            version,
+            hash: &hash,
+            workspace: ws,
+            applied_by: u.user_id,
+            digest: &digest,
+            payload: &payload,
+        },
     )
     .await?;
-    sqlx::query("INSERT INTO workspaces(id,name,kind) VALUES($1,$2,$3)")
-        .bind(ws)
-        .bind(&b.name)
-        .bind(&c.kind)
-        .execute(&mut *tx)
-        .await?;
-    audit(
-        &mut tx,
-        &u,
-        Some(ws),
-        "workspace.created",
-        "workspace",
-        Some(ws),
-        json!({"kind":c.kind}),
-    )
-    .await?;
-    if let Some(catalogs) = &c.catalogs.catalog_ids {
-        catalogs::template_catalogs(&mut tx, &u, ws, catalogs).await?;
-    }
-    for model in &c.model_ids {
-        if !catalogs::template_model(&mut tx, &u, ws, *model).await? {
-            return Err(ManagementError::detailed(
-                StatusCode::CONFLICT,
-                "template_model_unavailable",
-                "A model in this template is no longer available from its catalogs".into(),
-                json!({}),
-            ));
-        }
-    }
-    if let Some(limits) = &c.limits
-        && governance::apply_template_limits(&mut tx, &u, ws, limits)
-            .await?
-            .is_none()
-    {
-        return Err(ManagementError::detailed(
-            StatusCode::CONFLICT,
-            "template_limits_exceed_platform",
-            "This template's limits are looser than the platform's for this workspace type".into(),
-            json!({}),
-        ));
-    }
-    // Every member's User scope in one canonical call (key order, not plan
-    // order), after the workspace's writes and before the grants.
-    locks::exclusive(
-        &mut tx,
-        plan.iter().map(|(user, _, _)| locks::Scope::User(*user)),
-    )
-    .await?;
-    for (user, role, slot) in &plan {
-        if !members::template_member(&mut tx, &u, ws, *user, role).await? {
-            return Err(ManagementError::detailed(
-                StatusCode::CONFLICT,
-                "template_assignment_ineligible",
-                "A person assigned to a slot cannot have workspace access".into(),
-                json!({"slot":slot}),
-            ));
-        }
-    }
-    let application = Uuid::now_v7();
-    sqlx::query("INSERT INTO workspace_template_applications(id,template_id,version,content_hash,workspace_id,applied_by,idempotency_digest,payload_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8)")
-        .bind(application)
-        .bind(id)
-        .bind(version)
-        .bind(&hash)
-        .bind(ws)
-        .bind(u.user_id)
-        .bind(&digest)
-        .bind(&payload)
-        .execute(&mut *tx)
-        .await?;
     // On the template, and in the new workspace's own audit log.
     audit(
         &mut tx,

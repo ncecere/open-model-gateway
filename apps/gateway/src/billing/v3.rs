@@ -404,12 +404,8 @@ pub struct Valuation {
     /// and of a complete settlement.
     pub audio: AudioTokenCostComponents,
 }
-#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
-pub fn value(
-    lines: &PriceLines,
-    max: &MaxUnits,
-    obs: &Observed,
-) -> Result<Valuation, BillingError> {
+/// The price lists and the observation must be well formed, and no count may exceed `i64`.
+fn check_observed(lines: &PriceLines, obs: &Observed) -> Result<(), BillingError> {
     lines.validate()?;
     if let Some(b) = obs.billing {
         b.validate()?;
@@ -427,11 +423,66 @@ pub fn value(
     {
         return Err(BillingError::Overflow);
     }
-    let prompt = obs.billing.and_then(|b| b.total_input_tokens);
-    // Indices: Meter::ALL 0..12, audio tokens 12..15, video 15.
-    let mut amounts = [0i64; 16];
-    let mut complete = true;
-    let mut violated = false;
+    Ok(())
+}
+/// Charges per meter slot, and whether the settlement is complete or the hold violated.
+struct Tally {
+    /// Indices: Meter::ALL 0..12, audio tokens 12..15, video 15.
+    amounts: [i64; 16],
+    complete: bool,
+    violated: bool,
+}
+impl Tally {
+    /// Prices one meter's observed `count` into slot `i`, or records why it cannot be.
+    fn price(
+        &mut self,
+        lines: &PriceLines,
+        obs: &Observed,
+        i: usize,
+        meter: Meter,
+        count: Option<u64>,
+    ) -> Result<(), BillingError> {
+        let prompt = obs.billing.and_then(|b| b.total_input_tokens);
+        match group(lines, meter, obs.variant) {
+            Group::NotApplicable => {
+                if count.is_some_and(|n| n > 0) {
+                    self.complete = false;
+                    self.violated = true;
+                }
+            }
+            Group::Missing => {
+                if count != Some(0) {
+                    self.complete = false;
+                    self.violated |= count.is_some_and(|n| n > 0);
+                }
+            }
+            Group::Lines(g) => match count {
+                Some(0) => {}
+                _ if free(&g) => {}
+                None => self.complete = false,
+                Some(n) => match tier(&g, prompt) {
+                    Tier::Line(l) => {
+                        let r = l.rate.ok_or(BillingError::InvalidRate)?;
+                        self.amounts[i] = charge_batch(n, r.microusd_per_batch, r.batch)?;
+                    }
+                    Tier::Undetermined => self.complete = false,
+                    Tier::Unpriced => {
+                        self.complete = false;
+                        self.violated = true;
+                    }
+                },
+            },
+        }
+        Ok(())
+    }
+}
+/// Values every meter against the price lists and the per-meter maximums.
+fn tally_meters(lines: &PriceLines, max: &MaxUnits, obs: &Observed) -> Result<Tally, BillingError> {
+    let mut tally = Tally {
+        amounts: [0i64; 16],
+        complete: true,
+        violated: false,
+    };
     let audio_meters: &[Meter] = if obs.audio.is_some() {
         &Meter::AUDIO_TOKENS
     } else {
@@ -449,45 +500,19 @@ pub fn value(
             Meter::InputTokens => obs.count(meter).or(residual_input),
             _ => obs.count(meter),
         };
-        match group(lines, meter, obs.variant) {
-            Group::NotApplicable => {
-                if count.is_some_and(|n| n > 0) {
-                    complete = false;
-                    violated = true;
-                }
-            }
-            Group::Missing => {
-                if count != Some(0) {
-                    complete = false;
-                    violated |= count.is_some_and(|n| n > 0);
-                }
-            }
-            Group::Lines(g) => match count {
-                Some(0) => {}
-                _ if free(&g) => {}
-                None => complete = false,
-                Some(n) => match tier(&g, prompt) {
-                    Tier::Line(l) => {
-                        let r = l.rate.ok_or(BillingError::InvalidRate)?;
-                        amounts[i] = charge_batch(n, r.microusd_per_batch, r.batch)?;
-                    }
-                    Tier::Undetermined => complete = false,
-                    Tier::Unpriced => {
-                        complete = false;
-                        violated = true;
-                    }
-                },
-            },
-        }
+        tally.price(lines, obs, i, meter, count)?;
         if !meter.is_token()
             && !meter.is_audio_token()
             && let (Some(n), Some(limit)) = (count, max.0.get(&meter))
             && n > *limit
         {
-            violated = true;
+            tally.violated = true;
         }
     }
-    // A not-applicable uncached input contradicts unexplained inclusive input.
+    Ok(tally)
+}
+/// A not-applicable uncached input contradicts unexplained inclusive input.
+fn contradicts_inclusive_input(lines: &PriceLines, obs: &Observed) -> bool {
     if let Some(b) = obs.billing
         && matches!(group(lines, Meter::InputTokens, None), Group::NotApplicable)
         && b.uncached_input_tokens.is_none()
@@ -499,50 +524,70 @@ pub fn value(
             .flatten()
             .sum::<u64>()
             .max(b.cache_write_input_tokens.unwrap_or(0));
-        if total
+        return total
             > b.cache_read_input_tokens
                 .unwrap_or(0)
-                .saturating_add(writes)
-        {
-            complete = false;
-            violated = true;
-        }
+                .saturating_add(writes);
     }
-    let floor: i64 = amounts
-        .iter()
-        .map(|n| i128::from(*n))
-        .sum::<i128>()
-        .try_into()
-        .map_err(|_| BillingError::Overflow)?;
-    let components = complete.then_some((
-        CostComponents {
-            uncached_input_microusd: amounts[0],
-            cache_read_microusd: amounts[2],
-            cache_write_default_microusd: amounts[3],
-            cache_write_5m_microusd: amounts[4],
-            cache_write_1h_microusd: amounts[5],
-            output_microusd: amounts[1],
-        },
-        MeterCostComponents {
-            output_images_microusd: amounts[6],
-            input_characters_microusd: amounts[7],
-            input_audio_microusd: amounts[8],
-            output_audio_microusd: amounts[9],
-            search_units_microusd: amounts[10],
-            requests_microusd: amounts[11],
-            output_video_microusd: amounts[15],
-        },
-    ));
-    Ok(Valuation {
-        components,
-        floor,
-        violated,
-        audio: AudioTokenCostComponents {
-            input_audio_tokens_microusd: amounts[12],
-            cache_read_audio_tokens_microusd: amounts[13],
-            output_audio_tokens_microusd: amounts[14],
-        },
-    })
+    false
+}
+pub fn value(
+    lines: &PriceLines,
+    max: &MaxUnits,
+    obs: &Observed,
+) -> Result<Valuation, BillingError> {
+    check_observed(lines, obs)?;
+    let mut tally = tally_meters(lines, max, obs)?;
+    if contradicts_inclusive_input(lines, obs) {
+        tally.complete = false;
+        tally.violated = true;
+    }
+    tally.into_valuation()
+}
+impl Tally {
+    /// The floor of the known charges and, when complete, the cost components.
+    fn into_valuation(self) -> Result<Valuation, BillingError> {
+        let Tally {
+            amounts,
+            complete,
+            violated,
+        } = self;
+        let floor: i64 = amounts
+            .iter()
+            .map(|n| i128::from(*n))
+            .sum::<i128>()
+            .try_into()
+            .map_err(|_| BillingError::Overflow)?;
+        let components = complete.then_some((
+            CostComponents {
+                uncached_input_microusd: amounts[0],
+                cache_read_microusd: amounts[2],
+                cache_write_default_microusd: amounts[3],
+                cache_write_5m_microusd: amounts[4],
+                cache_write_1h_microusd: amounts[5],
+                output_microusd: amounts[1],
+            },
+            MeterCostComponents {
+                output_images_microusd: amounts[6],
+                input_characters_microusd: amounts[7],
+                input_audio_microusd: amounts[8],
+                output_audio_microusd: amounts[9],
+                search_units_microusd: amounts[10],
+                requests_microusd: amounts[11],
+                output_video_microusd: amounts[15],
+            },
+        ));
+        Ok(Valuation {
+            components,
+            floor,
+            violated,
+            audio: AudioTokenCostComponents {
+                input_audio_tokens_microusd: amounts[12],
+                cache_read_audio_tokens_microusd: amounts[13],
+                output_audio_tokens_microusd: amounts[14],
+            },
+        })
+    }
 }
 /// Uncached input that the price itself proves: a provider that reports only
 /// the inclusive input total (no cache split, as local SGLang/vLLM servers do)
