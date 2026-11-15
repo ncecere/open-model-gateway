@@ -162,7 +162,7 @@ is not a rejection "before processing", so it never settles as a known zero
 | `modelStreamErrorException` | 424 | `upstream_unavailable` | `overloaded_error` | counts as a failure |
 | `modelTimeoutException` (not in the ConverseStream event list; named only by the header) | 408 | `timeout_error` | `api_error` | counts as a failure |
 | any other name, in any casing or form (including the HTTP-path names such as `ThrottlingException` or `AccessDeniedException`), and an empty name | | `upstream_unavailable` | `overloaded_error` | counts as a failure |
-| no `:exception-type` header, or one that is not a string; a `:message-type` `error` frame; a corrupt frame; a modeled exception whose JSON payload has the wrong shape (`null`, an array, `{"message":5}`) | | `invalid_upstream_response` | `api_error` | no effect |
+| no `:exception-type` header, or a last one that is not a string (with several, the last decides, as in the SDK); a `:message-type` `error` frame; a corrupt frame; a modeled exception whose JSON payload has the wrong shape (`null`, an array, `{"message":5}`) | | `invalid_upstream_response` | `api_error` | no effect |
 
 An unknown failure is not evidence of a client fault or a configuration fault
 (those classes do not count against routing health, and a rejection could

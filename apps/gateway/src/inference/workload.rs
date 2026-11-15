@@ -498,6 +498,10 @@ impl Engine {
                     if W::STREAMED {
                         // No failover after the body is returned, and a later
                         // failure is no longer a rejection before processing.
+                        // Speech, the one streamed workload today, always
+                        // carries meters here, which already rules the
+                        // free-rejection rule out; the flag is for a streamed
+                        // workload that attaches without them.
                         guard.telemetry.stream_returned = true;
                         return Ok(W::attach(
                             response,
