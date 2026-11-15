@@ -526,7 +526,7 @@ impl Context {
     /// through that same budget would then drop the root itself, orphaning
     /// every child span that *did* export.
     ///
-    /// `pub(crate)`, not `pub`: `RequestTelemetry` (inference/mod.rs) is the
+    /// `pub(crate)`, not `pub`: `RequestTelemetry` (inference/request_telemetry.rs) is the
     /// only caller, and it calls this at most once per request, guarded by
     /// its own `finished` flag - but a second call from anywhere else must
     /// still be safe rather than growing `self.spans` without bound, so a
