@@ -1,0 +1,88 @@
+# Secret scanning (#596). One config for CI (`secret-scan` job in .github/workflows/ci.yml)
+# and the optional local hook (scripts/secret-scan.py). Pinned scanner: docs/verification.md.
+#
+# The scanner's default rules stay on. This file adds the gateway's own key shapes and a
+# deliberately narrow allowlist. Rules for the allowlist, enforced by
+# tests/supply-chain/secret-scan.test.mjs:
+#   - one exact file per entry (an anchored path, never a directory or a glob);
+#   - the exact value, or the commit for text that is no longer in the tree;
+#   - `condition = "AND"` (the default OR would let the path alone allow the whole file);
+#   - the rule it silences, and the reason.
+# Never allowlist a real credential: rotate it first (docs/verification.md, "Secret scanning").
+# Inline `gitleaks:allow` comments are switched off in CI and the hook, so this file is the
+# only place a finding can be accepted.
+
+title = "open-model-gateway secret scanning"
+
+[extend]
+useDefault = true
+
+# Inference API keys (`omg_<32 hex>.<64 hex>`, apps/gateway/src/auth.rs) and admin tokens
+# (`omg_admin_<32 hex>.<64 hex>`, apps/gateway/src/admin_tokens.rs). The shapes are exact
+# (101 and 107 characters), so a hit is a key and not a lookalike.
+[[rules]]
+id = "omg-gateway-key"
+description = "Open Model Gateway inference API key or admin token"
+regex = '''\bomg_(?:admin_)?[0-9a-f]{32}\.[0-9a-f]{64}\b'''
+keywords = ["omg_"]
+tags = ["key", "open-model-gateway"]
+
+# ---- Allowlist: known test fixtures and false positives ----
+
+[[allowlists]]
+description = "Test-only TLS server key of the OMG Test CA in the cfg(test) module `pki` (apps/gateway/src/audit_export.rs); signs only siem.example.test, used by the SIEM exporter tests."
+condition = "AND"
+targetRules = ["private-key"]
+paths = ['''^apps/gateway/src/audit_export\.rs$''']
+regexes = ['''BG0wawIBAQQgNM/I9lDtGbEloYt9''']
+
+[[allowlists]]
+description = "Test-only TLS client key of the OMG Test CA in the cfg(test) module `pki` (apps/gateway/src/audit_export.rs); used by the SIEM exporter mutual-TLS tests."
+condition = "AND"
+targetRules = ["private-key"]
+paths = ['''^apps/gateway/src/audit_export\.rs$''']
+regexes = ['''BG0wawIBAQQgAxk2rqE1tw7NMsZd''']
+
+[[allowlists]]
+description = "Public Ed25519 test signing key of the mock OIDC provider (the `tests` module of apps/gateway/src/identity/tests.rs, marked there as never used outside the mock provider)."
+condition = "AND"
+targetRules = ["private-key"]
+paths = ['''^apps/gateway/src/identity/tests\.rs$''']
+regexes = ['''MC4CAQAwBQYDK2VwBCIEICWeYPLxoZKHZlQ6rkBi11E9''']
+
+[[allowlists]]
+description = "Placeholder gateway key made of the digits 0123456789abcdef repeated, a constant in the realtime protocol unit tests (apps/gateway/src/protocols/realtime/tests.rs); it never matched a real key."
+condition = "AND"
+targetRules = ["omg-gateway-key"]
+paths = ['''^apps/gateway/src/protocols/realtime/tests\.rs$''']
+regexes = ['''^omg_0123456789abcdef0123456789abcdef\.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$''']
+
+[[allowlists]]
+description = "Base64 of the ASCII text 'secret-key-material-never-printed', a canary string in the backup tests that the tests assert is never printed (tests/backup.test.py)."
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/backup\.test\.py$''']
+regexes = ['''^c2VjcmV0LWtleS1tYXRlcmlhbC1uZXZlci1wcmludGVk$''']
+
+[[allowlists]]
+description = "A URL path (an SDK base URL with a port and prefix) in a web unit test, matched by the generic key rule because of the word 'prefix' (apps/web/src/components/inference-base-url.test.tsx)."
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^apps/web/src/components/inference-base-url\.test\.tsx$''']
+regexes = ['''^8443/prefix/v1/blue/v1$''']
+
+[[allowlists]]
+description = "The SHA-256 of a copied UI registry file named tokens.css in the Bitop lock file; the file name contains 'tokens' (apps/web/bitop-lock.json). Matched on the whole 'name: hash' text so a refreshed hash stays allowed."
+condition = "AND"
+targetRules = ["generic-api-key"]
+regexTarget = "match"
+paths = ['''^apps/web/bitop-lock\.json$''']
+regexes = ['''tokens\.css": "[0-9a-f]{64}"''']
+
+[[allowlists]]
+description = "Documentation prose ('keyless signature, SPDX/provenance') that the generic key rule matched on the word 'keyless'. The sentence is in that one commit only (docs/live-acceptance.md) and no longer in the tree."
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^docs/live-acceptance\.md$''']
+commits = ["64d442dc12278275782843126c5df2bfdc21d679"]
+regexes = ['''^SPDX/provenance$''']

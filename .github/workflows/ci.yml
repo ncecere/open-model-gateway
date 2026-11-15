@@ -25,7 +25,7 @@ permissions:
 # allowlist in tests/supply-chain.test.mjs. Node, helm, kubeconform and age are
 # pinned releases fetched by .github/scripts/fetch-verified.sh, which checks a
 # SHA-256 written in the workflow (.github/actions/setup-node, the helm job, the
-# backup tests). No job installs operating-system packages at run time (#491).
+# backup tests, the secret-scan job's gitleaks). No job installs operating-system packages at run time (#491).
 
 jobs:
   gateway-lint:
@@ -273,6 +273,80 @@ jobs:
             npm audit || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Secret scanning (#596, docs/verification.md "Secret scanning"): gitleaks over the
+  # commits of a pull request or push and over the final tree. Its own job so that no
+  # script of the project and no third-party action runs next to it; the token is
+  # read-only. The scanner is a pinned release fetched by the checksum-verifying script.
+  secret-scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      EVENT_NAME: ${{ github.event_name }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      BEFORE_SHA: ${{ github.event.before }}
+      AFTER_SHA: ${{ github.sha }}
+    steps:
+      # The whole history, so every commit of the range is there (a secret added in one
+      # commit and removed in the next is still in the range) and a forced or first push
+      # can be scanned from the start.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # gitleaks 8.30.1 (MIT). The SHA-256 is the linux_x64 line of the release's
+      # gitleaks_8.30.1_checksums.txt, which also equals the digest GitHub records for the asset.
+      - name: Install gitleaks (pinned release, SHA-256 verified)
+        run: |
+          set -euo pipefail
+          bash .github/scripts/fetch-verified.sh https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb "${RUNNER_TEMP}/gitleaks.tar.gz"
+          mkdir -p "${RUNNER_TEMP}/gitleaks-bin"
+          tar -xzf "${RUNNER_TEMP}/gitleaks.tar.gz" -C "${RUNNER_TEMP}/gitleaks-bin" gitleaks
+          echo "${RUNNER_TEMP}/gitleaks-bin" >> "${GITHUB_PATH}"
+          "${RUNNER_TEMP}/gitleaks-bin/gitleaks" version
+      # Pull request: base..head, every commit the pull request adds (a merge of main into
+      # the branch is excluded by the base). Push: before..after; a new ref or a force push
+      # whose old tip is gone is scanned from the whole history. The tree scan covers what
+      # `git log -p` does not show for merge commits. Findings are redacted completely, an
+      # inline gitleaks:allow comment is ignored, and any finding fails the job.
+      - name: Scan the commits and the tree for secrets
+        run: |
+          set -euo pipefail
+          common=(--config .gitleaks.toml --redact --no-banner --no-color --ignore-gitleaks-allow --verbose --log-level info)
+          # Canary: the scanner and config must still detect a made-up AWS key and a made-up
+          # gateway key, built from pieces here so no such string is in the repository.
+          canary="$(mktemp -d)"
+          printf 'aws_access_key_id = %s%s\n' AKIA ZR7QXMLK3PWNB5TD > "${canary}/aws.txt"
+          printf 'token = omg_%s.%s\n' "$(printf 'ab%.0s' {1..16})" "$(printf 'cd%.0s' {1..32})" > "${canary}/gateway.txt"
+          if report="$(gitleaks dir "${common[@]}" "${canary}" 2>&1)"; then
+            echo "the canary was not detected: the scanner or its config is broken" >&2
+            exit 1
+          fi
+          grep -q 'RuleID:  *aws-access-token' <<<"${report}"
+          grep -q 'RuleID:  *omg-gateway-key' <<<"${report}"
+          rm -rf "${canary}"
+          case "${EVENT_NAME}" in
+            pull_request)
+              log_opts="${BASE_SHA}..${HEAD_SHA}"
+              ;;
+            push)
+              if [ "${BEFORE_SHA}" != "0000000000000000000000000000000000000000" ] && git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+                log_opts="${BEFORE_SHA}..${AFTER_SHA}"
+              else
+                log_opts="${AFTER_SHA}"
+              fi
+              ;;
+            *)
+              echo "unexpected event ${EVENT_NAME}" >&2
+              exit 1
+              ;;
+          esac
+          echo "scanning git log ${log_opts}"
+          gitleaks git "${common[@]}" --log-opts="${log_opts}" .
+          gitleaks dir "${common[@]}" .
 
   browser:
     # Playwright (Chromium) against the real gateway binary + built SPA, a disposable

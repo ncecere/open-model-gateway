@@ -100,10 +100,46 @@ The job also runs `node --test tests/vendored-advisories.test.mjs` with the inst
 | kubeconform | `ci.yml` `helm` | v0.7.0 release tarball, SHA-256 from the release `CHECKSUMS` |
 | Node.js | `.github/actions/setup-node` (all `ci.yml` jobs) | 22.23.3 (the `Dockerfile`'s version) from nodejs.org, SHA-256 from `SHASUMS256.txt` |
 | cargo-deny | `ci.yml` `cargo-deny` | `taiki-e/install-action` at a pinned SHA with `cargo-deny@0.20.2`; it verifies the checksum in its bundled manifest, and the test requires an exact version and the checksum left on |
+| gitleaks | `ci.yml` `secret-scan`; `scripts/secret-scan.py` | 8.30.1 `linux_x64` release tarball, SHA-256 `551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb` from the release's `gitleaks_8.30.1_checksums.txt` (equal to the digest GitHub records for the asset); bump `ci.yml` and `scripts/secret-scan.py` together |
 
 To bump one, change the version in the URL and the checksum together and take the checksum from the vendor's published checksum file.
 
 **Residual risk.** The write-job allowlist is trusted code that holds the job token, and so is what it runs: the Buildx and Docker engine that come with the runner image, BuildKit, and GitHub's own actions (`actions/*`, `github/codeql-action`), pinned by SHA but not audited by us. The runner image itself is GitHub's. The image build (`docker/build-push-action`) fetches Rust crates (locked by `Cargo.lock`) and npm packages (`package-lock.json` integrity hashes) inside the Dockerfile's build stages, and reads the BuildKit `type=gha` layer cache that earlier builds of the same ref wrote; a compromised dependency reaches the image, which is why the image is scanned, attested and tested but not rebuilt from source by anyone else. Not covered by a checksum of ours, and run only in read-only jobs: the Rust toolchain (`dtolnay/rust-toolchain` runs rustup, which verifies component hashes from the channel manifest over TLS; the version it installs is pinned to an exact release by `rust-toolchain.toml`, not the floating `stable` channel — see [Rust toolchain](#rust-toolchain)), Playwright's Chromium (version fixed by `package-lock.json`), CodeQL's bundle and Trivy's vulnerability database. The SARIF file passes from the read-only analysis job to the upload job as data.
+
+### Secret scanning
+
+No secret gets committed (#596). Before this, the protection was `.gitignore` and review; the two incidents that raised the bar (a stolen publish token, malicious wheels) were both secrets or code that review did not see. Two layers now:
+
+**CI (`ci.yml`, job `secret-scan`).** gitleaks 8.30.1 (MIT licence; [project](https://github.com/gitleaks/gitleaks)), fetched by `.github/scripts/fetch-verified.sh` against the SHA-256 in the workflow (the `linux_x64` line of the release's `gitleaks_8.30.1_checksums.txt`; checked also against the digest GitHub records for the asset and a fresh download). No third-party action: the only action is `actions/checkout` (pinned), the token is `contents: read`, and no project script runs in the job. It checks out the whole history (`fetch-depth: 0`, no persisted credentials) and runs, with `--config .gitleaks.toml --redact --ignore-gitleaks-allow --verbose`:
+
+- on a pull request, `gitleaks git --log-opts="<base sha>..<head sha>"`: every commit the pull request adds, so a secret added in one commit and removed in the next is still found. Merges of `main` into the branch are excluded by the base;
+- on a push (to `main`, and `v*` tags), `<before>..<after>`; when the old tip is the zero id or no longer exists (a new ref, a force push) the whole history reachable from the pushed commit;
+- on both, `gitleaks dir .` over the checked-out tree, which also covers what `git log -p` does not show for a merge commit (a conflict resolution);
+- first, a canary: a made-up AWS key and a made-up gateway key, built from pieces in a temporary directory, must be found with the expected rule ids, or the job fails (a broken scanner or config cannot pass quietly).
+
+Findings are redacted completely (`--redact`), no report is written, and any finding fails the job. Forks work the same way: the checkout of a fork's pull request has the pull request's commits and a read-only token. **Required check:** `secret-scan` is a new job, and branch protection does not require it until the owner adds it. It is not a dependency of the `image` job (that would change a pinned job); the owner decides whether to require it.
+
+**Config (`.gitleaks.toml`).** The scanner's default rules plus `omg-gateway-key` (inference keys `omg_<32 hex>.<64 hex>` and admin tokens `omg_admin_...`, from `auth.rs` and `admin_tokens.rs`). The allowlist has one entry per known fixture, each with its reason: one exact file, the exact value (or the commit for text no longer in the tree), `condition = "AND"` and the rule it silences. Directories, globs, stopwords, baselines and `.gitleaksignore` files are refused by `tests/supply-chain/secret-scan.test.mjs`, and inline `gitleaks:allow` comments are ignored by the scan, so the config is the only place a finding is accepted. The config comes from the checkout under test, like the workflow: a pull request that widens it is a change to review. Test fixtures in the repository that need a key-shaped string build it from pieces (`"AKIA".concat(...)`, `"-----BEGIN " + "PRIVATE KEY-----"`), as the tests do.
+
+**Local scan and the optional pre-commit hook.** The same scanner and config run locally through `scripts/secret-scan.py`. Nothing installs it; it fails closed (exit 2, nothing scanned) when `gitleaks` is missing or is not the pinned version, and prints how to install the pinned release (the same `fetch-verified.sh` call as CI). Install once:
+
+```sh
+mkdir -p ~/.local/bin/gitleaks-8.30.1 && cd ~/.local/bin/gitleaks-8.30.1
+bash <repo>/.github/scripts/fetch-verified.sh https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb gitleaks.tar.gz
+tar -xzf gitleaks.tar.gz gitleaks     # then: export GITLEAKS_BIN=~/.local/bin/gitleaks-8.30.1/gitleaks
+```
+
+Other platforms: take the matching asset and its line from `gitleaks_8.30.1_checksums.txt`. To use it as a hook, create `.git/hooks/pre-commit` yourself (mode 755) with `exec python3 -I scripts/secret-scan.py staged`. To check history by hand: `python3 -I scripts/secret-scan.py history`.
+
+**What the local history scan covers.** `--branches --remotes --tags`, not `--all`. Other tools keep private refs in the same repository (editors, agents and checkpointing tools, for example under `refs/t3/`), and those can hold snapshots of untracked files; that is how a local environment file once ended up in a scan of `--all` without ever being tracked. Those refs are not this project's history and CI never has them. To check your own clone completely: `gitleaks git --config .gitleaks.toml --redact --no-banner .` (that scans every ref).
+
+**When the scan flags something.**
+
+1. Treat it as real until shown otherwise. **Rotate or revoke the credential first**, then remove it from the change. Deleting it in a later commit, or rewriting the branch, does not make it safe: it is in the history, in clones and in the CI log of the earlier run (the log shows only redacted values).
+2. Only a test fixture or a false positive (a documented placeholder, a hash, prose) goes into `.gitleaks.toml`, as the narrowest entry (exact file, exact value, rule, reason). Never allowlist a real secret, and never add a path pattern to make a failure go away.
+3. A file that holds secrets and is not tracked belongs in `.gitignore` and `.dockerignore`. `*.env` is ignored in both (a file such as `boat.env` is matched by neither `.env` nor `.env.*`, which is how one was once missed), together with `/.local/` (staging, load test and demo state), `.env*` and `ai.env`; `tests/supply-chain/secret-scan.test.mjs` checks, with `git check-ignore` and a `.dockerignore` matcher, that those places stay out of git and out of the image build context.
+
+**Limits.** Pattern and entropy scanners miss unusual formats: a credential with no recognisable prefix or shape, an encoded or split value, a short password. A custom rule covers only the gateway's own key shapes. The scan cannot prevent a history rewrite or a force push, and it does not look inside binaries or archives. It runs in CI after the push: the commit is on the remote when it fails, so rotation is the remedy, and the local hook is the earlier check. GitHub's own secret scanning and push protection are repository settings the owner turns on; they complement this scan (they know many vendors' token formats and can block the push) and are not replaced by it.
 
 ### Bash for the shell fixtures
 
