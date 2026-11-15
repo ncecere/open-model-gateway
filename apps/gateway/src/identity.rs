@@ -140,7 +140,6 @@ impl IdentityState {
         .await
     }
 
-    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     async fn build(
         store: Store,
         config: Option<IdentityConfig>,
@@ -148,109 +147,14 @@ impl IdentityState {
         clock: jwks::Clock,
     ) -> anyhow::Result<Self> {
         let provider = if let Some(config) = config {
-            let http = OidcHttp::new(config.allow_loopback_http)?;
-            // The issuer must pass the egress policy (#33); say which setting
-            // to change instead of a bare discovery failure.
-            let egress = crate::egress::policy().permit_loopback(config.allow_loopback_http);
-            let issuer = Url::parse(config.issuer.as_str())
-                .map_err(|_| anyhow::anyhow!("Invalid OIDC issuer"))?;
-            crate::egress::check_url(&egress, crate::egress::Purpose::Oidc, &issuer)?;
-            if let Some(host) = issuer
-                .host_str()
-                .filter(|h| !h.starts_with('[') && h.parse::<IpAddr>().is_err())
-            {
-                crate::egress::resolve(
-                    &egress,
-                    crate::egress::Purpose::Oidc,
-                    host,
-                    issuer.port_or_known_default().unwrap_or(443),
-                )
-                .await?;
-            }
-            let transport = |request| http.clone().send(request);
-            let metadata = CoreProviderMetadata::discover_async(config.issuer.clone(), &transport)
-                .await
-                .map_err(|_| anyhow::anyhow!("OIDC discovery validation failed"))?;
-            validate_url(
-                metadata.authorization_endpoint().as_str(),
-                config.allow_loopback_http,
-            )?;
-            let token_endpoint = metadata
-                .token_endpoint()
-                .ok_or_else(|| anyhow::anyhow!("OIDC provider has no token endpoint"))?;
-            validate_url(token_endpoint.as_str(), config.allow_loopback_http)?;
-            // Discovered endpoints may be IP literals, which the resolver never sees.
-            crate::egress::check_url(
-                &egress,
-                crate::egress::Purpose::Oidc,
-                &Url::parse(token_endpoint.as_str())?,
-            )?;
-            let algs: Vec<CoreJwsSigningAlgorithm> = metadata
-                .id_token_signing_alg_values_supported()
-                .iter()
-                .filter(|alg| ASYMMETRIC_ALGS.contains(alg))
-                .cloned()
-                .collect();
-            anyhow::ensure!(
-                !algs.is_empty(),
-                "OIDC provider advertises no supported asymmetric ID-token signing algorithm"
-            );
-            let jwks_uri = metadata.jwks_uri().url().to_string();
-            validate_url(&jwks_uri, config.allow_loopback_http)?;
-            crate::egress::check_url(
-                &egress,
-                crate::egress::Purpose::Oidc,
-                &Url::parse(&jwks_uri)?,
-            )?;
-            let fetch_http = http.clone();
-            let fetcher: jwks::Fetcher = Arc::new(move || {
-                let (http, uri) = (fetch_http.clone(), jwks_uri.clone());
-                Box::pin(http.fetch_jwks(uri))
-            });
-            let jwks = JwksCache::load(fetcher, policy, clock)
-                .await
-                .map_err(|_| anyhow::anyhow!("OIDC JWKS validation failed"))?;
-            let redirect =
-                RedirectUrl::new(format!("{}/api/v1/auth/callback", config.public_origin))
-                    .map_err(|_| anyhow::anyhow!("Invalid OIDC callback URL"))?;
-            let client = EnterpriseClient::from_provider_metadata(
-                metadata,
-                ClientId::new(config.client_id.clone()),
-                config.client_secret.clone().map(ClientSecret::new),
-            )
-            .set_redirect_uri(redirect);
-            let (login_limiter, callback_limiter) = (
-                throttle::Limiter::new(config.login_rate_per_minute),
-                throttle::Limiter::new(config.login_rate_per_minute),
-            );
-            Some(Arc::new(Provider {
-                login_limiter,
-                callback_limiter,
-                login_full_until: std::sync::Mutex::default(),
-                config,
-                client,
-                http,
-                jwks,
-                algs,
-            }))
+            Some(connect_provider(config, policy, clock).await?)
         } else {
             None
         };
         let policy = provider
             .as_ref()
             .map_or_else(SessionPolicy::default, |p| p.config.session_policy);
-        // Reuses whatever the OIDC provider already parsed from the same
-        // env var when configured; parsed independently otherwise, so
-        // admin-token IP resolution works even with no OIDC configured.
-        let trusted_proxies = match &provider {
-            Some(provider) => provider.config.trusted_proxies.clone(),
-            None => match env::var("GATEWAY_TRUSTED_PROXIES") {
-                Ok(value) if !value.trim().is_empty() => throttle::TrustedProxies::parse(&value)?,
-                Ok(_) => anyhow::bail!("GATEWAY_TRUSTED_PROXIES must not be empty"),
-                Err(env::VarError::NotPresent) => throttle::TrustedProxies::default(),
-                Err(_) => anyhow::bail!("GATEWAY_TRUSTED_PROXIES is not valid Unicode"),
-            },
-        };
+        let trusted_proxies = trusted_proxies(provider.as_deref())?;
         Ok(Self {
             store,
             provider,
@@ -353,6 +257,165 @@ impl IdentityState {
             None => serde_json::json!({ "enabled": false }),
         }
     }
+}
+
+/// Configured OIDC sign-in: the issuer, discovered endpoints, signing
+/// algorithms and key set all pass their checks, or startup fails.
+async fn connect_provider(
+    config: IdentityConfig,
+    policy: JwksPolicy,
+    clock: jwks::Clock,
+) -> anyhow::Result<Arc<Provider>> {
+    let http = OidcHttp::new(config.allow_loopback_http)?;
+    // The issuer must pass the egress policy (#33); say which setting
+    // to change instead of a bare discovery failure.
+    let egress = crate::egress::policy().permit_loopback(config.allow_loopback_http);
+    check_issuer(&config, &egress).await?;
+    let metadata = discover_metadata(&http, &config, &egress).await?;
+    let algs = signing_algorithms(&metadata)?;
+    let jwks = load_jwks(&http, &metadata, &config, &egress, policy, clock).await?;
+    let client = enterprise_client(metadata, &config)?;
+    let (login_limiter, callback_limiter) = (
+        throttle::Limiter::new(config.login_rate_per_minute),
+        throttle::Limiter::new(config.login_rate_per_minute),
+    );
+    Ok(Arc::new(Provider {
+        login_limiter,
+        callback_limiter,
+        login_full_until: std::sync::Mutex::default(),
+        config,
+        client,
+        http,
+        jwks,
+        algs,
+    }))
+}
+
+/// The issuer URL passes the egress policy, and its host name resolves to
+/// permitted addresses.
+async fn check_issuer(
+    config: &IdentityConfig,
+    egress: &crate::egress::Policy,
+) -> anyhow::Result<()> {
+    let issuer =
+        Url::parse(config.issuer.as_str()).map_err(|_| anyhow::anyhow!("Invalid OIDC issuer"))?;
+    crate::egress::check_url(egress, crate::egress::Purpose::Oidc, &issuer)?;
+    if let Some(host) = issuer
+        .host_str()
+        .filter(|h| !h.starts_with('[') && h.parse::<IpAddr>().is_err())
+    {
+        crate::egress::resolve(
+            egress,
+            crate::egress::Purpose::Oidc,
+            host,
+            issuer.port_or_known_default().unwrap_or(443),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Provider discovery, then the authorization and token endpoints it
+/// advertises.
+async fn discover_metadata(
+    http: &OidcHttp,
+    config: &IdentityConfig,
+    egress: &crate::egress::Policy,
+) -> anyhow::Result<CoreProviderMetadata> {
+    let transport = |request| http.clone().send(request);
+    let metadata = CoreProviderMetadata::discover_async(config.issuer.clone(), &transport)
+        .await
+        .map_err(|_| anyhow::anyhow!("OIDC discovery validation failed"))?;
+    validate_url(
+        metadata.authorization_endpoint().as_str(),
+        config.allow_loopback_http,
+    )?;
+    let token_endpoint = metadata
+        .token_endpoint()
+        .ok_or_else(|| anyhow::anyhow!("OIDC provider has no token endpoint"))?;
+    validate_url(token_endpoint.as_str(), config.allow_loopback_http)?;
+    // Discovered endpoints may be IP literals, which the resolver never sees.
+    crate::egress::check_url(
+        egress,
+        crate::egress::Purpose::Oidc,
+        &Url::parse(token_endpoint.as_str())?,
+    )?;
+    Ok(metadata)
+}
+
+/// The asymmetric ID-token signing algorithms the provider advertises; at
+/// least one is required.
+fn signing_algorithms(
+    metadata: &CoreProviderMetadata,
+) -> anyhow::Result<Vec<CoreJwsSigningAlgorithm>> {
+    let algs: Vec<CoreJwsSigningAlgorithm> = metadata
+        .id_token_signing_alg_values_supported()
+        .iter()
+        .filter(|alg| ASYMMETRIC_ALGS.contains(alg))
+        .cloned()
+        .collect();
+    anyhow::ensure!(
+        !algs.is_empty(),
+        "OIDC provider advertises no supported asymmetric ID-token signing algorithm"
+    );
+    Ok(algs)
+}
+
+/// The JWKS URI passes the URL and egress checks, then the key set is loaded
+/// and cached.
+async fn load_jwks(
+    http: &OidcHttp,
+    metadata: &CoreProviderMetadata,
+    config: &IdentityConfig,
+    egress: &crate::egress::Policy,
+    policy: JwksPolicy,
+    clock: jwks::Clock,
+) -> anyhow::Result<JwksCache> {
+    let jwks_uri = metadata.jwks_uri().url().to_string();
+    validate_url(&jwks_uri, config.allow_loopback_http)?;
+    crate::egress::check_url(
+        egress,
+        crate::egress::Purpose::Oidc,
+        &Url::parse(&jwks_uri)?,
+    )?;
+    let fetch_http = http.clone();
+    let fetcher: jwks::Fetcher = Arc::new(move || {
+        let (http, uri) = (fetch_http.clone(), jwks_uri.clone());
+        Box::pin(http.fetch_jwks(uri))
+    });
+    JwksCache::load(fetcher, policy, clock)
+        .await
+        .map_err(|_| anyhow::anyhow!("OIDC JWKS validation failed"))
+}
+
+/// The OIDC client with its callback URL.
+fn enterprise_client(
+    metadata: CoreProviderMetadata,
+    config: &IdentityConfig,
+) -> anyhow::Result<EnterpriseClient<EndpointSet, EndpointMaybeSet, EndpointMaybeSet>> {
+    let redirect = RedirectUrl::new(format!("{}/api/v1/auth/callback", config.public_origin))
+        .map_err(|_| anyhow::anyhow!("Invalid OIDC callback URL"))?;
+    Ok(EnterpriseClient::from_provider_metadata(
+        metadata,
+        ClientId::new(config.client_id.clone()),
+        config.client_secret.clone().map(ClientSecret::new),
+    )
+    .set_redirect_uri(redirect))
+}
+
+/// Reuses whatever the OIDC provider already parsed from the same
+/// env var when configured; parsed independently otherwise, so
+/// admin-token IP resolution works even with no OIDC configured.
+fn trusted_proxies(provider: Option<&Provider>) -> anyhow::Result<throttle::TrustedProxies> {
+    Ok(match provider {
+        Some(provider) => provider.config.trusted_proxies.clone(),
+        None => match env::var("GATEWAY_TRUSTED_PROXIES") {
+            Ok(value) if !value.trim().is_empty() => throttle::TrustedProxies::parse(&value)?,
+            Ok(_) => anyhow::bail!("GATEWAY_TRUSTED_PROXIES must not be empty"),
+            Err(env::VarError::NotPresent) => throttle::TrustedProxies::default(),
+            Err(_) => anyhow::bail!("GATEWAY_TRUSTED_PROXIES is not valid Unicode"),
+        },
+    })
 }
 
 #[derive(Clone)]
