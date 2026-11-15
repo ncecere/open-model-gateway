@@ -139,8 +139,154 @@ fn item_metadata(item: &Value, nullable: bool) -> Result<()> {
     }
     Ok(())
 }
+/// The `input`: a user text, or 1 to 4096 items.
+fn input_messages(input: Value, messages: &mut Vec<Message>) -> Result<()> {
+    match input {
+        Value::String(text) => messages.push(message(Role::User, text)),
+        Value::Array(items) if !items.is_empty() && items.len() <= 4096 => {
+            for item in items {
+                input_item(&item, messages)?;
+            }
+        }
+        _ => return Err(InferenceError::InvalidRequest),
+    }
+    Ok(())
+}
+/// One input item, by its type.
+fn input_item(item: &Value, messages: &mut Vec<Message>) -> Result<()> {
+    match item["type"].as_str() {
+        None | Some("message") => message_item(item, messages),
+        Some("function_call") => function_call_item(item, messages),
+        Some("function_call_output") => function_call_output_item(item, messages),
+        _ => Err(InferenceError::InvalidRequest),
+    }
+}
+fn message_item(item: &Value, messages: &mut Vec<Message>) -> Result<()> {
+    fields(item, &["type", "role", "content", "id", "status"])?;
+    item_metadata(item, false)?;
+    if item
+        .get("type")
+        .is_some_and(|v| v.as_str() != Some("message"))
+    {
+        return Err(InferenceError::InvalidRequest);
+    }
+    let role = match item["role"].as_str() {
+        Some("user") => Role::User,
+        Some("assistant") => Role::Assistant,
+        Some("system") => Role::System,
+        Some("developer") => Role::Developer,
+        _ => return Err(InferenceError::InvalidRequest),
+    };
+    let text = message_text(role, &item["content"])?;
+    messages.push(message(role, text));
+    Ok(())
+}
+/// A message's text: a string, or a non-empty list of text parts (assistant
+/// messages may echo `output_text` parts without annotations).
+fn message_text(role: Role, content: &Value) -> Result<String> {
+    Ok(match content {
+        Value::String(s) => s.clone(),
+        Value::Array(parts) if !parts.is_empty() => {
+            let mut text = String::new();
+            for part in parts {
+                if role == Role::Assistant && part["type"] == "output_text" {
+                    fields(part, &["type", "text", "annotations"])?;
+                    if part
+                        .get("annotations")
+                        .is_some_and(|v| v.as_array().is_none_or(|a| !a.is_empty()))
+                    {
+                        return Err(InferenceError::InvalidRequest);
+                    }
+                } else {
+                    fields(part, &["type", "text"])?;
+                }
+                if part["type"] != "input_text"
+                    && !(role == Role::Assistant && part["type"] == "output_text")
+                {
+                    return Err(InferenceError::InvalidRequest);
+                }
+                text.push_str(&string(&part["text"])?);
+            }
+            text
+        }
+        _ => return Err(InferenceError::InvalidRequest),
+    })
+}
+fn function_call_item(item: &Value, messages: &mut Vec<Message>) -> Result<()> {
+    fields(
+        item,
+        &["type", "call_id", "name", "arguments", "id", "status"],
+    )?;
+    item_metadata(item, false)?;
+    let id = string(&item["call_id"])?;
+    let n = string(&item["name"])?;
+    if id.is_empty() || !name(&n) {
+        return Err(InferenceError::InvalidRequest);
+    }
+    messages.push(Message {
+        role: Role::Assistant,
+        content: None,
+        tool_call_id: None,
+        tool_calls: vec![ToolCall {
+            id,
+            name: n,
+            arguments: string(&item["arguments"])?,
+        }],
+    });
+    Ok(())
+}
+fn function_call_output_item(item: &Value, messages: &mut Vec<Message>) -> Result<()> {
+    fields(item, &["type", "call_id", "output", "id", "status"])?;
+    item_metadata(item, true)?;
+    let id = string(&item["call_id"])?;
+    if id.is_empty() {
+        return Err(InferenceError::InvalidRequest);
+    }
+    messages.push(Message {
+        role: Role::Tool,
+        content: Some(string(&item["output"])?),
+        tool_calls: vec![],
+        tool_call_id: Some(id),
+    });
+    Ok(())
+}
+/// Only function tools; `validate` checks names and parameters afterwards.
+fn function_tools(tools: Vec<Function>) -> Result<Vec<FunctionTool>> {
+    tools
+        .into_iter()
+        .map(|t| {
+            if t.kind != "function" {
+                return Err(InferenceError::InvalidRequest);
+            }
+            Ok(FunctionTool {
+                name: t.name,
+                description: t.description,
+                parameters: t.parameters,
+                strict: t.strict,
+            })
+        })
+        .collect::<Result<_>>()
+}
+/// `tool_choice`: a mode string, or a named function.
+fn tool_choice(choice: Option<Value>) -> Result<Option<ToolChoice>> {
+    Ok(match choice {
+        None => None,
+        Some(Value::String(s)) => Some(match s.as_str() {
+            "auto" => ToolChoice::Auto,
+            "none" => ToolChoice::None,
+            "required" => ToolChoice::Required,
+            _ => return Err(InferenceError::InvalidRequest),
+        }),
+        Some(v) => {
+            fields(&v, &["type", "name"])?;
+            if v["type"] != "function" {
+                return Err(InferenceError::InvalidRequest);
+            }
+            Some(ToolChoice::Function(string(&v["name"])?))
+        }
+    })
+}
 impl Request {
-    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     fn normalize(self) -> Result<ChatRequest> {
         if self.store || self.text.is_some_and(|t| t.format.kind != "text") {
             return Err(InferenceError::InvalidRequest);
@@ -149,130 +295,9 @@ impl Request {
         if let Some(instructions) = self.instructions {
             messages.push(message(Role::System, instructions));
         }
-        match self.input {
-            Value::String(text) => messages.push(message(Role::User, text)),
-            Value::Array(items) if !items.is_empty() && items.len() <= 4096 => {
-                for item in items {
-                    match item["type"].as_str() {
-                        None | Some("message") => {
-                            fields(&item, &["type", "role", "content", "id", "status"])?;
-                            item_metadata(&item, false)?;
-                            if item
-                                .get("type")
-                                .is_some_and(|v| v.as_str() != Some("message"))
-                            {
-                                return Err(InferenceError::InvalidRequest);
-                            }
-                            let role = match item["role"].as_str() {
-                                Some("user") => Role::User,
-                                Some("assistant") => Role::Assistant,
-                                Some("system") => Role::System,
-                                Some("developer") => Role::Developer,
-                                _ => return Err(InferenceError::InvalidRequest),
-                            };
-                            let text = match &item["content"] {
-                                Value::String(s) => s.clone(),
-                                Value::Array(parts) if !parts.is_empty() => {
-                                    let mut text = String::new();
-                                    for part in parts {
-                                        if role == Role::Assistant && part["type"] == "output_text"
-                                        {
-                                            fields(part, &["type", "text", "annotations"])?;
-                                            if part.get("annotations").is_some_and(|v| {
-                                                v.as_array().is_none_or(|a| !a.is_empty())
-                                            }) {
-                                                return Err(InferenceError::InvalidRequest);
-                                            }
-                                        } else {
-                                            fields(part, &["type", "text"])?;
-                                        }
-                                        if part["type"] != "input_text"
-                                            && !(role == Role::Assistant
-                                                && part["type"] == "output_text")
-                                        {
-                                            return Err(InferenceError::InvalidRequest);
-                                        }
-                                        text.push_str(&string(&part["text"])?);
-                                    }
-                                    text
-                                }
-                                _ => return Err(InferenceError::InvalidRequest),
-                            };
-                            messages.push(message(role, text));
-                        }
-                        Some("function_call") => {
-                            fields(
-                                &item,
-                                &["type", "call_id", "name", "arguments", "id", "status"],
-                            )?;
-                            item_metadata(&item, false)?;
-                            let id = string(&item["call_id"])?;
-                            let n = string(&item["name"])?;
-                            if id.is_empty() || !name(&n) {
-                                return Err(InferenceError::InvalidRequest);
-                            }
-                            messages.push(Message {
-                                role: Role::Assistant,
-                                content: None,
-                                tool_call_id: None,
-                                tool_calls: vec![ToolCall {
-                                    id,
-                                    name: n,
-                                    arguments: string(&item["arguments"])?,
-                                }],
-                            });
-                        }
-                        Some("function_call_output") => {
-                            fields(&item, &["type", "call_id", "output", "id", "status"])?;
-                            item_metadata(&item, true)?;
-                            let id = string(&item["call_id"])?;
-                            if id.is_empty() {
-                                return Err(InferenceError::InvalidRequest);
-                            }
-                            messages.push(Message {
-                                role: Role::Tool,
-                                content: Some(string(&item["output"])?),
-                                tool_calls: vec![],
-                                tool_call_id: Some(id),
-                            });
-                        }
-                        _ => return Err(InferenceError::InvalidRequest),
-                    }
-                }
-            }
-            _ => return Err(InferenceError::InvalidRequest),
-        }
-        let tools = self
-            .tools
-            .into_iter()
-            .map(|t| {
-                if t.kind != "function" {
-                    return Err(InferenceError::InvalidRequest);
-                }
-                Ok(FunctionTool {
-                    name: t.name,
-                    description: t.description,
-                    parameters: t.parameters,
-                    strict: t.strict,
-                })
-            })
-            .collect::<Result<_>>()?;
-        let tool_choice = match self.tool_choice {
-            None => None,
-            Some(Value::String(s)) => Some(match s.as_str() {
-                "auto" => ToolChoice::Auto,
-                "none" => ToolChoice::None,
-                "required" => ToolChoice::Required,
-                _ => return Err(InferenceError::InvalidRequest),
-            }),
-            Some(v) => {
-                fields(&v, &["type", "name"])?;
-                if v["type"] != "function" {
-                    return Err(InferenceError::InvalidRequest);
-                }
-                Some(ToolChoice::Function(string(&v["name"])?))
-            }
-        };
+        input_messages(self.input, &mut messages)?;
+        let tools = function_tools(self.tools)?;
+        let tool_choice = tool_choice(self.tool_choice)?;
         validate(ChatRequest {
             messages_options: None,
             model: self.model,
