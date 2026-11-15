@@ -19,169 +19,204 @@ pub(super) struct State {
     ids: BTreeSet<String>,
 }
 impl State {
-    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     pub(super) fn push(&mut self, event: aws::ConverseStreamOutput) -> Result<Vec<ChatEvent>> {
         use aws::ConverseStreamOutput as E;
-        let invalid = || InferenceError::InvalidUpstream;
         let mut result = Vec::new();
         match event {
-            E::MessageStart(start) => {
-                if self.started || start.role != aws::ConversationRole::Assistant {
-                    return Err(invalid());
-                }
-                self.started = true;
-            }
-            E::ContentBlockStart(start) => {
-                if !self.started
-                    || self.stopped
-                    || start.content_block_index < 0
-                    || self.blocks.contains_key(&start.content_block_index)
-                    || self.blocks.len() >= MAX_BLOCKS
+            E::MessageStart(start) => self.message_start(&start)?,
+            E::ContentBlockStart(start) => self.block_start(start, &mut result)?,
+            E::ContentBlockDelta(delta) => self.block_delta(delta, &mut result)?,
+            E::ContentBlockStop(stop) => self.block_stop(&stop)?,
+            E::MessageStop(stop) => self.message_stop(&stop, &mut result)?,
+            E::Metadata(metadata) => self.record_metadata(metadata, &mut result)?,
+            _ => return Err(InferenceError::InvalidUpstream),
+        }
+        if self.size > self.limit.unwrap_or(OUTPUT_LIMIT) {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        Ok(result)
+    }
+    /// The one assistant `messageStart`.
+    fn message_start(&mut self, start: &aws::MessageStartEvent) -> Result<()> {
+        if self.started || start.role != aws::ConversationRole::Assistant {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        self.started = true;
+        Ok(())
+    }
+    /// A new content block: text, or a tool use whose id and name are announced.
+    fn block_start(
+        &mut self,
+        start: aws::ContentBlockStartEvent,
+        result: &mut Vec<ChatEvent>,
+    ) -> Result<()> {
+        let invalid = || InferenceError::InvalidUpstream;
+        if !self.started
+            || self.stopped
+            || start.content_block_index < 0
+            || self.blocks.contains_key(&start.content_block_index)
+            || self.blocks.len() >= MAX_BLOCKS
+        {
+            return Err(invalid());
+        }
+        let tool = match start.start {
+            Some(aws::ContentBlockStart::ToolUse(tool)) => {
+                if self.tools as usize >= MAX_TOOLS
+                    || !identifier(&tool.tool_use_id)
+                    || !identifier(&tool.name)
+                    || !self.ids.insert(tool.tool_use_id.clone())
                 {
                     return Err(invalid());
                 }
-                let tool = match start.start {
-                    Some(aws::ContentBlockStart::ToolUse(tool)) => {
-                        if self.tools as usize >= MAX_TOOLS
-                            || !identifier(&tool.tool_use_id)
-                            || !identifier(&tool.name)
-                            || !self.ids.insert(tool.tool_use_id.clone())
-                        {
-                            return Err(invalid());
-                        }
-                        let index = self.tools;
-                        self.tools += 1;
-                        self.size += tool.tool_use_id.len() + tool.name.len();
-                        result.push(ChatEvent::Delta {
-                            text: None,
-                            tool_calls: vec![ToolCallDelta {
-                                index,
-                                id: Some(tool.tool_use_id),
-                                name: Some(tool.name),
-                                arguments: None,
-                            }],
-                        });
-                        Some(index)
-                    }
-                    None => None, // Text blocks can explicitly start with {} or implicitly on first delta.
-                    _ => return Err(invalid()),
-                };
-                self.blocks.insert(
-                    start.content_block_index,
-                    Block {
-                        tool,
-                        arguments: String::new(),
-                        closed: false,
-                    },
-                );
+                let index = self.tools;
+                self.tools += 1;
+                self.size += tool.tool_use_id.len() + tool.name.len();
+                result.push(ChatEvent::Delta {
+                    text: None,
+                    tool_calls: vec![ToolCallDelta {
+                        index,
+                        id: Some(tool.tool_use_id),
+                        name: Some(tool.name),
+                        arguments: None,
+                    }],
+                });
+                Some(index)
             }
-            E::ContentBlockDelta(delta) => {
-                if !self.started || self.stopped || delta.content_block_index < 0 {
-                    return Err(invalid());
-                }
-                if !self.blocks.contains_key(&delta.content_block_index) {
-                    if self.blocks.len() >= MAX_BLOCKS
-                        || !matches!(delta.delta, Some(aws::ContentBlockDelta::Text(_)))
-                    {
-                        return Err(invalid());
-                    }
-                    self.blocks.insert(
-                        delta.content_block_index,
-                        Block {
-                            tool: None,
-                            arguments: String::new(),
-                            closed: false,
-                        },
-                    );
-                }
-                let block = self
-                    .blocks
-                    .get_mut(&delta.content_block_index)
-                    .ok_or_else(invalid)?;
-                if block.closed {
-                    return Err(invalid());
-                }
-                match delta.delta {
-                    Some(aws::ContentBlockDelta::Text(text)) if block.tool.is_none() => {
-                        self.size += text.len();
-                        result.push(ChatEvent::Delta {
-                            text: Some(text),
-                            tool_calls: Vec::new(),
-                        });
-                    }
-                    Some(aws::ContentBlockDelta::ToolUse(tool)) if block.tool.is_some() => {
-                        self.size += tool.input.len();
-                        if self.size > self.limit.unwrap_or(OUTPUT_LIMIT) {
-                            return Err(invalid());
-                        }
-                        block.arguments.push_str(&tool.input);
-                        result.push(ChatEvent::Delta {
-                            text: None,
-                            tool_calls: vec![ToolCallDelta {
-                                index: block.tool.unwrap(),
-                                id: None,
-                                name: None,
-                                arguments: Some(tool.input),
-                            }],
-                        });
-                    }
-                    _ => return Err(invalid()),
-                }
+            None => None, // Text blocks can explicitly start with {} or implicitly on first delta.
+            _ => return Err(invalid()),
+        };
+        self.blocks.insert(
+            start.content_block_index,
+            Block {
+                tool,
+                arguments: String::new(),
+                closed: false,
+            },
+        );
+        Ok(())
+    }
+    /// A text or tool-input delta; a text delta may open its block implicitly.
+    fn block_delta(
+        &mut self,
+        delta: aws::ContentBlockDeltaEvent,
+        result: &mut Vec<ChatEvent>,
+    ) -> Result<()> {
+        let invalid = || InferenceError::InvalidUpstream;
+        if !self.started || self.stopped || delta.content_block_index < 0 {
+            return Err(invalid());
+        }
+        if !self.blocks.contains_key(&delta.content_block_index) {
+            if self.blocks.len() >= MAX_BLOCKS
+                || !matches!(delta.delta, Some(aws::ContentBlockDelta::Text(_)))
+            {
+                return Err(invalid());
             }
-            E::ContentBlockStop(stop) => {
-                if !self.started || self.stopped {
-                    return Err(invalid());
-                }
-                let block = self
-                    .blocks
-                    .get_mut(&stop.content_block_index)
-                    .ok_or_else(invalid)?;
-                if block.closed {
-                    return Err(invalid());
-                }
-                if block.tool.is_some() {
-                    let args: Value =
-                        serde_json::from_str(&block.arguments).map_err(|_| invalid())?;
-                    if !args.is_object() {
-                        return Err(invalid());
-                    }
-                    block.arguments.clear();
-                }
-                block.closed = true;
+            self.blocks.insert(
+                delta.content_block_index,
+                Block {
+                    tool: None,
+                    arguments: String::new(),
+                    closed: false,
+                },
+            );
+        }
+        let block = self
+            .blocks
+            .get_mut(&delta.content_block_index)
+            .ok_or_else(invalid)?;
+        if block.closed {
+            return Err(invalid());
+        }
+        match delta.delta {
+            Some(aws::ContentBlockDelta::Text(text)) if block.tool.is_none() => {
+                self.size += text.len();
+                result.push(ChatEvent::Delta {
+                    text: Some(text),
+                    tool_calls: Vec::new(),
+                });
             }
-            E::MessageStop(stop) => {
-                if !self.started || self.stopped || self.blocks.values().any(|b| !b.closed) {
+            Some(aws::ContentBlockDelta::ToolUse(tool)) if block.tool.is_some() => {
+                self.size += tool.input.len();
+                if self.size > self.limit.unwrap_or(OUTPUT_LIMIT) {
                     return Err(invalid());
                 }
-                let reason = finish(&stop.stop_reason)?;
-                if (reason == FinishReason::ToolCalls) != (self.tools > 0) {
-                    return Err(invalid());
-                }
-                self.stopped = true;
-                result.push(ChatEvent::Finish(reason));
-            }
-            E::Metadata(metadata) => {
-                if !self.stopped || self.metadata {
-                    return Err(invalid());
-                }
-                self.metadata = true;
-                if let Some(value) = metadata.usage {
-                    let mut usage = usage(&value)?;
-                    usage.reported_model = invoked_model(
-                        metadata
-                            .trace
-                            .as_ref()
-                            .and_then(|t| t.prompt_router.as_ref()),
-                    );
-                    result.push(ChatEvent::Usage(usage));
-                }
+                block.arguments.push_str(&tool.input);
+                result.push(ChatEvent::Delta {
+                    text: None,
+                    tool_calls: vec![ToolCallDelta {
+                        index: block.tool.unwrap(),
+                        id: None,
+                        name: None,
+                        arguments: Some(tool.input),
+                    }],
+                });
             }
             _ => return Err(invalid()),
         }
-        if self.size > self.limit.unwrap_or(OUTPUT_LIMIT) {
+        Ok(())
+    }
+    /// Closes a block; a tool block's accumulated arguments must be a JSON object.
+    fn block_stop(&mut self, stop: &aws::ContentBlockStopEvent) -> Result<()> {
+        let invalid = || InferenceError::InvalidUpstream;
+        if !self.started || self.stopped {
             return Err(invalid());
         }
-        Ok(result)
+        let block = self
+            .blocks
+            .get_mut(&stop.content_block_index)
+            .ok_or_else(invalid)?;
+        if block.closed {
+            return Err(invalid());
+        }
+        if block.tool.is_some() {
+            let args: Value = serde_json::from_str(&block.arguments).map_err(|_| invalid())?;
+            if !args.is_object() {
+                return Err(invalid());
+            }
+            block.arguments.clear();
+        }
+        block.closed = true;
+        Ok(())
+    }
+    /// `messageStop`: every block is closed and the reason agrees with the tool calls.
+    fn message_stop(
+        &mut self,
+        stop: &aws::MessageStopEvent,
+        result: &mut Vec<ChatEvent>,
+    ) -> Result<()> {
+        let invalid = || InferenceError::InvalidUpstream;
+        if !self.started || self.stopped || self.blocks.values().any(|b| !b.closed) {
+            return Err(invalid());
+        }
+        let reason = finish(&stop.stop_reason)?;
+        if (reason == FinishReason::ToolCalls) != (self.tools > 0) {
+            return Err(invalid());
+        }
+        self.stopped = true;
+        result.push(ChatEvent::Finish(reason));
+        Ok(())
+    }
+    /// The one trailing `metadata` frame, with its usage.
+    fn record_metadata(
+        &mut self,
+        metadata: aws::ConverseStreamMetadataEvent,
+        result: &mut Vec<ChatEvent>,
+    ) -> Result<()> {
+        if !self.stopped || self.metadata {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        self.metadata = true;
+        if let Some(value) = metadata.usage {
+            let mut usage = usage(&value)?;
+            usage.reported_model = invoked_model(
+                metadata
+                    .trace
+                    .as_ref()
+                    .and_then(|t| t.prompt_router.as_ref()),
+            );
+            result.push(ChatEvent::Usage(usage));
+        }
+        Ok(())
     }
     pub(super) fn end(&self) -> Result<()> {
         // Bedrock has no SSE [DONE] frame. Its terminal sequence is messageStop,
