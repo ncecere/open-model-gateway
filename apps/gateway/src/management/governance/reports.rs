@@ -70,106 +70,148 @@ pub(super) fn decode(s: &str) -> Result<String, ApiError> {
         .map(|s| s.into_owned())
         .map_err(|_| invalid())
 }
-impl Filters {
-    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
-    fn parse(raw: Option<String>, details: bool, csv: bool) -> Result<Self, ApiError> {
-        let mut params = HashMap::new();
-        if let Some(raw) = raw {
-            // The raw (percent-encoded) query: every filter at its character
-            // limit in four-byte characters still fits (#405).
-            if raw.len() > 16_384 {
-                return Err(invalid());
-            }
-            for pair in raw.split('&') {
-                if pair.is_empty() {
-                    return Err(invalid());
-                }
-                let (k, v) = pair.split_once('=').ok_or_else(invalid)?;
-                let k = decode(k)?;
-                let v = decode(v)?;
-                if params.insert(k, v).is_some() {
-                    return Err(invalid());
-                }
-            }
-        }
-        let date = |s: &str| -> Result<NaiveDate, ApiError> {
-            if s.len() != 10 {
-                return Err(invalid());
-            }
-            NaiveDate::parse_from_str(s, "%Y-%m-%d")
-                .map_err(|_| invalid())
-                .and_then(|d| {
-                    if (1..=9999).contains(&d.year()) {
-                        Ok(d)
-                    } else {
-                        Err(invalid())
-                    }
-                })
-        };
-        let start = date(&params.remove("start_date").ok_or_else(invalid)?)?;
-        let end = date(&params.remove("end_date").ok_or_else(invalid)?)?;
-        let days = (end - start).num_days();
-        if !(1..=93).contains(&days)
-            || end
-                > Utc::now()
-                    .date_naive()
-                    .checked_add_signed(TimeDelta::days(1))
-                    .ok_or_else(invalid)?
-        {
+/// The query string as unique, decoded key/value pairs.
+fn query_params(raw: Option<String>) -> Result<HashMap<String, String>, ApiError> {
+    let mut params = HashMap::new();
+    if let Some(raw) = raw {
+        // The raw (percent-encoded) query: every filter at its character
+        // limit in four-byte characters still fits (#405).
+        if raw.len() > 16_384 {
             return Err(invalid());
         }
-        let compare = match params.remove("compare").as_deref() {
-            None | Some("none") => false,
-            Some("previous_period") => true,
-            _ => return Err(invalid()),
-        };
-        let uuid = |s: Option<String>| {
-            s.map(|s| Uuid::parse_str(&s).map_err(|_| invalid()))
-                .transpose()
-        };
-        let workspace = uuid(params.remove("workspace_id"))?;
-        let actor = uuid(params.remove("actor_user_id"))?;
-        let account = uuid(params.remove("service_account_id"))?;
-        let key = uuid(params.remove("key_id"))?;
+        for pair in raw.split('&') {
+            if pair.is_empty() {
+                return Err(invalid());
+            }
+            let (k, v) = pair.split_once('=').ok_or_else(invalid)?;
+            let k = decode(k)?;
+            let v = decode(v)?;
+            if params.insert(k, v).is_some() {
+                return Err(invalid());
+            }
+        }
+    }
+    Ok(params)
+}
+fn report_date(s: &str) -> Result<NaiveDate, ApiError> {
+    if s.len() != 10 {
+        return Err(invalid());
+    }
+    NaiveDate::parse_from_str(s, "%Y-%m-%d")
+        .map_err(|_| invalid())
+        .and_then(|d| {
+            if (1..=9999).contains(&d.year()) {
+                Ok(d)
+            } else {
+                Err(invalid())
+            }
+        })
+}
+/// `start_date` and `end_date`: 1 to 93 days, ending no later than tomorrow.
+fn period(params: &mut HashMap<String, String>) -> Result<(NaiveDate, NaiveDate), ApiError> {
+    let start = report_date(&params.remove("start_date").ok_or_else(invalid)?)?;
+    let end = report_date(&params.remove("end_date").ok_or_else(invalid)?)?;
+    let days = (end - start).num_days();
+    if !(1..=93).contains(&days)
+        || end
+            > Utc::now()
+                .date_naive()
+                .checked_add_signed(TimeDelta::days(1))
+                .ok_or_else(invalid)?
+    {
+        return Err(invalid());
+    }
+    Ok((start, end))
+}
+fn comparison_mode(params: &mut HashMap<String, String>) -> Result<bool, ApiError> {
+    Ok(match params.remove("compare").as_deref() {
+        None | Some("none") => false,
+        Some("previous_period") => true,
+        _ => return Err(invalid()),
+    })
+}
+fn optional_uuid(s: Option<String>) -> Result<Option<Uuid>, ApiError> {
+    s.map(|s| Uuid::parse_str(&s).map_err(|_| invalid()))
+        .transpose()
+}
+/// `cost_center_id`: a cost center, or `unallocated` for none.
+fn cost_center_filter(
+    params: &mut HashMap<String, String>,
+) -> Result<(Option<Uuid>, bool), ApiError> {
+    let cc = params.remove("cost_center_id");
+    let unallocated = cc.as_deref() == Some("unallocated");
+    let cost_center = if unallocated {
+        None
+    } else {
+        optional_uuid(cc)?
+    };
+    Ok((cost_center, unallocated))
+}
+fn model_and_provider(
+    params: &mut HashMap<String, String>,
+) -> Result<(Option<String>, Option<String>), ApiError> {
+    let model = params.remove("model");
+    let provider = params.remove("provider");
+    if model.iter().chain(provider.iter()).any(|s| {
+        s.is_empty() || !crate::text::chars_at_most(s, 200) || s.chars().any(char::is_control)
+    }) {
+        return Err(invalid());
+    }
+    Ok((model, provider))
+}
+fn accounting_status(params: &mut HashMap<String, String>) -> Result<Option<String>, ApiError> {
+    let status = params.remove("accounting_status");
+    if status
+        .as_deref()
+        .is_some_and(|s| !matches!(s, "pending" | "unknown" | "settled" | "missing"))
+    {
+        return Err(invalid());
+    }
+    Ok(status)
+}
+/// `limit` and `offset` (details only); also refuses any parameter left over.
+fn paging(
+    params: &mut HashMap<String, String>,
+    details: bool,
+    csv: bool,
+) -> Result<(Option<i64>, i64), ApiError> {
+    let limit = params
+        .remove("limit")
+        .map(|s| s.parse::<i64>().map_err(|_| invalid()))
+        .transpose()?;
+    let has_offset = params.contains_key("offset");
+    let offset = params
+        .remove("offset")
+        .map(|s| s.parse::<i64>().map_err(|_| invalid()))
+        .transpose()?
+        .unwrap_or(0);
+    if !params.is_empty()
+        || (!details && (limit.is_some() || has_offset))
+        || !(0..=100000).contains(&offset)
+        || limit.is_some_and(|n| !(1..=if csv { 1000 } else { 200 }).contains(&n))
+    {
+        return Err(invalid());
+    }
+    Ok((limit, offset))
+}
+impl Filters {
+    fn parse(raw: Option<String>, details: bool, csv: bool) -> Result<Self, ApiError> {
+        let mut params = query_params(raw)?;
+        let (start, end) = period(&mut params)?;
+        let compare = comparison_mode(&mut params)?;
+        let workspace = optional_uuid(params.remove("workspace_id"))?;
+        let actor = optional_uuid(params.remove("actor_user_id"))?;
+        let account = optional_uuid(params.remove("service_account_id"))?;
+        let key = optional_uuid(params.remove("key_id"))?;
         let states = params
             .remove("status")
             .as_deref()
             .map(crate::management::usage::statuses)
             .transpose()?;
-        let cc = params.remove("cost_center_id");
-        let unallocated = cc.as_deref() == Some("unallocated");
-        let cost_center = if unallocated { None } else { uuid(cc)? };
-        let model = params.remove("model");
-        let provider = params.remove("provider");
-        if model.iter().chain(provider.iter()).any(|s| {
-            s.is_empty() || !crate::text::chars_at_most(s, 200) || s.chars().any(char::is_control)
-        }) {
-            return Err(invalid());
-        }
-        let status = params.remove("accounting_status");
-        if status
-            .as_deref()
-            .is_some_and(|s| !matches!(s, "pending" | "unknown" | "settled" | "missing"))
-        {
-            return Err(invalid());
-        }
-        let limit = params
-            .remove("limit")
-            .map(|s| s.parse::<i64>().map_err(|_| invalid()))
-            .transpose()?;
-        let has_offset = params.contains_key("offset");
-        let offset = params
-            .remove("offset")
-            .map(|s| s.parse::<i64>().map_err(|_| invalid()))
-            .transpose()?
-            .unwrap_or(0);
-        if !params.is_empty()
-            || (!details && (limit.is_some() || has_offset))
-            || !(0..=100000).contains(&offset)
-            || limit.is_some_and(|n| !(1..=if csv { 1000 } else { 200 }).contains(&n))
-        {
-            return Err(invalid());
-        }
+        let (cost_center, unallocated) = cost_center_filter(&mut params)?;
+        let (model, provider) = model_and_provider(&mut params)?;
+        let status = accounting_status(&mut params)?;
+        let (limit, offset) = paging(&mut params, details, csv)?;
         let f = Self {
             start,
             end,
