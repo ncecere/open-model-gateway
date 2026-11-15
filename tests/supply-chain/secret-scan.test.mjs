@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { readLocalFromRepo, root, stepsOf } from "./lib.mjs";
-import { CONFIG_FILE, FETCH, copy, fakes, installStep, jobOf, pinOf, readConfig, scanStep } from "./secret-scan-lib.mjs";
+import { CONFIG_FILE, FETCH, commitAll, copy, fakes, git, gitEnv, installStep, jobOf, pinOf, readConfig, scanStep } from "./secret-scan-lib.mjs";
 
 // ---- the CI job ----
 
@@ -259,7 +259,7 @@ test("the gitleaks config extends the default rules unchanged and has a narrow a
     assert.equal(rule.path, undefined);
   }
   assert.equal(existsSync(join(root, ".gitleaksignore")), false, "no .gitleaksignore (a fingerprint list would silence findings outside the config)");
-  const tracked = spawnSync("git", ["ls-files"], { cwd: root, encoding: "utf8" }).stdout.split("\n");
+  const tracked = spawnSync("git", ["ls-files"], { cwd: root, encoding: "utf8", env: gitEnv() }).stdout.split("\n");
   assert.deepEqual(tracked.filter(f => /(^|\/)\.gitleaksignore$/.test(f)), []);
   assert.deepEqual(tracked.filter(f => /(^|\/)\.gitleaks\.toml$/.test(f) && f !== CONFIG_FILE), [], "one config only");
 });
@@ -390,7 +390,7 @@ const WRITERS = [["scripts/staging.py", ".local"], ["scripts/staging.py", "stagi
 function gitIgnores(gitignore, paths) {
   const dir = mkdtempSync(join(tmpdir(), "gitignore-"));
   try {
-    const git = (...args) => spawnSync("git", ["-c", "core.excludesFile=/dev/null", ...args], { cwd: dir, encoding: "utf8" });
+    const git = (...args) => spawnSync("git", ["-c", "core.excludesFile=/dev/null", ...args], { cwd: dir, encoding: "utf8", env: gitEnv() });
     assert.equal(git("init", "-q").status, 0);
     writeFileSync(join(dir, ".gitignore"), gitignore);
     return Object.fromEntries(paths.map(p => [p, git("check-ignore", "-q", "--no-index", p).status === 0]));
@@ -443,10 +443,10 @@ test("generated-secret locations are ignored by git and absent from the image bu
 });
 
 test("the tracked example files are tracked and no tracked file is matched by an ignore rule", () => {
-  const tracked = new Set(spawnSync("git", ["ls-files"], { cwd: root, encoding: "utf8" }).stdout.split("\n"));
+  const tracked = new Set(spawnSync("git", ["ls-files"], { cwd: root, encoding: "utf8", env: gitEnv() }).stdout.split("\n"));
   for (const p of TRACKED_EXAMPLES) assert.ok(tracked.has(p), p);
   assert.deepEqual([...tracked].filter(f => /\.env$/.test(f)), [], "no tracked file ends in .env");
-  const ignoredButTracked = spawnSync("git", ["-c", "core.excludesFile=/dev/null", "ls-files", "-ci", "--exclude-standard"], { cwd: root, encoding: "utf8" });
+  const ignoredButTracked = spawnSync("git", ["-c", "core.excludesFile=/dev/null", "ls-files", "-ci", "--exclude-standard"], { cwd: root, encoding: "utf8", env: gitEnv() });
   assert.equal(ignoredButTracked.status, 0, ignoredButTracked.stderr);
   assert.equal(ignoredButTracked.stdout.trim(), "", "a tracked file is also ignored");
 });
@@ -514,4 +514,52 @@ test("the made-up credential generators produce the shapes the rules look for", 
   assert.match(fakes.gateway(), /^omg_[0-9a-f]{32}\.[0-9a-f]{64}$/);
   assert.match(fakes.session(), /^omg_session=[0-9a-f]{64}$/);
   assert.match(fakes.fileKey(), /^GATEWAY_FILE_KEYS=k\d{4}:[A-Za-z0-9]{43}=$/);
+});
+
+// git sets GIT_DIR and GIT_INDEX_FILE when it runs a hook, and neither `cwd` nor `git -C`
+// overrides them: a `git init` that inherits them re-initialises that repository (from a
+// linked worktree it is marked bare) and never creates the scratch one. Found when this
+// suite, run that way, did it to a real clone. So the suites' git calls drop every inherited
+// GIT_* variable (gitEnv here, the same filter in the other fixtures).
+test("the git fixtures act on their own repository when GIT_DIR is inherited", t => {
+  const sentinel = mkdtempSync(join(tmpdir(), "inherited-git-"));
+  const scratch = mkdtempSync(join(tmpdir(), "inherited-git-"));
+  t.after(() => { rmSync(sentinel, { recursive: true, force: true }); rmSync(scratch, { recursive: true, force: true }); });
+  git(sentinel, "init", "--quiet");
+  const state = () => `${git(sentinel, "config", "--local", "--list")}\n${git(sentinel, "for-each-ref")}\n${git(sentinel, "status", "--porcelain")}`;
+  const before = state();
+  const inherited = { GIT_DIR: process.env.GIT_DIR, GIT_INDEX_FILE: process.env.GIT_INDEX_FILE };
+  // As from a hook of a linked worktree: a git directory that does not end in /.git.
+  process.env.GIT_DIR = join(sentinel, ".git", "worktrees", "none");
+  process.env.GIT_INDEX_FILE = join(sentinel, ".git", "index");
+  try {
+    assert.deepEqual(Object.keys(gitEnv()).filter(key => ["GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_COMMON_DIR"].includes(key)), []);
+    git(scratch, "init", "--quiet");
+    writeFileSync(join(scratch, "a.txt"), "a\n");
+    commitAll(scratch, "fixture");
+  } finally {
+    for (const [key, value] of Object.entries(inherited)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+  assert.ok(existsSync(join(scratch, ".git")), "the scratch repository was created");
+  assert.equal(state(), before, "the inherited repository was not touched");
+});
+
+// Every direct git call in a test file names its environment. The whole call is read, so
+// one spread over several lines counts, and so does a new test file.
+test("no test file runs git with the inherited GIT_* environment", () => {
+  const files = spawnSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "tests"], { cwd: root, encoding: "utf8", env: gitEnv() });
+  assert.equal(files.status, 0, files.stderr);
+  const READ_ONLY = { "tests/supply-chain/policy.mjs": 2, "tests/conflict-markers.test.mjs": 1 }; // `git ls-files` of the checkout, nothing written
+  const bare = {};
+  for (const file of files.stdout.split("\0").filter(name => /\.(?:[cm]?[jt]sx?)$/.test(name) && existsSync(join(root, name)))) {
+    const text = readLocalFromRepo(file);
+    for (const match of text.matchAll(/\b(?:spawnSync|execFileSync|spawn|execFile)\(\s*["']git["']/g)) {
+      let depth = 0, end = match.index;
+      for (; end < text.length; end++) { if (text[end] === "(") depth++; else if (text[end] === ")" && --depth === 0) break; }
+      if (!/\benv:\s*(?:gitEnv\(\)|\{\s*\.\.\.gitEnv\(\))/.test(text.slice(match.index, end))) bare[file] = (bare[file] ?? 0) + 1;
+    }
+  }
+  assert.deepEqual(bare, READ_ONLY, "git calls without env: gitEnv() (listed read-only calls excepted)");
+  assert.match(readLocalFromRepo("tests/vendored-advisories.test.mjs"), /filter\(\(\[key\]\) => !key\.startsWith\("GIT_"\)\)/, "the vendored-advisories fixture drops inherited GIT_* variables");
+  assert.match(readLocalFromRepo("tests/spark-env.test.py"), /for _name in \[name for name in os\.environ if name\.startswith\("GIT_"\)\]:\n    del os\.environ\[_name\]/, "the spark-env tests drop inherited GIT_* variables");
 });

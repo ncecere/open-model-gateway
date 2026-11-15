@@ -15,7 +15,8 @@ const output = r => `${r.stdout ?? ""}${r.stderr ?? ""}`;
 function ok(r) { assert.equal(r.status, 0, output(r)); return r.stdout; }
 function fixture(vendor = true) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "omg-vendored-advisories-")));
-  const env = { ...process.env, CARGO_HOME: join(root, "cargo-home"), CARGO_NET_OFFLINE: "true", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" };
+  // Inherited GIT_* variables (git sets GIT_DIR when it runs a hook) would point `git init` at another repository.
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))), CARGO_HOME: join(root, "cargo-home"), CARGO_NET_OFFLINE: "true", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0" };
   const put = (path, text) => { mkdirSync(join(root, path, ".."), { recursive: true }); writeFileSync(join(root, path), text); };
   const manifest = `[workspace]\nmembers = ["app"]\nexclude = ["vendor/smallvec"]\nresolver = "3"\n`;
   put("Cargo.toml", manifest);

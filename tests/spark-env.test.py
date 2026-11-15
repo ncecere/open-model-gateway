@@ -329,6 +329,33 @@ class Manifests(unittest.TestCase):
             self.assertEqual(spark.job_state(text), "running")
 
 
+# git sets GIT_DIR and GIT_INDEX_FILE when it runs a hook, and `git -C folder` does not
+# override them: the fixture below and spark-env.py's own git calls would then commit into,
+# tag and re-initialise that repository instead of the temporary one (#596 follow-up).
+for _name in [name for name in os.environ if name.startswith("GIT_")]:
+    del os.environ[_name]
+
+
+class InheritedGit(unittest.TestCase):
+    def test_no_git_variable_reaches_the_fixtures(self):
+        self.assertEqual([name for name in os.environ if name.startswith("GIT_")], [])
+
+    def test_the_fixture_repository_is_its_own(self):
+        with tempfile.TemporaryDirectory() as sentinel, tempfile.TemporaryDirectory() as folder:
+            git_repository(sentinel)
+            before = subprocess.run(["git", "-C", sentinel, "for-each-ref"], check=True, capture_output=True, text=True).stdout
+            os.environ["GIT_DIR"] = str(Path(sentinel) / ".git")
+            try:
+                with self.assertRaises(AssertionError):
+                    self.assertEqual([name for name in os.environ if name.startswith("GIT_")], [])
+            finally:
+                del os.environ["GIT_DIR"]
+            git_repository(folder)
+            self.assertTrue((Path(folder) / ".git").is_dir())
+            after = subprocess.run(["git", "-C", sentinel, "for-each-ref"], check=True, capture_output=True, text=True).stdout
+            self.assertEqual(before, after)
+
+
 def git_repository(folder):
     def git(*args):
         return subprocess.run(["git", "-C", folder, *args], check=True, capture_output=True, text=True,
