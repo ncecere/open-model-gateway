@@ -196,16 +196,15 @@ impl State {
 
 /// Classifies a failed receive. An exception frame is named by its
 /// `:exception-type` header, which AWS always sends; the SDK exposes it as the
-/// typed variant, or in the raw frame for a type the ConverseStream model does
-/// not list. Its JSON payload is `{"message": ...}` with no code, and neither
-/// that payload nor the message text is ever read for the class.
+/// typed variant, or (for a type the ConverseStream model does not list, or a
+/// payload the SDK could not parse) in the raw frame. The JSON payload is
+/// `{"message": ...}` with no code, and neither it nor the message text is
+/// ever read for the class.
 ///
-/// `messages` marks the Anthropic Messages protocol, where a provider-reported
-/// unavailability is an overload (HTTP 529 / `overloaded_error`); for the other
-/// client protocols it stays `UpstreamUnavailable`. This is the split
-/// `sdk_messages_error` applies to the same exception from an HTTP response.
-/// Anything that is not an exception frame (a transport failure, a corrupt or
-/// `:message-type: error` frame) fails closed as `InvalidUpstream`.
+/// A frame without a string `:exception-type` header is rejected by the SDK's
+/// header parsing before any exception exists, so it arrives as a response
+/// error, not a service error, like any transport, corrupt or
+/// `:message-type: error` frame: `InvalidUpstream`, failing closed.
 fn receive_error(
     error: &SdkError<aws::error::ConverseStreamOutputError, RawMessage>,
     messages: bool,
@@ -217,27 +216,49 @@ fn receive_error(
         Some(Exception::ModelStreamErrorException(_)) => "modelStreamErrorException",
         Some(Exception::ValidationException(_)) => "validationException",
         Some(Exception::ThrottlingException(_)) => "throttlingException",
-        Some(Exception::ServiceUnavailableException(_)) => {
-            return if messages {
-                InferenceError::Overloaded
-            } else {
-                InferenceError::UpstreamUnavailable
-            };
-        }
-        // Not modeled here (for example `modelTimeoutException`): only the
-        // frame header names it. No header, or an unknown name, is unclassified.
+        Some(Exception::ServiceUnavailableException(_)) => "serviceUnavailableException",
+        // Everything else the SDK reports as a service error: a type it does
+        // not model (for example `modelTimeoutException`), the SDK's
+        // `Unhandled` (a payload it could not parse), and any variant a later
+        // SDK adds. Only the frame names it; the SDK keeps the last of
+        // repeated headers, and so does this.
         Some(_) => match error.raw_response() {
             Some(RawMessage::Decoded(frame)) => frame
                 .headers()
                 .iter()
+                .rev()
                 .find(|h| h.name().as_str() == ":exception-type")
                 .and_then(|h| h.value().as_string().ok())
-                .map(|name| name.as_str()),
-            _ => None,
-        }
-        .unwrap_or_default(),
+                .map_or("", |name| name.as_str()),
+            _ => "",
+        },
     };
-    service_error(Some(name).filter(|name| !name.is_empty()))
+    exception_class(name, messages)
+}
+
+/// The class of a ConverseStream exception name. Only the documented
+/// lowerCamel names are classified; any other name, in any casing or form, is
+/// an unknown failure and stays `UpstreamUnavailable`: not evidence of a
+/// client fault or a configuration fault (those classes do not count against
+/// routing health, and a rejection can settle as a free known zero), nor of a
+/// safe capacity condition. This is deliberately not `service_error`, the
+/// table for an HTTP error response.
+///
+/// `messages` marks the Anthropic Messages protocol, where a provider-reported
+/// unavailability is an overload (HTTP 529 / `overloaded_error`); for the other
+/// client protocols it stays `UpstreamUnavailable`, the split
+/// `sdk_messages_error` applies to the same exception from an HTTP response.
+fn exception_class(name: &str, messages: bool) -> InferenceError {
+    match name {
+        "throttlingException" => InferenceError::Busy,
+        "validationException" => InferenceError::UpstreamRejected,
+        "modelTimeoutException" => InferenceError::Timeout,
+        "serviceUnavailableException" if messages => InferenceError::Overloaded,
+        // `internalServerException` and `modelStreamErrorException` (AWS:
+        // "Retry your request"), a non-Messages `serviceUnavailableException`,
+        // and every other name.
+        _ => InferenceError::UpstreamUnavailable,
+    }
 }
 
 pub(super) fn decode(

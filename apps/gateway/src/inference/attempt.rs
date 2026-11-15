@@ -462,6 +462,10 @@ fn track_stream(
     permit: SharedPermit,
     span: AttemptSpan<'_>,
 ) -> types::EventStream {
+    // From here on the caller holds a response stream: a failure is never a
+    // rejection before processing (see `AttemptTelemetry::stream_returned`).
+    let mut guard = guard;
+    guard.telemetry.stream_returned = true;
     // The watchdog drops transport at the deadline even if a slow
     // downstream never polls the returned stream again.
     let mut upstream = deadline_stream::DeadlineStream::new(upstream, deadline, Some(permit));

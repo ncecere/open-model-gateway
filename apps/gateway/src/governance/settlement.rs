@@ -421,18 +421,22 @@ async fn pinned_v3_lines(
 }
 /// A failed attempt settles at a known zero only when all of these hold: the
 /// provider rejected the request before processing (`upstream_rejected`: a 4xx
-/// validation, moderation or filtered/missing-model response), it reported no
-/// usage at all (no token, meter or nonzero provider-cost evidence), and every
-/// meter of the pinned v3 price is explicitly free or not applicable. Anything
-/// else (other failures, partial usage, unpriced/missing/positive meters, v1/v2)
-/// stays unknown.
+/// validation, moderation or filtered/missing-model response), no response
+/// stream had been returned yet (once the provider accepted the request and
+/// answered, a later rejection says nothing about what it processed), it
+/// reported no usage at all (no token, meter or nonzero provider-cost
+/// evidence), and every meter of the pinned v3 price is explicitly free or not
+/// applicable. Anything else (other failures, partial usage,
+/// unpriced/missing/positive meters, v1/v2) stays unknown.
 async fn free_rejection(
     tx: &mut Tx<'_>,
     r: &Reservation,
     record: &ExecutionFinish,
+    stream_returned: bool,
 ) -> Result<bool, InferenceError> {
     let u = record.usage;
-    if record.outcome != Outcome::Failed
+    if stream_returned
+        || record.outcome != Outcome::Failed
         || !matches!(
             record.error,
             Some(InferenceError::UpstreamRejected | InferenceError::ContextLength)
@@ -565,7 +569,7 @@ async fn finish_unobserved(
     let mut usage = workload_usage(&r, record.usage, InferenceError::Storage)?;
     // A free price's pre-processing rejection processed no tokens: record the
     // semantic zeros a settled row requires (see `free_rejection`).
-    let free = free_rejection(&mut tx, &r, record).await?;
+    let free = free_rejection(&mut tx, &r, record, telemetry.stream_returned).await?;
     if free {
         usage.input_tokens.get_or_insert(0);
         usage.output_tokens.get_or_insert(0);

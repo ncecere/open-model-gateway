@@ -408,6 +408,9 @@ impl RealtimeSession {
                 finish_reason: finish,
                 time_to_first_token_ms: self.first_output_ms,
                 generation_ms: Some(millis(self.dispatched.elapsed())),
+                // A session only ends in `UpstreamRejected` when the upstream
+                // refuses its initial configuration, before it is established.
+                stream_returned: false,
             },
             unopened_request: self.requested,
             window: self

@@ -402,6 +402,53 @@ async fn free_price_pre_processing_rejection_settles_known_zero(pool: PgPool) {
     assert_eq!(ledger, ("settlement".into(), Some(0)));
 }
 
+/// #486: a rejection that arrives inside a returned stream is not a rejection
+/// "before processing", whatever the price: the provider accepted the request,
+/// so usage is unknown and the hold stays. The same rejection as an error
+/// before any stream (`stream_returned` false, as `finish` passes) still
+/// settles as a known zero on a free price.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn free_price_rejection_inside_a_returned_stream_stays_unknown(pool: PgPool) {
+    use crate::inference::repository::AttemptTelemetry;
+    let f = fixture(pool).await;
+    v3(&f, free_lines(), json!({})).await;
+    for error in [
+        InferenceError::UpstreamRejected,
+        InferenceError::ContextLength,
+    ] {
+        for stream_returned in [false, true] {
+            let start = f.start();
+            admit(&f.store, &start, &request(), 30).await.unwrap();
+            let telemetry = AttemptTelemetry {
+                stream_returned,
+                ..Default::default()
+            };
+            finish_with_telemetry(&f.store, &rejected(start.id, error), &telemetry)
+                .await
+                .unwrap();
+            let expected = if stream_returned {
+                ("unknown".into(), Some(0), None, false)
+            } else {
+                ("settled".into(), Some(0), Some(0), false)
+            };
+            assert_eq!(
+                amounts(&f, start.id).await,
+                expected,
+                "{error:?} stream_returned={stream_returned}"
+            );
+            let (input, output): (Option<i64>, Option<i64>) = sqlx::query_as(
+                "SELECT input_tokens,output_tokens FROM inference_executions WHERE id=$1",
+            )
+            .bind(start.id)
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+            let tokens = if stream_returned { None } else { Some(0) };
+            assert_eq!((input, output), (tokens, tokens), "{error:?}");
+        }
+    }
+}
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn messages_context_length_keeps_existing_rejection_hold_rules(pool: PgPool) {
     let f = fixture(pool).await;

@@ -102,6 +102,23 @@ pub(crate) async fn add_deployment(
     upstream_model: &str,
     order: i64,
 ) -> Uuid {
+    let deployment =
+        add_unpriced_deployment(f, provider, credential_ref, region, upstream_model, order).await;
+    sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version) VALUES($1,$2,1000000,1000000,1000,1000,1)")
+        .bind(Uuid::new_v4()).bind(deployment)
+        .execute(&f.store.pool).await.unwrap();
+    deployment
+}
+
+/// [`add_deployment`] without a price, for a test that pins its own.
+pub(crate) async fn add_unpriced_deployment(
+    f: &Fixture,
+    provider: &str,
+    credential_ref: &str,
+    region: Option<&str>,
+    upstream_model: &str,
+    order: i64,
+) -> Uuid {
     let connection = Uuid::new_v4();
     sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref,region,enabled) VALUES($1,$2,$3,$4,$5,true)")
         .bind(connection).bind(format!("{provider} test")).bind(provider).bind(credential_ref).bind(region)
@@ -109,9 +126,6 @@ pub(crate) async fn add_deployment(
     let deployment = Uuid::new_v4();
     sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model,enabled,created_at) VALUES($1,$2,$3,$4,true,clock_timestamp()+$5*interval '1 second')")
         .bind(deployment).bind(f.model).bind(connection).bind(upstream_model).bind(order)
-        .execute(&f.store.pool).await.unwrap();
-    sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version) VALUES($1,$2,1000000,1000000,1000,1000,1)")
-        .bind(Uuid::new_v4()).bind(deployment)
         .execute(&f.store.pool).await.unwrap();
     deployment
 }
