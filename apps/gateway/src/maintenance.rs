@@ -73,7 +73,6 @@ const SETTINGS_REFRESH: Duration = Duration::from_secs(60);
 /// `retention_days` is the environment override; without it the
 /// installation setting applies. Compaction never touches the ledger,
 /// reservations, prices or audit history.
-#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 pub fn start(store: Store, retention_days: Option<i32>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(5));
@@ -83,191 +82,208 @@ pub fn start(store: Store, retention_days: Option<i32>) -> tokio::task::JoinHand
         let mut settings_seen: Option<(u64, std::time::Instant)> = None;
         loop {
             tick.tick().await;
-            let versions = &store.caches.versions;
-            let settings_version = versions.version(crate::notify::Topic::Settings);
-            let due = match settings_seen {
-                Some((seen, at)) => {
-                    !versions.fresh()
-                        || seen != settings_version
-                        || at.elapsed() >= SETTINGS_REFRESH
-                }
-                None => true,
-            };
-            if due {
-                match tokio::time::timeout(Duration::from_secs(2), refresh_runtime_settings(&store))
-                    .await
-                {
-                    Ok(Ok(days)) => {
-                        installation_retention = days;
-                        settings_seen = Some((settings_version, std::time::Instant::now()));
-                    }
-                    _ => {
-                        tracing::warn!("installation settings refresh failed; keeping last values")
-                    }
-                }
-            }
-            match tokio::time::timeout(
-                Duration::from_secs(4),
-                crate::governance::reconcile_expired(&store, 100),
-            )
-            .await
-            {
-                Ok(Ok(n)) if n > 0 => tracing::info!(
-                    executions = n,
-                    "expired execution leases reconciled; unknown cost retained"
-                ),
-                Ok(Ok(_)) => {}
-                _ => tracing::warn!("execution reconciliation incomplete; retrying next interval"),
-            }
-            // This replica's scope-lock waits (0036), every tick: the
-            // `admission_ceiling` alert reads them from the database.
-            match tokio::time::timeout(
-                Duration::from_secs(2),
-                crate::governance::pressure::flush(&store),
-            )
-            .await
-            {
-                Ok(Ok(_)) => {}
-                result => {
-                    if let Ok(Err(error)) = result {
-                        crate::db::accounting_failure::maintenance_error(&error);
-                    }
-                    crate::metrics::METRICS.observe_collection_error("scope_lock_waits");
-                }
-            }
+            refresh_settings_when_due(&store, &mut installation_retention, &mut settings_seen)
+                .await;
+            reconcile_expired_leases(&store).await;
+            flush_scope_lock_waits(&store).await;
             // Minute rate counters admission no longer reads (0024), every minute.
             if counter.is_multiple_of(12) {
-                // Independent background trace roots (#98): no workspace,
-                // user or request data, so each is its own root span,
-                // regardless of whether this tick actually held the lease.
-                let start = crate::telemetry::now_unix_nanos();
-                singleton(
-                    &store,
-                    crate::leases::Lease::Maintenance,
-                    crate::ops_log::Job::LockWaitPrune,
-                    |fence| {
-                        let store = store.clone();
-                        async move {
-                            crate::governance::pressure::prune_fenced(
-                                &store,
-                                10_000,
-                                fence.as_ref(),
-                            )
-                            .await
-                        }
-                    },
-                )
-                .await;
-                if let Some(traces) = store.traces() {
-                    traces.record_background(
-                        crate::telemetry::BackgroundSpan::LockWaitPrune,
-                        start,
-                        crate::telemetry::now_unix_nanos(),
-                    );
-                }
-                let start = crate::telemetry::now_unix_nanos();
-                singleton(
-                    &store,
-                    crate::leases::Lease::Maintenance,
-                    crate::ops_log::Job::RatePrune,
-                    |fence| {
-                        let store = store.clone();
-                        async move {
-                            crate::governance::rates::prune_fenced(&store, 10_000, fence.as_ref())
-                                .await
-                        }
-                    },
-                )
-                .await;
-                if let Some(traces) = store.traces() {
-                    traces.record_background(
-                        crate::telemetry::BackgroundSpan::RatePrune,
-                        start,
-                        crate::telemetry::now_unix_nanos(),
-                    );
-                }
+                prune_lock_waits_and_rate_counters(&store).await;
             }
             // Expired sign-in attempts every minute (#80): far more than the
             // pending-attempt cap lets anyone create in a minute.
             if counter.is_multiple_of(12) {
-                singleton(
-                    &store,
-                    crate::leases::Lease::Maintenance,
-                    crate::ops_log::Job::LoginAttemptPrune,
-                    |fence| {
-                        let store = store.clone();
-                        async move {
-                            crate::identity::prune_login_attempts_fenced(
-                                &store,
-                                10_000,
-                                fence.as_ref(),
-                            )
-                            .await
-                        }
-                    },
-                )
-                .await;
+                prune_login_attempts(&store).await;
             }
             // Sessions that ended more than 30 days ago, hourly (#80).
             if counter.is_multiple_of(720) {
-                singleton(
-                    &store,
-                    crate::leases::Lease::Maintenance,
-                    crate::ops_log::Job::SessionPrune,
-                    |fence| {
-                        let store = store.clone();
-                        async move {
-                            crate::identity::prune_sessions_fenced(&store, 10_000, fence.as_ref())
-                                .await
-                        }
-                    },
-                )
-                .await;
+                prune_ended_sessions(&store).await;
             }
             // Storage usage (not charged): record completed hours every 5 minutes.
             if counter.is_multiple_of(60) {
-                singleton(
-                    &store,
-                    crate::leases::Lease::Maintenance,
-                    crate::ops_log::Job::StorageUsage,
-                    |fence| {
-                        let store = store.clone();
-                        async move {
-                            crate::filestore::usage::record_hours_fenced(&store, 48, fence.as_ref())
-                                .await
-                        }
-                    },
-                )
-                .await;
+                record_storage_usage_hours(&store).await;
             }
             if counter.is_multiple_of(720)
                 && let Some(days) = retention_days.or(installation_retention)
             {
-                let compacted =
-                    singleton(
-                        &store,
-                        crate::leases::Lease::Compaction,
-                        crate::ops_log::Job::Compaction,
-                        |fence| {
-                            let store = store.clone();
-                            async move {
-                                compact_history_fenced(&store, days, 1000, fence.as_ref()).await
-                            }
-                        },
-                    )
-                    .await;
-                if let Some(Ok(n)) = compacted
-                    && n > 0
-                {
-                    tracing::info!(
-                        executions = n,
-                        "settled execution details compacted; monetary history retained"
-                    );
-                }
+                compact_execution_details(&store, days).await;
             }
             counter = counter.wrapping_add(1);
         }
     })
+}
+
+/// Re-reads the installation settings when their version changed, the
+/// version feed is unconfirmed, or a minute passed; a failed or slow read
+/// keeps the last values.
+async fn refresh_settings_when_due(
+    store: &Store,
+    installation_retention: &mut Option<i32>,
+    settings_seen: &mut Option<(u64, std::time::Instant)>,
+) {
+    let versions = &store.caches.versions;
+    let settings_version = versions.version(crate::notify::Topic::Settings);
+    let due = match *settings_seen {
+        Some((seen, at)) => {
+            !versions.fresh() || seen != settings_version || at.elapsed() >= SETTINGS_REFRESH
+        }
+        None => true,
+    };
+    if due {
+        match tokio::time::timeout(Duration::from_secs(2), refresh_runtime_settings(store)).await {
+            Ok(Ok(days)) => {
+                *installation_retention = days;
+                *settings_seen = Some((settings_version, std::time::Instant::now()));
+            }
+            _ => {
+                tracing::warn!("installation settings refresh failed; keeping last values")
+            }
+        }
+    }
+}
+
+/// Expired execution leases are reconciled (unknown cost retained).
+async fn reconcile_expired_leases(store: &Store) {
+    match tokio::time::timeout(
+        Duration::from_secs(4),
+        crate::governance::reconcile_expired(store, 100),
+    )
+    .await
+    {
+        Ok(Ok(n)) if n > 0 => tracing::info!(
+            executions = n,
+            "expired execution leases reconciled; unknown cost retained"
+        ),
+        Ok(Ok(_)) => {}
+        _ => tracing::warn!("execution reconciliation incomplete; retrying next interval"),
+    }
+}
+
+/// This replica's scope-lock waits (0036), every tick: the
+/// `admission_ceiling` alert reads them from the database.
+async fn flush_scope_lock_waits(store: &Store) {
+    match tokio::time::timeout(
+        Duration::from_secs(2),
+        crate::governance::pressure::flush(store),
+    )
+    .await
+    {
+        Ok(Ok(_)) => {}
+        result => {
+            if let Ok(Err(error)) = result {
+                crate::db::accounting_failure::maintenance_error(&error);
+            }
+            crate::metrics::METRICS.observe_collection_error("scope_lock_waits");
+        }
+    }
+}
+
+/// Independent background trace roots (#98): no workspace, user or request
+/// data, so each is its own root span, regardless of whether this tick
+/// actually held the lease.
+async fn prune_lock_waits_and_rate_counters(store: &Store) {
+    let start = crate::telemetry::now_unix_nanos();
+    singleton(
+        store,
+        crate::leases::Lease::Maintenance,
+        crate::ops_log::Job::LockWaitPrune,
+        |fence| {
+            let store = store.clone();
+            async move {
+                crate::governance::pressure::prune_fenced(&store, 10_000, fence.as_ref()).await
+            }
+        },
+    )
+    .await;
+    if let Some(traces) = store.traces() {
+        traces.record_background(
+            crate::telemetry::BackgroundSpan::LockWaitPrune,
+            start,
+            crate::telemetry::now_unix_nanos(),
+        );
+    }
+    let start = crate::telemetry::now_unix_nanos();
+    singleton(
+        store,
+        crate::leases::Lease::Maintenance,
+        crate::ops_log::Job::RatePrune,
+        |fence| {
+            let store = store.clone();
+            async move { crate::governance::rates::prune_fenced(&store, 10_000, fence.as_ref()).await }
+        },
+    )
+    .await;
+    if let Some(traces) = store.traces() {
+        traces.record_background(
+            crate::telemetry::BackgroundSpan::RatePrune,
+            start,
+            crate::telemetry::now_unix_nanos(),
+        );
+    }
+}
+
+async fn prune_login_attempts(store: &Store) {
+    singleton(
+        store,
+        crate::leases::Lease::Maintenance,
+        crate::ops_log::Job::LoginAttemptPrune,
+        |fence| {
+            let store = store.clone();
+            async move {
+                crate::identity::prune_login_attempts_fenced(&store, 10_000, fence.as_ref()).await
+            }
+        },
+    )
+    .await;
+}
+
+async fn prune_ended_sessions(store: &Store) {
+    singleton(
+        store,
+        crate::leases::Lease::Maintenance,
+        crate::ops_log::Job::SessionPrune,
+        |fence| {
+            let store = store.clone();
+            async move { crate::identity::prune_sessions_fenced(&store, 10_000, fence.as_ref()).await }
+        },
+    )
+    .await;
+}
+
+async fn record_storage_usage_hours(store: &Store) {
+    singleton(
+        store,
+        crate::leases::Lease::Maintenance,
+        crate::ops_log::Job::StorageUsage,
+        |fence| {
+            let store = store.clone();
+            async move {
+                crate::filestore::usage::record_hours_fenced(&store, 48, fence.as_ref()).await
+            }
+        },
+    )
+    .await;
+}
+
+async fn compact_execution_details(store: &Store, days: i32) {
+    let compacted = singleton(
+        store,
+        crate::leases::Lease::Compaction,
+        crate::ops_log::Job::Compaction,
+        |fence| {
+            let store = store.clone();
+            async move { compact_history_fenced(&store, days, 1000, fence.as_ref()).await }
+        },
+    )
+    .await;
+    if let Some(Ok(n)) = compacted
+        && n > 0
+    {
+        tracing::info!(
+            executions = n,
+            "settled execution details compacted; monetary history retained"
+        );
+    }
 }
 
 /// Run `work` once: under `lease` when this replica runs leased background
