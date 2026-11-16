@@ -3,19 +3,31 @@
 //! `disallowed-types` to a module, so this rule is a source scan: it parses
 //! the production build (see [`super::tree`]) and finds the float types
 //! (`f32`, `f64`, also as `f64::from`, `as f64`, `parse::<f64>()`), float
-//! literals (`0.5`, `1e3`, `2f64`) and SQL float casts (`float8`, `float4`,
-//! `double precision`, `::real`) in two places:
+//! literals (`0.5`, `1e3`, `2f64`) and SQL float spellings (`float8`,
+//! `float4`, `::float`, `as float`, `float(n)`, `as real`, `::real`,
+//! `double precision` with any whitespace) in two places:
 //!
 //! 1. every file whose path names a money concept ([`MONEY_PATHS`]:
 //!    governance, billing, pricing, rates, metering, cost, spend, budget,
 //!    ledger, rollup, reconcile ...), whole file;
 //! 2. any other function, struct, enum, constant or static that also names a
-//!    money word (`micro`, `usd`, `cost`, `price`, `spend`, `budget`,
-//!    `charge`, `billing`, `invoice`) as an identifier: money computed in an
-//!    unlikely place.
+//!    money word ([`MONEY_WORDS`]: `micro`, `microusd`, `micros`, `usd`,
+//!    `cost`, `price`, `spend`, `budget`, `charge`, `billing`, `invoice`, ...,
+//!    split at `_` and case changes) as an identifier, and the methods of an
+//!    `impl`/`trait` whose self type or trait name has such a word: money
+//!    computed in an unlikely place. An inline `mod` named for a money
+//!    concept makes its contents scope 1;
+//! 3. the SQL migrations (`enterprise_migrations/*.sql`): any float column
+//!    type, with comments and string literals removed.
 //!
-//! Anything found must be on [`ALLOWED`], one entry per (file, item, kind)
-//! with its reason; the list does not grow silently.
+//! Anything found must be on [`ALLOWED`] or [`ALLOWED_MIGRATIONS`], one entry
+//! per (file, item, kind) with its reason; the list does not grow silently.
+//!
+//! Cannot see: a type alias defined outside both scopes (`type Amount = f64`
+//! elsewhere, used in money code); a `macro_rules!` defined elsewhere whose
+//! expansion holds a float; a money float in a function that names no money
+//! word in a file that names no money concept; integer rounding mistakes;
+//! floats in dependencies.
 use std::collections::BTreeSet;
 
 use proc_macro2::TokenTree;
@@ -47,8 +59,8 @@ const MONEY_PATHS: &[&str] = &[
 /// Identifier words (split at `_` and at lower-to-upper case changes) that
 /// make an item money-bearing.
 const MONEY_WORDS: &[&str] = &[
-    "micro", "usd", "cost", "costs", "price", "prices", "priced", "pricing", "spend", "spent",
-    "budget", "budgets", "charge", "charged", "billing", "invoice",
+    "micro", "microusd", "micros", "usd", "cost", "costs", "price", "prices", "priced", "pricing",
+    "spend", "spent", "budget", "budgets", "charge", "charged", "billing", "invoice",
 ];
 
 /// (file, item, kind): reviewed floats in money-bearing code. A new entry
@@ -115,11 +127,115 @@ fn money_word(ident: &str) -> bool {
         .any(|w| MONEY_WORDS.contains(&w.as_str()))
 }
 
-fn sql_float(text: &str) -> Option<&'static str> {
+/// The float spellings in SQL text: `float4`/`float8`, `::float`, `as float`,
+/// `float(n)`, `::real`, `as real`, and `double precision` with any
+/// whitespace between the words. Words are read as `[a-z0-9_]+`.
+fn sql_float(text: &str) -> Vec<&'static str> {
     let lower = text.to_ascii_lowercase();
-    ["float8", "float4", "double precision", "::real"]
-        .into_iter()
-        .find(|needle| lower.contains(needle))
+    let bytes = lower.as_bytes();
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at].is_ascii_alphanumeric() || bytes[at] == b'_' {
+            let start = at;
+            while at < bytes.len() && (bytes[at].is_ascii_alphanumeric() || bytes[at] == b'_') {
+                at += 1;
+            }
+            spans.push((start, at));
+        } else {
+            at += 1;
+        }
+    }
+    let mut out = Vec::new();
+    for (n, &(start, end)) in spans.iter().enumerate() {
+        let word = &lower[start..end];
+        let before = lower[..start].trim_end();
+        let cast = before.ends_with("::")
+            || n.checked_sub(1).map(|p| spans[p]).is_some_and(|(ps, pe)| {
+                &lower[ps..pe] == "as" && lower[pe..start].trim().is_empty()
+            });
+        let paren = lower[end..].trim_start().starts_with('(');
+        let kind = match word {
+            "float4" => Some("SQL float4"),
+            "float8" => Some("SQL float8"),
+            "float" if cast || paren => Some("SQL float"),
+            "real" if cast => Some("SQL real"),
+            "double"
+                if spans.get(n + 1).is_some_and(|&(ns, ne)| {
+                    &lower[ns..ne] == "precision" && lower[end..ns].trim().is_empty()
+                }) =>
+            {
+                Some("SQL double precision")
+            }
+            _ => None,
+        };
+        out.extend(kind);
+    }
+    out
+}
+
+/// Text of a migration without comments and string literals.
+fn strip_sql(sql: &str) -> String {
+    let chars: Vec<char> = sql.chars().collect();
+    let mut out = String::new();
+    let mut at = 0;
+    while at < chars.len() {
+        let c = chars[at];
+        let next = chars.get(at + 1).copied();
+        if c == '-' && next == Some('-') {
+            while at < chars.len() && chars[at] != '\n' {
+                at += 1;
+            }
+        } else if c == '/' && next == Some('*') {
+            at += 2;
+            while at < chars.len() && !(chars[at] == '*' && chars.get(at + 1) == Some(&'/')) {
+                at += 1;
+            }
+            at += 2;
+        } else if c == '\'' {
+            at += 1;
+            while at < chars.len() {
+                if chars[at] == '\'' {
+                    if chars.get(at + 1) == Some(&'\'') {
+                        at += 2;
+                        continue;
+                    }
+                    break;
+                }
+                at += 1;
+            }
+            at += 1;
+            out.push(' ');
+        } else {
+            out.push(c);
+            at += 1;
+        }
+    }
+    out
+}
+
+/// Float column types and casts anywhere in a migration: `float`, `float4`,
+/// `float8`, `real` and `double precision` as words.
+fn migration_floats(sql: &str) -> BTreeSet<&'static str> {
+    let text = strip_sql(sql).to_ascii_lowercase();
+    let mut found = BTreeSet::new();
+    let words: Vec<&str> = text
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|w| !w.is_empty())
+        .collect();
+    for (n, word) in words.iter().enumerate() {
+        match *word {
+            "float" => found.insert("SQL float"),
+            "float4" => found.insert("SQL float4"),
+            "float8" => found.insert("SQL float8"),
+            "real" => found.insert("SQL real"),
+            "double" if words.get(n + 1) == Some(&"precision") => {
+                found.insert("SQL double precision")
+            }
+            _ => false,
+        };
+    }
+    found
 }
 
 /// What one item (a function, struct, ...) holds, for rule 2.
@@ -208,8 +324,8 @@ impl<'ast> Visit<'ast> for Finder {
     }
 
     fn visit_lit_str(&mut self, lit: &'ast syn::LitStr) {
-        if let Some(kind) = sql_float(&lit.value()) {
-            self.float(format!("SQL {kind}"));
+        for kind in sql_float(&lit.value()) {
+            self.float(kind.to_owned());
         }
     }
 
@@ -225,8 +341,8 @@ impl<'ast> Visit<'ast> for Finder {
                             self.float(i.suffix().to_owned());
                         }
                         Ok(syn::Lit::Str(s)) => {
-                            if let Some(kind) = sql_float(&s.value()) {
-                                self.float(format!("SQL {kind}"));
+                            for kind in sql_float(&s.value()) {
+                                self.float(kind.to_owned());
                             }
                         }
                         _ => {}
@@ -278,11 +394,15 @@ fn scan_item(finder: &mut Finder, item: &syn::Item) {
     match item {
         syn::Item::Mod(module) => {
             if let Some((_, items)) = &module.content {
-                finder.scope.enter(module.ident.unraw().to_string());
+                let name = module.ident.unraw().to_string();
+                let was = finder.whole_file;
+                finder.whole_file |= money_path(&name);
+                finder.scope.enter(name);
                 for inner in items {
                     scan_item(finder, inner);
                 }
                 finder.scope.leave();
+                finder.whole_file = was;
             }
         }
         syn::Item::Impl(imp) => {
@@ -298,6 +418,12 @@ fn scan_item(finder: &mut Finder, item: &syn::Item) {
                 };
                 finder.scope.enter(name);
                 let opened = finder.open();
+                finder.word(&super::tree::type_name(&imp.self_ty));
+                if let Some((trait_path, _)) = &imp.trait_
+                    && let Some(last) = trait_path.segments.last()
+                {
+                    finder.word(&last.ident.unraw().to_string());
+                }
                 finder.visit_impl_item(member);
                 finder.close(opened);
                 finder.scope.leave();
@@ -315,6 +441,7 @@ fn scan_item(finder: &mut Finder, item: &syn::Item) {
                 };
                 finder.scope.enter(name);
                 let opened = finder.open();
+                finder.word(&tr.ident.unraw().to_string());
                 finder.visit_trait_item(member);
                 finder.close(opened);
                 finder.scope.leave();
@@ -363,6 +490,36 @@ pub(super) fn problems(sources: &[Source], allowed: &[(&str, &str, &str)]) -> Ve
         allowed
             .difference(&found)
             .map(|h| format!("stale allowlist entry: {}", h.text())),
+    );
+    out
+}
+
+/// (file, kind): float column types in migrations. None today.
+const ALLOWED_MIGRATIONS: &[(&str, &str)] = &[];
+
+/// Float types in `(file name, SQL text)` migrations, minus the allowlist.
+pub(super) fn migration_problems(
+    files: &[(String, String)],
+    allowed: &[(&str, &str)],
+) -> Vec<String> {
+    let mut found = BTreeSet::new();
+    for (name, sql) in files {
+        for kind in migration_floats(sql) {
+            found.insert((name.clone(), kind.to_owned()));
+        }
+    }
+    let allowed: BTreeSet<(String, String)> = allowed
+        .iter()
+        .map(|(f, k)| ((*f).to_owned(), (*k).to_owned()))
+        .collect();
+    let mut out: Vec<String> = found
+        .difference(&allowed)
+        .map(|(f, k)| format!("float column type in migration {f}: {k}"))
+        .collect();
+    out.extend(
+        allowed
+            .difference(&found)
+            .map(|(f, k)| format!("stale migration allowlist entry: {f} {k}")),
     );
     out
 }
@@ -512,6 +669,199 @@ mod tests {
         );
         assert_eq!(found.len(), 2, "{found:?}");
         assert!(found.iter().all(|p| p.contains(":: other ::")));
+    }
+
+    #[test]
+    fn sql_spellings_in_every_form_are_refused() {
+        for (sql, kind) in [
+            ("SELECT x::float4 FROM t", "SQL float4"),
+            ("SELECT CAST(x AS float8)", "SQL float8"),
+            ("SELECT x::float FROM t", "SQL float"),
+            ("SELECT CAST(x AS FLOAT)", "SQL float"),
+            ("SELECT CAST(x AS float(53))", "SQL float"),
+            ("SELECT x::real", "SQL real"),
+            ("SELECT CAST(x as   real)", "SQL real"),
+            ("SELECT x::double precision", "SQL double precision"),
+            ("SELECT x::DOUBLE\n\t PRECISION", "SQL double precision"),
+        ] {
+            assert_eq!(sql_float(sql), [kind], "{sql:?}");
+            let found = fixture(
+                "governance/pricing.rs",
+                &format!("pub fn q() {{ let _ = sqlx::query({sql:?}); }}"),
+            );
+            assert!(
+                found.iter().any(|p| p.contains(kind)),
+                "{sql:?} in {found:?}"
+            );
+        }
+        for sql in [
+            "a real cost",
+            "floating point",
+            "SELECT float_col",
+            "x::numeric",
+            "double entry",
+        ] {
+            assert!(sql_float(sql).is_empty(), "{sql:?}");
+        }
+    }
+
+    #[test]
+    fn sql_inside_a_macro_is_refused() {
+        let found = fixture(
+            "billing/v3.rs",
+            r#"pub fn a() { let _ = sqlx::query_scalar!("SELECT sum(x)::float8 FROM t"); }
+               pub fn b() { let _ = format!("SELECT {}::double precision", 1); }"#,
+        );
+        assert!(
+            found.iter().any(|p| p.contains(":: a :: SQL float8")),
+            "{found:?}"
+        );
+        assert!(
+            found
+                .iter()
+                .any(|p| p.contains(":: b :: SQL double precision")),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn methods_of_a_money_type_or_trait_are_money_code() {
+        let found = fixture(
+            "inference/anywhere.rs",
+            "pub struct SpendWindow;\n\
+             impl SpendWindow { pub fn ratio(&self) -> f64 { 0.5 } }\n\
+             pub trait PriceSource { fn quote(&self) -> f64 { 1.5 } }\n\
+             impl PriceSource for Other { fn quote(&self) -> f64 { 2.5 } }\n\
+             impl Other { fn plain(&self) -> f64 { 3.5 } }",
+        );
+        assert!(
+            found
+                .iter()
+                .any(|p| p.contains(":: impl SpendWindow::ratio :: f64")),
+            "{found:?}"
+        );
+        assert!(
+            found
+                .iter()
+                .any(|p| p.contains(":: trait PriceSource::quote :: f64")),
+            "{found:?}"
+        );
+        assert!(
+            found
+                .iter()
+                .any(|p| p.contains(":: impl Other::quote :: f64")),
+            "{found:?}"
+        );
+        assert!(!found.iter().any(|p| p.contains("::plain ::")), "{found:?}");
+    }
+
+    #[test]
+    fn nested_modules_consts_and_statics_are_read() {
+        let found = fixture(
+            "inference/anywhere.rs",
+            "mod inner { pub const MICRO_RATE: f64 = 0.5; pub static USD_CAP: f32 = 1.0; }\n\
+             mod pricing { pub fn any_name() -> f64 { 1.0 } }\n\
+             mod other { pub fn any_name() -> f64 { 1.0 } }",
+        );
+        assert!(
+            found.iter().any(|p| p.contains("inner::MICRO_RATE :: f64")),
+            "{found:?}"
+        );
+        assert!(
+            found.iter().any(|p| p.contains("inner::USD_CAP :: f32")),
+            "{found:?}"
+        );
+        assert!(
+            found.iter().any(|p| p.contains("pricing::any_name :: f64")),
+            "{found:?}"
+        );
+        assert!(!found.iter().any(|p| p.contains("other::")), "{found:?}");
+    }
+
+    #[test]
+    fn the_repository_money_words_trigger() {
+        for name in [
+            "held_microusd",
+            "used_microusd",
+            "provider_cost_microusd",
+            "elapsed_micros",
+            "MicroUsd",
+        ] {
+            assert!(money_word(name), "{name}");
+        }
+        let found = fixture(
+            "inference/anywhere.rs",
+            "pub fn used(held_microusd: i64) -> i64 { (held_microusd as f64 * 0.5) as i64 }",
+        );
+        assert!(
+            found.iter().any(|p| p.contains(":: used :: f64")),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn the_reconcile_path_rule_and_word_boundaries() {
+        assert!(money_path("management/provider_costs.rs"));
+        assert!(money_path("governance/reconcile.rs"));
+        assert!(money_path("governance/reconcile_token_tests.rs"));
+        assert!(money_path("x/reconciliation.rs"));
+        assert!(!money_path("inference/generates.rs"));
+        assert!(!money_path("providers/surprise.rs"));
+        let found = fixture("governance/reconcile.rs", "pub fn any() -> f64 { 0.0 }");
+        assert!(!found.is_empty());
+    }
+
+    #[test]
+    fn float_columns_in_migrations_are_refused() {
+        let files = |sql: &str| vec![("0900_x.sql".to_owned(), sql.to_owned())];
+        for (sql, kind) in [
+            ("CREATE TABLE t (a float);", "SQL float"),
+            ("CREATE TABLE t (a FLOAT8);", "SQL float8"),
+            ("ALTER TABLE t ADD b float4;", "SQL float4"),
+            ("CREATE TABLE t (a real);", "SQL real"),
+            (
+                "CREATE TABLE t (a double   precision);",
+                "SQL double precision",
+            ),
+            (
+                "CREATE TABLE t (a DOUBLE\nPRECISION);",
+                "SQL double precision",
+            ),
+        ] {
+            let found = migration_problems(&files(sql), &[]);
+            assert_eq!(
+                found,
+                [format!("float column type in migration 0900_x.sql: {kind}")],
+                "{sql}"
+            );
+        }
+        for sql in [
+            "CREATE TABLE t (a bigint, b numeric(20,6)); -- not a float, or real\n/* double precision */",
+            "INSERT INTO t VALUES ('a real float');",
+        ] {
+            assert!(migration_problems(&files(sql), &[]).is_empty(), "{sql}");
+        }
+        let allowed = [("0900_x.sql", "SQL float")];
+        assert!(migration_problems(&files("CREATE TABLE t (a float);"), &allowed).is_empty());
+        assert_eq!(migration_problems(&files("SELECT 1;"), &allowed).len(), 1);
+    }
+
+    #[test]
+    fn the_migrations_hold_no_unreviewed_float_column() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("enterprise_migrations");
+        let mut files = Vec::new();
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "sql") {
+                files.push((
+                    path.file_name().unwrap().to_string_lossy().into_owned(),
+                    std::fs::read_to_string(&path).unwrap(),
+                ));
+            }
+        }
+        assert!(files.len() > 50, "only {} migrations read", files.len());
+        let found = migration_problems(&files, ALLOWED_MIGRATIONS);
+        assert!(found.is_empty(), "{}", found.join("\n"));
     }
 
     #[test]
