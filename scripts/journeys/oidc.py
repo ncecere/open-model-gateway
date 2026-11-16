@@ -10,6 +10,7 @@ import urllib.parse
 
 from .client import Http, JourneyError
 
+# The fixed demo accounts. tests/journeys.test.py ties them to docs/local-demo.md and scripts/demo-oidc.mjs.
 PERSONAS = {
     "operator": "operator@demo.invalid",
     "auditor": "auditor@demo.invalid",
@@ -17,34 +18,52 @@ PERSONAS = {
     "blair": "blair@demo.invalid",
     "unentitled": "unentitled@demo.invalid",
 }
+# platform_role the gateway reports for each (None: authenticates but has no platform access).
+PERSONA_ROLES = {"operator": "admin", "auditor": "auditor", "alex": "user", "blair": "user", "unentitled": None}
 HIDDEN = re.compile(r'<input type="hidden" name="([^"]+)" value="([^"]*)"')
+# Only the demo issuer's account chooser lists this account. A real identity provider does not.
+DEMO_PROOF = PERSONAS["operator"]
 
-
-def _target(location, label):
-    """Path and query of a redirect, whatever origin it names (the forward may differ from the public URL)."""
-    parts = urllib.parse.urlsplit(location)
-    if not parts.path:
-        raise JourneyError(f"{label} redirect has no path")
-    return parts.path + ("?" + parts.query if parts.query else ""), parts
-
-
+# A throttled step is retried after Retry-After, a bounded number of times. The limit itself is the
+# gateway's GATEWAY_LOGIN_RATE_PER_MINUTE (docs/identity.md); nothing here copies its value.
 MAX_ATTEMPTS = 4
 MAX_WAIT = 65
 
 
-def _wait_seconds(response):
-    """Retry-After of a throttled step (the gateway allows GATEWAY_LOGIN_RATE_PER_MINUTE per address)."""
+def wait_seconds(response):
+    """Retry-After of a throttled step, clamped to 1..MAX_WAIT seconds."""
     try:
         return min(max(int(response.header("retry-after") or 1), 1), MAX_WAIT)
     except ValueError:
         return 2
 
 
-def sign_in(session, http, persona, issuer_http=None):
+def split_redirect(location):
+    """(origin, path-and-query) of a redirect target."""
+    parts = urllib.parse.urlsplit(location)
+    if not parts.scheme or not parts.netloc or "@" in parts.netloc:
+        raise JourneyError("redirect has no usable origin")
+    path = parts.path + ("?" + parts.query if parts.query else "")
+    return f"{parts.scheme}://{parts.netloc}", path or "/"
+
+
+def callback_origin(location):
+    """The origin of the redirect_uri the gateway put in its sign-in redirect, or None."""
+    query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(location).query))
+    uri = query.get("redirect_uri")
+    if not uri:
+        return None
+    parts = urllib.parse.urlsplit(uri)
+    return f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else None
+
+
+def sign_in(session, http, persona, expected_issuer=None):
     """Run login -> issuer page -> account choice -> callback.
 
-    Returns {"login": Response, "authorize": Response, "choose": Response, "callback": Response}.
-    The caller records the statuses. Raises JourneyError if a step cannot proceed.
+    Returns {"login", "authorize", "choose", "callback"} responses; the caller records the statuses.
+    The issuer is always the origin the gateway redirected to, which must equal `expected_issuer` when
+    given (the demo issuer checks that the form's Origin is its own configured URL).
+    Raises JourneyError if a step cannot proceed.
     """
     if persona not in PERSONAS:
         raise JourneyError("unknown persona")
@@ -53,13 +72,16 @@ def sign_in(session, http, persona, issuer_http=None):
     for _ in range(MAX_ATTEMPTS - 1):
         if steps["login"].status != 429:
             break
-        time.sleep(_wait_seconds(steps["login"]))
+        time.sleep(wait_seconds(steps["login"]))
         steps["login"] = session.get("/api/v1/auth/login", cookies=False)
     location = steps["login"].header("location")
     if not location:
         raise JourneyError("login did not redirect")
-    target, parts = _target(location, "login")
-    issuer = issuer_http or Http(f"{parts.scheme}://{parts.netloc}")
+    origin, target = split_redirect(location)
+    if expected_issuer is not None and origin != expected_issuer:
+        raise JourneyError("sign-in redirects to a different issuer than the one checked")
+    issuer = Http(origin, http.timeout)
+    issuer.deadline, issuer.cleaning = http.deadline, http.cleaning
     steps["authorize"] = issuer.request("GET", target)
     if steps["authorize"].status != 200:
         raise JourneyError("issuer did not show the account page")
@@ -73,12 +95,12 @@ def sign_in(session, http, persona, issuer_http=None):
     callback = steps["choose"].header("location")
     if steps["choose"].status not in (302, 303) or not callback:
         raise JourneyError("issuer refused the account choice")
-    path, _ = _target(callback, "choose")
+    _, path = split_redirect(callback)
     steps["callback"] = session.get(path, csrf=False, origin=False)
     for _ in range(MAX_ATTEMPTS - 1):
         # A throttled callback leaves its sign-in attempt usable (docs/identity.md), so retrying it is safe.
         if steps["callback"].status != 429:
             break
-        time.sleep(_wait_seconds(steps["callback"]))
+        time.sleep(wait_seconds(steps["callback"]))
         steps["callback"] = session.get(path, csrf=False, origin=False)
     return steps

@@ -1,6 +1,10 @@
-"""Browser-session mutations need the configured Origin and a matching CSRF token."""
+"""Browser-session mutations need the configured Origin and a matching CSRF token.
+
+Every request here is harmless if the gateway wrongly accepts it: a rename to the same name, a
+discoverability flag set to its current value, a workspace body no create accepts, and a key that is
+revoked again if it was created."""
 from ..registry import journey
-from .common import jget
+from .common import NO_SUCH_ID, rows
 
 FOREIGN = "https://evil.invalid"
 
@@ -10,9 +14,13 @@ def csrf_origin(t):
     ws = t.team_workspace(owner="alex")
     alex, operator = t.session("alex"), t.session("operator")
     base = f"/api/v1/workspaces/{ws}"
+    original = alex.get(base).get("name")
+    new_key = {"name": t.label("refused"), "expires_in_days": 1}
+    blank = {"name": " ", "kind": "team", "owner_user_id": NO_SUCH_ID}
 
-    def keys_count():
-        return len(jget(alex.get(f"{base}/keys"), "data", default=[]))
+    def key_count():
+        listing = rows(alex.get(f"{base}/keys"))
+        return None if listing is None else len(listing)
 
     variants = (
         ("no-csrf", {"csrf": False}),
@@ -22,20 +30,20 @@ def csrf_origin(t):
         ("null-origin", {"origin": "null"}),
         ("neither", {"csrf": False, "origin": False}),
     )
-    before_keys = keys_count()
-    original = jget(alex.get(base), "name")
+    before_keys = key_count()
     for name, kw in variants:
-        t.expect(f"create-key.{name}-refused", alex.post(f"{base}/keys", {"name": t.label("k"), "expires_in_days": 1}, **kw), 403)
-        t.expect(f"rename-workspace.{name}-refused", alex.patch(base, {"name": t.label("changed")}, **kw), 403)
-        t.expect(f"platform-create-workspace.{name}-refused", operator.post("/api/v1/platform/workspaces", {"name": t.label("x"), "kind": "team", "owner_user_id": t.user_id("alex")}, **kw), 403)
-        t.expect(f"platform-discoverable.{name}-refused", operator.put(f"/api/v1/platform/workspaces/{ws}/discoverable", {"discoverable": True}, **kw), 403)
-    t.ok("refused-mutations-created-no-key", keys_count() == before_keys)
-    t.ok("refused-mutations-did-not-rename", jget(alex.get(base), "name") == original)
-    t.ok("refused-mutations-did-not-publish", jget(operator.get(f"/api/v1/platform/workspaces/{ws}"), "discoverable") is False)
+        revoke = lambda r: alex.delete(f"{base}/keys/{r.id()}") if r.id() else r  # noqa: E731
+        t.must_refuse(f"create-key.{name}-refused", alex.post(f"{base}/keys", new_key, **kw), 403, undo=revoke)
+        t.expect(f"rename-workspace.{name}-refused", alex.patch(base, {"name": original}, **kw), 403)
+        t.expect(f"platform-create-workspace.{name}-refused", operator.post("/api/v1/platform/workspaces", blank, **kw), 403)
+        t.expect(f"platform-discoverable.{name}-refused", operator.put(f"/api/v1/platform/workspaces/{ws}/discoverable", {"discoverable": False}, **kw), 403)
+    after_keys = key_count()
+    t.ok("refused-mutations-created-no-key", before_keys is not None and after_keys == before_keys)
+    t.ok("refused-mutations-left-the-name", alex.get(base).get("name") == original)
+    t.ok("refused-mutations-left-it-unpublished", operator.get(f"/api/v1/platform/workspaces/{ws}").get("discoverable") is False)
 
     # Controls: reads need neither header; the same mutations with both headers succeed.
     t.expect("get-needs-no-csrf", alex.get(f"{base}/keys", csrf=False, origin=False), 200)
     t.expect("rename-with-both-succeeds", alex.patch(base, {"name": original}), 200)
     # A CSRF token from another person's session is not valid for this one.
-    t.expect("other-persons-csrf-refused", alex.patch(base, {"name": t.label("changed")}, csrf=t.session("blair").csrf), 403)
-    t.ok("other-persons-csrf-did-not-rename", jget(alex.get(base), "name") == original)
+    t.expect("other-persons-csrf-refused", alex.patch(base, {"name": original}, csrf=t.session("blair").csrf), 403)

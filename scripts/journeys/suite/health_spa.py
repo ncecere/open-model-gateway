@@ -46,5 +46,9 @@ def health_spa(t):
     t.expect("spa.missing-asset", anon.get("/assets/does-not-exist.js", headers=NAVIGATION), 404)
     t.expect("api.unknown-post", anon.post("/api/v1/does-not-exist", {}), 404)
 
-    t.expect("auth.config-is-anonymous", anon.get("/api/v1/auth/config"), 200)
+    config = anon.get("/api/v1/auth/config")
+    t.expect("auth.config-is-anonymous", config, 200)
+    t.ok("auth.config-fields", isinstance(config.get("enabled"), bool) and "installation_name" in (config.json() or {}) and "logo" in (config.json() or {}))
+    t.ok("auth.config-sign-in-enabled-in-the-demo", config.get("enabled") is True)
+    t.ok("auth.config-has-no-secrets", set(config.json() or {}) <= {"enabled", "installation_name", "logo"})
     t.status("branding.logo-anonymous", {200, 404}, anon.get("/api/v1/branding/logo").status)

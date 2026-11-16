@@ -1,8 +1,8 @@
 """The signed-in person: /me, summaries, their keys and models, notifications, sessions, export."""
-from ..client import Session
+from ..client import Session, uuid_of
 from ..oidc import sign_in
 from ..registry import journey
-from .common import ENTITLED, jget
+from .common import money_values
 
 OWN_READS = (
     ("me", "/api/v1/me"),
@@ -21,28 +21,30 @@ OWN_READS = (
 @journey("me-summary")
 def me_summary(t):
     anon = t.anonymous()
-    for name, path in OWN_READS + (("export", "/api/v1/me/export"),):
+    for name, path in OWN_READS:
         t.expect(f"anonymous.{name}-refused", anon.get(path), 401)
+    t.expect("anonymous.export-refused", anon.get("/api/v1/me/export"), 401)
 
-    for persona in ENTITLED:
+    for persona in ("operator", "auditor", "alex", "blair"):
         session = t.session(persona)
         for name, path in OWN_READS:
             t.expect(f"{persona}.{name}", session.get(path), 200)
         me = session.get("/api/v1/me")
-        kinds = {w.get("kind") for w in jget(me, "workspaces", default=[])}
+        kinds = {w.get("kind") for w in me.get("workspaces", default=[])}
         t.ok(f"{persona}.personal-workspace-listed", "personal" in kinds)
-        t.ok(f"{persona}.installation-block", isinstance(jget(me, "installation", "key_max_lifetime_days"), int))
-        capabilities = jget(me, "capabilities", default={})
+        t.ok(f"{persona}.installation-block", isinstance(me.get("installation", "key_max_lifetime_days"), int))
+        capabilities = me.get("capabilities", default={})
         t.ok(f"{persona}.capabilities-match-role", capabilities.get("platform_write") is (persona == "operator") and capabilities.get("platform_read") is (persona in ("operator", "auditor")))
         summary = session.get("/api/v1/me/summary")
-        t.ok(f"{persona}.summary-money-is-text", all(isinstance(v, str) for v in _money(summary)))
+        t.ok(f"{persona}.summary-shape", summary.get("basis") is not None and summary.get("currency") == "USD" and summary.get("totals", "current", "requests") is not None)
+        t.ok(f"{persona}.summary-money-is-text", all(isinstance(v, str) and v.isdigit() for v in money_values(summary)) and bool(money_values(summary)))
 
     for persona in ("alex", "blair"):
-        kinds = {w.get("kind") for w in jget(t.session(persona).get("/api/v1/me"), "workspaces", default=[])}
+        kinds = {w.get("kind") for w in t.session(persona).get("/api/v1/me").get("workspaces", default=[])}
         t.ok(f"{persona}.shared-workspaces-listed", {"team", "project"} <= kinds)
 
-    # The personal data export is limited to 3 an hour per person, so one persona asks once per run and the
-    # documented 429 is accepted when earlier runs used the allowance.
+    # The personal data export is limited per person (docs/identity.md), so one persona asks once per run
+    # and the documented 429 is accepted when earlier runs used the allowance.
     export = t.session("blair").get("/api/v1/me/export")
     t.status("export.own-data", {200, 429}, export.status)
     if export.status == 200:
@@ -58,17 +60,17 @@ def me_summary(t):
     extras = []
     for _ in range(2):
         extra = Session(http, "blair-extra")
-        t.defer("sign out extra", lambda s=extra: s.post("/api/v1/auth/logout") if s.signed_in else None)
-        sign_in(extra, http, "blair", t.env.issuer_http)
+        t.sign_out_later("sign out extra", extra)
+        sign_in(extra, http, "blair", t.env.issuer_origin)
         extras.append(extra)
     listing = main.get("/api/v1/me/sessions")
     t.expect("sessions.list", listing, 200)
-    sessions = jget(listing, "data", default=[])
+    sessions = listing.get("data", default=[])
     others = [s for s in sessions if not s.get("current")]
     t.ok("sessions.lists-others-and-current", len(others) >= 2 and sum(1 for s in sessions if s.get("current")) == 1)
     first = extras[0].get("/api/v1/me/sessions")
-    their_id = next((s.get("id") for s in jget(first, "data", default=[]) if s.get("current")), None)
-    if their_id:
+    their_id = next((s.get("id") for s in first.get("data", default=[]) if s.get("current")), None)
+    if uuid_of(their_id):
         t.expect("sessions.revoke-one-no-csrf-refused", main.delete(f"/api/v1/me/sessions/{their_id}", csrf=False), 403)
         t.status("sessions.revoke-one", {200, 204}, main.delete(f"/api/v1/me/sessions/{their_id}").status)
         t.expect("sessions.revoked-session-dead", extras[0].get("/api/v1/me"), 401)
@@ -82,20 +84,3 @@ def me_summary(t):
     # Notifications: marking read needs CSRF.
     t.expect("notifications.mark-read-no-csrf-refused", main.post("/api/v1/me/notifications/read", {"ids": []}, csrf=False), 403)
 
-
-def _money(response):
-    """Every value under a key ending in _microusd (monetary values are text, never numbers)."""
-    found = []
-
-    def walk(node):
-        if isinstance(node, dict):
-            for key, value in node.items():
-                if key.endswith("_microusd") and value is not None:
-                    found.append(value)
-                walk(value)
-        elif isinstance(node, list):
-            for item in node:
-                walk(item)
-
-    walk(response.json())
-    return found

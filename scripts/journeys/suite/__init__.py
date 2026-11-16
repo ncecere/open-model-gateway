@@ -3,6 +3,7 @@ from . import (  # noqa: F401
     access_requests,
     access_reviews,
     auditor,
+    catalogs,
     credentials,
     csrf_origin,
     health_spa,
@@ -12,6 +13,7 @@ from . import (  # noqa: F401
     members,
     platform_admin,
     reports,
+    schedules,
     signin,
     workspaces,
 )

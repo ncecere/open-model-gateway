@@ -1,8 +1,8 @@
 """Per-journey context: sessions, throwaway objects, deferred cleanup, check helpers."""
 import secrets
 
-from .client import Http, JourneyError, Session, SetupError
-from .oidc import PERSONAS, sign_in
+from .client import JourneyError, Session, SetupError, TransportError, uuid_of  # noqa: F401 - re-exported for journeys
+from .oidc import sign_in
 from .recorder import Recorder
 
 
@@ -13,6 +13,12 @@ class Secret:
 
     def __init__(self, value):
         self._value = value
+
+    @classmethod
+    def of(cls, response, *path):
+        """The string under `path` (default `token`) of a response as a Secret, or None."""
+        value = response.get(*(path or ("token",)))
+        return cls(value) if isinstance(value, str) and value else None
 
     def reveal(self):
         return self._value
@@ -32,9 +38,9 @@ class Secret:
 class Env:
     """What every journey in one run shares: where to talk to and the unique run label."""
 
-    def __init__(self, http, issuer_http=None, run_id=None):
+    def __init__(self, http, issuer_origin=None, run_id=None):
         self.http = http
-        self.issuer_http = issuer_http
+        self.issuer_origin = issuer_origin   # set by the preflight: the demo issuer every sign-in must use
         self.run_id = run_id or secrets.token_hex(3)
         self._pool = {}
 
@@ -44,7 +50,7 @@ class Env:
         Journeys that sign out or revoke sessions use private sessions instead. Returns None if sign-in failed."""
         if persona not in self._pool:
             session = Session(self.http, persona)
-            steps = sign_in(session, self.http, persona, self.issuer_http)
+            steps = sign_in(session, self.http, persona, self.issuer_origin)
             if steps["callback"].status not in (302, 303) or not session.signed_in:
                 return None
             self._pool[persona] = session
@@ -54,31 +60,40 @@ class Env:
         """Drop a pooled session (a journey revoked it); the next use signs in again."""
         session = self._pool.pop(persona, None)
         if session is not None and session.signed_in:
-            session.post("/api/v1/auth/logout")
+            try:
+                session.post("/api/v1/auth/logout")
+            except Exception:  # noqa: BLE001 - best effort, the session is probably already dead
+                pass
 
     def close(self):
         """Sign the pooled sessions out. Called once at the end of a run, also after an error."""
-        for session in self._pool.values():
+        self.http.cleaning = True
+        for session in list(self._pool.values()):
             try:
                 if session.signed_in:
                     session.post("/api/v1/auth/logout")
-            except OSError:
+            except Exception:  # noqa: BLE001 - one dead connection must not leave the others signed in
                 pass
         self._pool.clear()
 
 
 class Ctx:
+    OK = (200, 204)
+
     def __init__(self, env, journey_name):
         self.env = env
         self.journey = journey_name
         self.rec = Recorder()
         self._cleanups = []
-        self._user_ids = {}
 
     # --- naming -------------------------------------------------------------------------------
     def label(self, what):
         """A unique, recognisable name for a throwaway object (never put in a check name)."""
         return f"journeys-{self.env.run_id}-{self.journey}-{what}"[:120]
+
+    @property
+    def run_prefix(self):
+        return f"journeys-{self.env.run_id}-"
 
     # --- checks -------------------------------------------------------------------------------
     def expect(self, name, response, expected):
@@ -93,6 +108,15 @@ class Ctx:
     def ok(self, name, condition):
         return self.rec.assertion(name, bool(condition))
 
+    def must_refuse(self, name, response, expected, undo=None):
+        """A check that a mutation is refused, that cleans up after itself if the refusal has regressed.
+
+        If the answer is a success and `undo(response)` is given, the undo is registered, so a broken
+        gateway does not leave the change behind."""
+        if 200 <= response.status < 300 and undo is not None:
+            self.undo("revert accepted refusal", lambda: undo(response), gone=(404, 409))
+        return self.expect(name, response, expected)
+
     # --- sessions -----------------------------------------------------------------------------
     def anonymous(self):
         return Session(self.env.http, "anonymous")
@@ -103,8 +127,8 @@ class Ctx:
             raise SetupError("the unentitled persona has no session")
         if private:
             session = Session(self.env.http, persona)
-            self.defer("sign out " + persona, lambda: self._sign_out(session))
-            steps = sign_in(session, self.env.http, persona, self.env.issuer_http)
+            self.sign_out_later("sign out " + persona, session)
+            steps = sign_in(session, self.env.http, persona, self.env.issuer_origin)
             if steps["callback"].status not in (302, 303) or not session.signed_in:
                 raise SetupError("sign-in did not complete")
             return session
@@ -113,32 +137,55 @@ class Ctx:
             raise SetupError("sign-in did not complete")
         return session
 
-    @staticmethod
-    def _sign_out(session):
-        if session.signed_in:
-            session.post("/api/v1/auth/logout")
-
     def user_id(self, persona):
-        if persona not in self._user_ids:
-            response = self.session(persona).get("/api/v1/me")
-            data = response.json() if response.status == 200 else None
-            if not isinstance(data, dict) or not isinstance(data.get("user", {}).get("id"), str):
-                raise SetupError("cannot read the persona's user id")
-            self._user_ids[persona] = data["user"]["id"]
-        return self._user_ids[persona]
+        response = self.session(persona).get("/api/v1/me")
+        uid = response.id("user", "id") if response.status == 200 else None
+        if not uid:
+            raise SetupError("cannot read the persona's user id")
+        return uid
+
+    def personal_workspace(self, persona):
+        response = self.session(persona).get("/api/v1/me")
+        for w in (response.get("workspaces", default=[]) if response.status == 200 else []):
+            if w.get("kind") == "personal" and uuid_of(w.get("id")):
+                return w["id"]
+        raise SetupError("cannot find the persona's personal workspace")
 
     # --- cleanup ------------------------------------------------------------------------------
     def defer(self, label, fn):
-        """Register an undo step. Runs last-in first-out, also after a failure."""
+        """Register an undo step that is not an HTTP call. Runs last-in first-out, also after a failure."""
         self._cleanups.append((label, fn))
 
+    def undo(self, label, call, gone=()):
+        """Register an undo step that makes one HTTP call (`call()` returns the Response).
+
+        It fails visibly: a status outside 200/204 and the explicit `gone` set (already deleted, already
+        signed out) is a failed check for this journey."""
+        def run():
+            response = call()
+            status = getattr(response, "status", None)
+            if status not in self.OK and status not in gone:
+                raise JourneyError("undo step refused")
+        self._cleanups.append((label, run))
+
+    def sign_out_later(self, label, session):
+        """Sign `session` out at cleanup (nothing to do if it is no longer signed in or was already ended)."""
+        def run():
+            if session.signed_in and session.post("/api/v1/auth/logout").status not in (204, 401):
+                raise JourneyError("undo step refused")
+        self._cleanups.append((label, run))
+
     def run_cleanups(self):
-        while self._cleanups:
-            label, fn = self._cleanups.pop()
-            try:
-                fn()
-            except Exception:
-                self.rec.fail("cleanup " + label, "cleanup_failed")
+        self.env.http.cleaning = True
+        try:
+            while self._cleanups:
+                label, fn = self._cleanups.pop()
+                try:
+                    fn()
+                except Exception:  # noqa: BLE001 - recorded by label only
+                    self.rec.fail("cleanup " + label, "cleanup_failed")
+        finally:
+            self.env.http.cleaning = False
 
     # --- throwaway objects --------------------------------------------------------------------
     def team_workspace(self, owner="alex", kind="team", discoverable=False):
@@ -146,11 +193,10 @@ class Ctx:
         operator = self.session("operator")
         body = {"name": self.label(kind), "kind": kind, "owner_user_id": self.user_id(owner)}
         response = operator.post("/api/v1/platform/workspaces", body)
-        data = response.json() if response.status == 200 else None
-        if not isinstance(data, dict) or not isinstance(data.get("id"), str):
+        ws = response.id() if response.status == 200 else None
+        if not ws:
             raise SetupError("cannot create the throwaway workspace")
-        ws = data["id"]
-        self.defer("disable workspace", lambda: self._expect_ok(operator.patch(f"/api/v1/platform/workspaces/{ws}", {"disabled": True})))
+        self.undo("disable workspace", lambda: operator.patch(f"/api/v1/platform/workspaces/{ws}", {"disabled": True}))
         if discoverable:
             if operator.put(f"/api/v1/platform/workspaces/{ws}/discoverable", {"discoverable": True}).status != 200:
                 raise SetupError("cannot make the throwaway workspace discoverable")
@@ -165,20 +211,10 @@ class Ctx:
         """A throwaway key for `persona`; revoked at cleanup. Returns (key id, Secret token)."""
         session = self.session(persona)
         response = session.post(f"/api/v1/workspaces/{ws}/keys", {"name": self.label("key"), "expires_in_days": expires_in_days, **extra})
-        data = response.json() if response.status == 200 else None
-        if not isinstance(data, dict) or not isinstance(data.get("id"), str) or not isinstance(data.get("token"), str):
+        key_id = response.id() if response.status == 200 else None
+        token = Secret.of(response)
+        if key_id:
+            self.undo("revoke key", lambda: session.delete(f"/api/v1/workspaces/{ws}/keys/{key_id}"), gone=(404,))
+        if not key_id or not token:
             raise SetupError("cannot create the throwaway key")
-        key_id = data["id"]
-        self.defer("revoke key", lambda: self._revoke_key(session, ws, key_id))
-        return key_id, Secret(data["token"])
-
-    @staticmethod
-    def _revoke_key(session, ws, key_id):
-        response = session.delete(f"/api/v1/workspaces/{ws}/keys/{key_id}")
-        if response.status not in (200, 404, 409):
-            raise JourneyError("revoke failed")
-
-    @staticmethod
-    def _expect_ok(response):
-        if response.status != 200:
-            raise JourneyError("undo step refused")
+        return key_id, token

@@ -18,12 +18,14 @@ NOTES = frozenset({
     "cleanup_failed",     # an undo step failed; shared state may need a look
     "setup_failed",       # a precondition could not be created, dependent checks skipped
     "skipped",            # not applicable to this environment (reason is in the feature map)
+    "not_run",            # the run deadline passed before this journey started
 })
 # Exception types that may be named in the artifact. Anything else is reported as "Exception".
 EXCEPTION_TYPES = frozenset({
     "AssertionError", "KeyError", "IndexError", "TypeError", "ValueError", "AttributeError",
     "ConnectionError", "ConnectionRefusedError", "ConnectionResetError", "TimeoutError", "OSError",
-    "HTTPException", "JourneyError", "SetupError", "RemoteDisconnected", "IncompleteRead", "JSONDecodeError",
+    "HTTPException", "JourneyError", "SetupError", "TransportError", "RemoteDisconnected", "IncompleteRead", "JSONDecodeError",
+    "BadStatusLine", "LineTooLong", "UnicodeDecodeError", "StopIteration", "RuntimeError",
 })
 
 
@@ -60,6 +62,10 @@ class CheckRecord:
 class Recorder:
     def __init__(self):
         self.checks = []
+
+    @property
+    def last_name(self):
+        return self.checks[-1].name if self.checks else None
 
     @staticmethod
     def _name(name):
@@ -116,8 +122,10 @@ class Recorder:
 
 
 class JourneyResult:
-    def __init__(self, name, recorder, duration, error=None):
+    def __init__(self, name, recorder, duration, error=None, after_check=None, line=None):
         self.name, self.recorder, self.duration, self.error = name, recorder, duration, error
+        # Where an error happened: the last check recorded before it and a source line number. Never a message.
+        self.after_check, self.line = after_check, line if isinstance(line, int) else None
 
     @property
     def ok(self):
@@ -131,29 +139,34 @@ class JourneyResult:
             "failed": self.recorder.failed,
             "skipped": self.recorder.skipped,
             "error": self.error,
+            "error_after_check": self.after_check,
+            "error_line": self.line,
             "duration_seconds": round(self.duration, 2),
             "checks": [c.as_dict() for c in self.recorder.checks],
         }
 
 
-def summary_document(environment, results):
-    """The JSON summary. `environment` is the loopback/host label only, never a URL with a query."""
-    return {
+def summary_document(environment, results, meta=None):
+    """The JSON summary. `environment` is host:port only. `meta` carries label, run id, time, order and seed."""
+    document = {
         "suite": "scripts/journeys",
         "environment": environment,
+        **(meta or {}),
         "ok": all(r.ok for r in results),
         "passed": sum(r.recorder.passed for r in results),
         "failed": sum(r.recorder.failed for r in results),
         "skipped": sum(r.recorder.skipped for r in results),
         "journeys": [r.as_dict() for r in results],
     }
+    return document
 
 
 def render_table(results):
     width = max([len(r.name) for r in results] + [7])
     lines = [f"{'journey':<{width}}  {'passed':>6}  {'failed':>6}  {'seconds':>7}  result"]
     for r in results:
-        lines.append(f"{r.name:<{width}}  {r.recorder.passed:>6}  {r.recorder.failed:>6}  {r.duration:>7.1f}  {'ok' if r.ok else 'FAILED' + (' (' + r.error + ')' if r.error else '')}")
+        where = f" after {r.after_check}, line {r.line}" if r.error and r.after_check and r.line else ""
+        lines.append(f"{r.name:<{width}}  {r.recorder.passed:>6}  {r.recorder.failed:>6}  {r.duration:>7.1f}  {'ok' if r.ok else 'FAILED' + (' (' + r.error + where + ')' if r.error else '')}")
         for c in r.recorder.checks:
             if not c.passed:
                 want = "-" if c.expected is None else "/".join(str(s) for s in c.expected)
