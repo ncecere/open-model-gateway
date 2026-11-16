@@ -974,8 +974,8 @@ BEGIN
   INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,reserved_tokens,held_microusd,request_count,price_tier) VALUES(env,ws,k,d,now(),date_trunc('minute',now()),date_trunc('month',now()),now()+interval '26 hours','pending',220,10,2,'standard');
   INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,poll_deadline_at,batch_endpoint,batch_mode,user_id,input_file_id,work_file_id,request_total,request_completed,request_failed,upstream_status) VALUES(bj,'batch',ws,k,d,env,'mixed','mixed',now()+interval '26 hours','/v1/responses','gateway',u,fin,fw,2,0,0,'validating');
   UPDATE async_jobs SET runner_id=gen_random_uuid(),runner_epoch=runner_epoch+1,runner_lease_until=clock_timestamp()+interval '60 seconds' WHERE id IN(SELECT id FROM async_jobs WHERE batch_mode='gateway' AND settled_at IS NULL AND (runner_lease_until IS NULL OR runner_lease_until<clock_timestamp()) AND id<>ALL(ARRAY[]::uuid[]) LIMIT 1 FOR UPDATE SKIP LOCKED);
-  PERFORM 1 FROM async_jobs WHERE id=bj AND runner_id IS NOT NULL AND runner_epoch=1 FOR SHARE;
-  PERFORM 1 FROM async_jobs WHERE id=bj AND runner_id IS NOT NULL AND runner_epoch=1 FOR NO KEY UPDATE;
+  PERFORM set_config('idle_in_transaction_session_timeout','30s',true) FROM async_jobs WHERE id=bj AND runner_id IS NOT NULL AND runner_epoch=1 FOR KEY SHARE;
+  PERFORM set_config('idle_in_transaction_session_timeout','30s',true) FROM async_jobs WHERE id=bj AND runner_id IS NOT NULL AND runner_epoch=1 FOR NO KEY UPDATE;
   BEGIN UPDATE async_jobs SET runner_epoch=0 WHERE id=bj; RAISE EXCEPTION 'batch runner epoch moved back'; EXCEPTION WHEN check_violation THEN NULL; END;
   UPDATE async_jobs SET state='in_progress',upstream_status='in_progress',in_progress_at=clock_timestamp(),last_progress_at=clock_timestamp() WHERE id=bj AND state='queued';
   INSERT INTO batch_lines(job_id,workspace_id,line_no,state,execution_id) VALUES(bj,ws,0,'running',line) ON CONFLICT DO NOTHING;
