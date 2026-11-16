@@ -532,7 +532,9 @@ pub(crate) fn map_with_endpoints(
         .iter()
         .all(|k| price_str(&pricing, k) == price_str(&model["pricing"], k));
     let tiers_dropped = !model["pricing"]["overrides"].is_null() && !same_rates;
-    if same_rates && pricing["overrides"].is_null() {
+    // Only an object can carry the tiers (an endpoint is chosen only when its
+    // `pricing.prompt` reads as a string, so this is also guaranteed upstream).
+    if same_rates && pricing.is_object() && pricing["overrides"].is_null() {
         pricing["overrides"] = model["pricing"]["overrides"].clone();
     }
     priced["pricing"] = pricing;
@@ -540,6 +542,12 @@ pub(crate) fn map_with_endpoints(
         priced["context_length"] = json!(n);
     }
     if let Some(n) = endpoint["max_completion_tokens"].as_u64() {
+        // `top_provider` comes from the untrusted catalog; `map` reads a
+        // non-object one as absent, so it is replaced rather than indexed into
+        // (`IndexMut` panics on a string, number, boolean or array).
+        if !priced["top_provider"].is_object() {
+            priced["top_provider"] = json!({});
+        }
         priced["top_provider"]["max_completion_tokens"] = json!(n);
     }
     let mut out = map(&priced, workload, images);
@@ -1069,6 +1077,30 @@ pub(crate) mod tests {
         assert!(v["warnings"].to_string().contains("no context length"));
         // Default ceilings fit a 100,000 tokens-per-minute default.
         const { assert!(DEFAULT_INPUT_CEILING + DEFAULT_OUTPUT_CEILING <= 100_000) };
+    }
+    #[test]
+    fn a_malformed_top_provider_or_endpoint_pricing_is_not_a_panic() {
+        // #634: the catalog is untrusted upstream JSON. A `top_provider` that
+        // is not an object is read as absent (as `map` already does), so the
+        // chosen endpoint's own `max_completion_tokens` is the ceiling.
+        let model =
+            json!({"id":"v/m","pricing":{"prompt":"1","completion":"2"},"top_provider":"x"});
+        let list = endpoints(json!([
+            {"pricing":{"prompt":"1","completion":"2"},"max_completion_tokens":100}
+        ]));
+        let v = map_with_endpoints(&model, WorkloadKind::Generation, None, Some(&list), &[]);
+        assert_eq!(v["draft"]["output_token_limit"], 100);
+        assert_eq!(v["endpoint"]["selection"], "cheapest");
+        // With no endpoint ceiling the malformed value is still just absent.
+        let bare = endpoints(json!([{"pricing":{"prompt":"1","completion":"2"}}]));
+        let v = map_with_endpoints(&model, WorkloadKind::Generation, None, Some(&bare), &[]);
+        assert_eq!(v["draft"]["output_token_limit"], 1024);
+        // An endpoint whose `pricing` is not an object is never chosen (it has
+        // no readable prompt price): the catalog price is used, with a warning.
+        let odd = endpoints(json!([{"pricing":"free","max_completion_tokens":100}]));
+        let v = map_with_endpoints(&model, WorkloadKind::Generation, None, Some(&odd), &[]);
+        assert_eq!(v["endpoint"]["selection"], "catalog");
+        assert_eq!(v["draft"]["output_token_limit"], 1024);
     }
     #[test]
     fn endpoint_choice_follows_evidence_else_cheapest() {

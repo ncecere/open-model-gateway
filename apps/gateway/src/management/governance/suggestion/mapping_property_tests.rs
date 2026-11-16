@@ -1418,24 +1418,18 @@ fn effective(model: &Value, endpoint: &Value) -> Value {
         priced["context_length"] = json!(n);
     }
     if let Some(n) = endpoint["max_completion_tokens"].as_u64() {
+        if !priced["top_provider"].is_object() {
+            priced["top_provider"] = json!({});
+        }
         priced["top_provider"]["max_completion_tokens"] = json!(n);
     }
     priced
 }
 
 fn catalog_object() -> impl Strategy<Value = Value> {
-    // A catalog entry is an object (it was found by its `id`). A `top_provider`
-    // that is neither an object nor null is a known panic (#634), kept out of
-    // here and pinned by `a_malformed_top_provider_is_not_a_panic`.
-    catalog_model().prop_map(|mut m| {
-        if !m.is_object() {
-            m = json!({});
-        }
-        if !(m["top_provider"].is_object() || m["top_provider"].is_null()) {
-            m["top_provider"] = json!({});
-        }
-        m
-    })
+    // A catalog entry is an object (it was found by its `id`); every field of
+    // it, `top_provider` included, may be hostile.
+    catalog_model().prop_map(|m| if m.is_object() { m } else { json!({}) })
 }
 
 proptest! {
@@ -1641,10 +1635,9 @@ fn a_tier_without_a_base_price_is_stated_unknown() {
 /// of those, with a chosen endpoint that lists `max_completion_tokens`, aborts
 /// the request task. The catalog is untrusted JSON from a third party (a fixed
 /// HTTPS origin), and a panic on its content is a refusal of the wrong kind.
-/// The generated endpoint test keeps `top_provider` to an object or null so it
-/// stays green; this test is the shrunk regression.
+/// Fixed in #634: a non-object `top_provider` is read as absent and replaced by
+/// an object carrying the endpoint's own ceiling. This is the shrunk regression.
 #[test]
-#[ignore = "#634: map_with_endpoints panics when top_provider is not an object or null"]
 fn a_malformed_top_provider_is_not_a_panic() {
     for tp in [json!("x"), json!(5), json!([]), json!(true)] {
         let model =
@@ -1657,7 +1650,11 @@ fn a_malformed_top_provider_is_not_a_panic() {
             Some(&endpoints),
             &[],
         );
-        assert!(out["draft"].is_object());
+        // The malformed object is read as absent: the endpoint's own ceiling
+        // applies, the endpoint is the one priced, and nothing is invented.
+        assert!(out["draft"].is_object(), "{tp}: {out}");
+        assert_eq!(out["draft"]["output_token_limit"], 100, "{tp}");
+        assert_eq!(out["endpoint"]["selection"], "cheapest", "{tp}");
     }
 }
 
