@@ -315,3 +315,7 @@ pub(super) fn decode(
         }
     })
 }
+
+#[cfg(test)]
+#[path = "stream_property_tests.rs"]
+mod property_tests;

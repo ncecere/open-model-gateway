@@ -53,6 +53,8 @@ pub mod notify;
 pub mod ops_log;
 pub(crate) mod otlp;
 pub mod partitions;
+#[cfg(test)]
+pub(crate) mod proptest_support_tests;
 pub mod protocols;
 pub mod providers;
 pub mod reporting;

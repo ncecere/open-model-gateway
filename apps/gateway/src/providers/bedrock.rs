@@ -21,6 +21,9 @@ use crate::inference::{error::InferenceError, types::*};
 
 #[path = "bedrock/auth.rs"]
 pub(crate) mod auth;
+#[cfg(test)]
+#[path = "bedrock/encode_property_tests.rs"]
+mod encode_property_tests;
 #[path = "bedrock/stream.rs"]
 mod stream;
 #[cfg(test)]
