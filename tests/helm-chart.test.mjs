@@ -662,6 +662,19 @@ function flowItems(text) {
   return items.map(unquote);
 }
 
+const BLOCK_SCALAR = /^[|>][+-]?\d*\s*(?:#.*)?$/;
+
+/** The more-indented lines after `from` (blank lines included), as the text of a block scalar. */
+function blockText(lines, from, parentIndent) {
+  const body = [];
+  for (let next = from; next < lines.length; next++) {
+    const line = lines[next];
+    if (line.trim() !== "" && line.search(/\S/) <= parentIndent) break;
+    body.push(line.trim());
+  }
+  return { text: body.join("\n").trim(), consumed: body.length };
+}
+
 /** The strings under every `command:` / `args:` key of a text, with the key's indentation. */
 function keyedWords(lines) {
   const found = [];
@@ -675,6 +688,8 @@ function keyedWords(lines) {
       let end = at;
       while (!value.includes("]") && end + 1 < lines.length) value += ` ${stripComment(lines[++end]).trim()}`;
       words = flowItems(value);
+    } else if (BLOCK_SCALAR.test(value)) {
+      words = [blockText(lines, at + 1, indent).text];
     } else if (value === "") {
       words = [];
       for (let next = at + 1; next < lines.length; next++) {
@@ -682,7 +697,14 @@ function keyedWords(lines) {
         if (line.trim() === "") continue;
         const item = line.match(/^( *)- (.*)$/);
         if (!item || item[1].length < indent) break;
-        words.push(unquote(item[2]));
+        const text = item[2].trim();
+        if (BLOCK_SCALAR.test(text)) {
+          const block = blockText(lines, next + 1, item[1].length);
+          words.push(block.text);
+          next += block.consumed;
+        } else {
+          words.push(unquote(item[2]));
+        }
       }
     } else {
       words = [unquote(value)];
@@ -740,7 +762,24 @@ function stateChanging(doc) {
 }
 
 const kindOf = (doc) => doc.match(/^kind: (\w+)$/m)?.[1];
-const isMigrateJob = (doc) => kindOf(doc) === "Job" && /app\.kubernetes\.io\/component: migrate\b/.test(doc);
+// The chart's migrate Job: kind Job, its exact rendered name (release `omg-test`) and the component label.
+const MIGRATE_JOB_NAME = /^  name: omg-test-open-model-gateway-migrate-\d+$/m;
+const isMigrateJob = (doc) =>
+  kindOf(doc) === "Job" && MIGRATE_JOB_NAME.test(doc) && /^ {4}app\.kubernetes\.io\/component: migrate$/m.test(doc);
+// What the migrate Job may do: migrate and apply grants, nothing else.
+const MIGRATE_JOB_STEMS = ["migrat", "grants"];
+
+/** The state-changing stems found in any command or args string of a document. */
+function stems(doc) {
+  const found = new Set();
+  for (const container of podContainers(doc)) {
+    for (const { words } of keyedWords(container.lines)) {
+      for (const word of words) for (const state of STATE_CHANGING) if (word.toLowerCase().includes(state)) found.add(state);
+    }
+  }
+  return [...found].sort();
+}
+const beyondMigrateJob = (doc) => stems(doc).filter((stem) => !MIGRATE_JOB_STEMS.includes(stem));
 
 const helmProfiles = {
   ...profiles,
@@ -753,7 +792,10 @@ for (const [name, args] of Object.entries(helmProfiles)) {
     const docs = docsOf(helmTemplate(args)).filter((doc) => WORKLOADS.includes(kindOf(doc)));
     assert.ok(docs.some((doc) => podContainers(doc).some((c) => c.name === "gateway")), "a gateway workload is rendered");
     for (const doc of docs) {
-      if (isMigrateJob(doc)) continue;
+      if (isMigrateJob(doc)) {
+        assert.deepEqual(beyondMigrateJob(doc), [], "the migrate Job only migrates and applies grants");
+        continue;
+      }
       assert.deepEqual(stateChanging(doc), [], `${kindOf(doc)} ${doc.match(/^  name: (\S+)/m)?.[1]}`);
     }
     for (const doc of docs.filter((d) => kindOf(d) === "Deployment" && podContainers(d).some((c) => c.name === "gateway"))) {
@@ -840,6 +882,47 @@ test("the workload check refuses planted migrate and bootstrap commands (#591)",
   ].join("\n");
   assert.deepEqual(stateChanging(cron), ['containers worker: args "migrate" contains migrat']);
   assert.ok(WORKLOADS.includes(kindOf(cron)));
-  assert.equal(isMigrateJob("kind: Job\nmetadata:\n  labels:\n    app.kubernetes.io/component: migrate\n"), true);
-  assert.equal(isMigrateJob("kind: Job\nmetadata:\n  labels:\n    app.kubernetes.io/component: loadgen\n"), false);
+  assert.equal(isMigrateJob("kind: Job\nmetadata:\n  labels:\n    app.kubernetes.io/component: migrate\n"), false, "the label alone is not enough");
+});
+
+test("block scalars, and an exempt Job that does more than migrate, are caught (#591)", () => {
+  const pod = (args) =>
+    ["kind: Deployment", "spec:", "  template:", "    spec:", "      containers:", "        - name: worker", "          image: x", `          args:${args}`].join("\n");
+  for (const block of [
+    "\n            - |-\n              open-model-gateway migrate",
+    "\n            - >\n              open-model-gateway\n              migrate",
+    "\n            - |\n\n              bootstrap-demo\n            - serve",
+    " |\n            open-model-gateway grants apply",
+    " >-\n            provision-user",
+  ]) {
+    assert.ok(stateChanging(pod(block)).length >= 1, JSON.stringify(block));
+  }
+  assert.deepEqual(stateChanging(pod("\n            - |-\n              serve\n            - --flag")), []);
+  const job = (name, label, containers) =>
+    [
+      "kind: Job",
+      "metadata:",
+      `  name: ${name}`,
+      "  labels:",
+      `    app.kubernetes.io/component: ${label}`,
+      "spec:",
+      "  template:",
+      "    spec:",
+      "      initContainers:",
+      ...containers,
+    ].join("\n");
+  const step = (name, args) => [`        - name: ${name}`, "          image: x", `          args: ${args}`];
+  const good = job("omg-test-open-model-gateway-migrate-1", "migrate", [...step("migrate", '["migrate"]'), ...step("grants", '["grants", "apply"]')]);
+  assert.equal(isMigrateJob(good), true);
+  assert.deepEqual(beyondMigrateJob(good), []);
+  const extra = job("omg-test-open-model-gateway-migrate-1", "migrate", [...step("migrate", '["migrate"]'), ...step("seed", '["bootstrap-demo"]')]);
+  assert.equal(isMigrateJob(extra), true);
+  assert.deepEqual(beyondMigrateJob(extra), ["bootstrap"]);
+  const provision = job("omg-test-open-model-gateway-migrate-1", "migrate", step("p", "\n            - |-\n              provision-user"));
+  assert.deepEqual(beyondMigrateJob(provision), ["provision"]);
+  // Not the chart's Job: another name, another label, or another kind is not exempt.
+  assert.equal(isMigrateJob(job("evil-migrate-1", "migrate", step("m", '["migrate"]'))), false);
+  assert.equal(isMigrateJob(job("omg-test-open-model-gateway-migrate-1", "loadgen", step("m", '["migrate"]'))), false);
+  assert.equal(isMigrateJob(job("omg-test-open-model-gateway-migrate-1", "migrate", step("m", '["migrate"]')).replace("kind: Job", "kind: CronJob")), false);
+  assert.equal(isMigrateJob(job("omg-test-open-model-gateway-migrate-1x", "migrate", step("m", '["migrate"]'))), false);
 });

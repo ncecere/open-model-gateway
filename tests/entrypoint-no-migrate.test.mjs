@@ -69,7 +69,7 @@ const NOT_GATEWAY = {};
 export function dockerfiles(listing) {
   return listing
     .split("\0")
-    .filter((path) => /(^|\/)(?:[^/]*Dockerfile[^/]*|[^/]*Containerfile[^/]*)$/.test(path))
+    .filter((path) => /(^|\/)(?:[^/]*\.)?(?:docker|container)file(?:\.[^/]*)?$/i.test(path))
     .sort();
 }
 
@@ -79,8 +79,8 @@ test("every tracked Dockerfile is found, and the exemptions match one (#591)", (
   for (const expected of ["Dockerfile", "deploy/loadtest/Dockerfile"]) assert.ok(tracked.includes(expected), expected);
   for (const exempt of Object.keys(NOT_GATEWAY)) assert.ok(tracked.includes(exempt), `${exempt} is exempt but not tracked`);
   assert.deepEqual(
-    dockerfiles("a/Dockerfile\0b/app.Dockerfile\0c/Containerfile\0d/Dockerfile.dev\0e/README.md\0Dockerfile\0docs/dockerfile-notes.md"),
-    ["Dockerfile", "a/Dockerfile", "b/app.Dockerfile", "c/Containerfile", "d/Dockerfile.dev"],
+    dockerfiles("a/Dockerfile\0b/app.Dockerfile\0c/Containerfile\0d/Dockerfile.dev\0e/README.md\0Dockerfile\0docs/dockerfile-notes.md\0f/app.dockerfile\0g/DOCKERFILE\0h/x.CONTAINERFILE"),
+    ["Dockerfile", "a/Dockerfile", "b/app.Dockerfile", "c/Containerfile", "d/Dockerfile.dev", "f/app.dockerfile", "g/DOCKERFILE", "h/x.CONTAINERFILE"],
   );
 });
 
