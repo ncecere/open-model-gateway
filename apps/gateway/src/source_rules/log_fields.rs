@@ -109,7 +109,9 @@ const DENIED_WORDS: &[&str] = &[
 /// * `commands.rs` `bootstrap_dev` prints the development keys to stdout
 ///   once, on purpose ("Development keys: save these now. They cannot be
 ///   retrieved again."). It is the operator's terminal output of a local
-///   command, not a log line; the keys are fresh, local-only credentials.
+///   command, not a log line; the keys are fresh credentials for a local
+///   development database. That "local" basis rests on `GATEWAY_ENV`, which
+///   is tracked in #632.
 const EXEMPT: &[(&str, &str)] = &[
     (
         "http.rs :: request_context :: info :: header_latency_ms=started.elapsed().as_millis() ; status=response.status().as_u16()",

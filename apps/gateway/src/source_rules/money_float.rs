@@ -28,7 +28,7 @@
 //! expansion holds a float; a money float in a function that names no money
 //! word in a file that names no money concept; integer rounding mistakes;
 //! floats in dependencies.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use proc_macro2::TokenTree;
 use syn::{ext::IdentExt, visit::Visit};
@@ -63,7 +63,8 @@ const MONEY_WORDS: &[&str] = &[
     "spend", "spent", "budget", "budgets", "charge", "charged", "billing", "invoice",
 ];
 
-/// (file, item, kind): reviewed floats in money-bearing code. A new entry
+/// (file, item, kind, count): reviewed floats in money-bearing code, each
+/// occurrence counted, so a second `f64` in the same item fails. A new entry
 /// needs its reason here; the list does not grow silently.
 ///
 /// * `management/governance/suggestion.rs`, `discounted`: `Number::as_f64`
@@ -73,15 +74,21 @@ const MONEY_WORDS: &[&str] = &[
 /// * `inference/types.rs`, `MessagesOptions`: the struct has a `task_budget`
 ///   (a token budget, not money, which is why the money-word rule reached it)
 ///   next to the `top_p` sampling parameter, an `f64`. Granularity is the
-///   whole struct: a new money float in it would pass.
-const ALLOWED: &[(&str, &str, &str)] = &[
-    ("management/governance/suggestion.rs", "discounted", "f64"),
+///   whole struct, but the count is exact: a second `f64` in it fails.
+const ALLOWED: &[(&str, &str, &str, usize)] = &[
+    (
+        "management/governance/suggestion.rs",
+        "discounted",
+        "f64",
+        1,
+    ),
     (
         "management/governance/suggestion.rs",
         "discounted",
         "float literal",
+        1,
     ),
-    ("inference/types.rs", "MessagesOptions", "f64"),
+    ("inference/types.rs", "MessagesOptions", "f64", 1),
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -242,7 +249,7 @@ fn migration_floats(sql: &str) -> BTreeSet<&'static str> {
 #[derive(Default)]
 struct Frame {
     money: bool,
-    kinds: BTreeSet<String>,
+    kinds: BTreeMap<String, usize>,
 }
 
 struct Finder {
@@ -251,19 +258,22 @@ struct Finder {
     scope: Scope,
     /// Outermost item being read, and its scope path.
     frame: Option<(String, Frame)>,
-    hits: BTreeSet<Hit>,
+    hits: BTreeMap<Hit, usize>,
 }
 
 impl Finder {
     fn float(&mut self, kind: String) {
         if self.whole_file {
-            self.hits.insert(Hit {
-                file: self.file.clone(),
-                item: self.scope.path(),
-                kind,
-            });
+            *self
+                .hits
+                .entry(Hit {
+                    file: self.file.clone(),
+                    item: self.scope.path(),
+                    kind,
+                })
+                .or_default() += 1;
         } else if let Some((_, frame)) = &mut self.frame {
-            frame.kinds.insert(kind);
+            *frame.kinds.entry(kind).or_default() += 1;
         }
     }
 
@@ -290,12 +300,15 @@ impl Finder {
             return;
         };
         if frame.money && !self.whole_file {
-            for kind in frame.kinds {
-                self.hits.insert(Hit {
-                    file: self.file.clone(),
-                    item: item.clone(),
-                    kind,
-                });
+            for (kind, count) in frame.kinds {
+                *self
+                    .hits
+                    .entry(Hit {
+                        file: self.file.clone(),
+                        item: item.clone(),
+                        kind,
+                    })
+                    .or_default() += count;
             }
         }
     }
@@ -373,14 +386,14 @@ fn money_path(path: &str) -> bool {
 }
 
 /// Every float in money code of one file.
-pub(super) fn scan(source: &Source) -> BTreeSet<Hit> {
+pub(super) fn scan(source: &Source) -> BTreeMap<Hit, usize> {
     let whole_file = money_path(&source.path);
     let mut finder = Finder {
         file: source.path.clone(),
         whole_file,
         scope: Scope::default(),
         frame: None,
-        hits: BTreeSet::new(),
+        hits: BTreeMap::new(),
     };
     // Frames: each outermost item (and each method of an impl or trait) is
     // read on its own, so one money word does not taint its neighbours.
@@ -468,29 +481,41 @@ fn scan_item(finder: &mut Finder, item: &syn::Item) {
     }
 }
 
-/// Floats not on [`ALLOWED`], and allowlist entries that match nothing.
-pub(super) fn problems(sources: &[Source], allowed: &[(&str, &str, &str)]) -> Vec<String> {
-    let mut found = BTreeSet::new();
+/// Floats not on [`ALLOWED`] (or more of them than the entry counts), and
+/// allowlist entries that match nothing.
+pub(super) fn problems(sources: &[Source], allowed: &[(&str, &str, &str, usize)]) -> Vec<String> {
+    let mut found: BTreeMap<Hit, usize> = BTreeMap::new();
     for source in sources {
-        found.extend(scan(source));
+        for (hit, n) in scan(source) {
+            *found.entry(hit).or_default() += n;
+        }
     }
-    let allowed: BTreeSet<Hit> = allowed
-        .iter()
-        .map(|(file, item, kind)| Hit {
-            file: (*file).to_owned(),
-            item: (*item).to_owned(),
-            kind: (*kind).to_owned(),
-        })
-        .collect();
-    let mut out: Vec<String> = found
-        .difference(&allowed)
-        .map(|h| format!("float in money code: {}", h.text()))
-        .collect();
-    out.extend(
-        allowed
-            .difference(&found)
-            .map(|h| format!("stale allowlist entry: {}", h.text())),
-    );
+    let mut allowed_hits: BTreeMap<Hit, usize> = BTreeMap::new();
+    for (file, item, kind, count) in allowed {
+        *allowed_hits
+            .entry(Hit {
+                file: (*file).to_owned(),
+                item: (*item).to_owned(),
+                kind: (*kind).to_owned(),
+            })
+            .or_default() += count;
+    }
+    let mut out = Vec::new();
+    for (hit, n) in &found {
+        match allowed_hits.get(hit) {
+            Some(want) if want == n => {}
+            Some(want) => out.push(format!(
+                "float in money code: {} found x{n}, allowed x{want}",
+                hit.text()
+            )),
+            None => out.push(format!("float in money code: {} (x{n})", hit.text())),
+        }
+    }
+    for (hit, want) in &allowed_hits {
+        if !found.contains_key(hit) {
+            out.push(format!("stale allowlist entry: {} (x{want})", hit.text()));
+        }
+    }
     out
 }
 
@@ -649,10 +674,10 @@ mod tests {
     #[test]
     fn an_allowlist_entry_that_matches_nothing_is_refused() {
         let source = parse_fixture("governance/pricing.rs", "pub fn price() -> u64 { 1 }");
-        let found = problems(&[source], &[("governance/pricing.rs", "price", "f64")]);
+        let found = problems(&[source], &[("governance/pricing.rs", "price", "f64", 1)]);
         assert_eq!(
             found,
-            vec!["stale allowlist entry: governance/pricing.rs :: price :: f64".to_owned()]
+            vec!["stale allowlist entry: governance/pricing.rs :: price :: f64 (x1)".to_owned()]
         );
     }
 
@@ -663,12 +688,42 @@ mod tests {
         let found = problems(
             &[source],
             &[
-                ("governance/pricing.rs", "ratio", "f64"),
-                ("governance/pricing.rs", "ratio", "float literal"),
+                ("governance/pricing.rs", "ratio", "f64", 1),
+                ("governance/pricing.rs", "ratio", "float literal", 1),
             ],
         );
         assert_eq!(found.len(), 2, "{found:?}");
         assert!(found.iter().all(|p| p.contains(":: other ::")));
+    }
+
+    #[test]
+    fn a_second_float_in_an_allowlisted_item_fails() {
+        let allowed = [
+            ("governance/pricing.rs", "Options", "f64", 1),
+            ("governance/pricing.rs", "Options", "float literal", 0),
+        ];
+        let one = parse_fixture(
+            "governance/pricing.rs",
+            "pub struct Options { pub top_p: Option<f64> }",
+        );
+        assert!(problems(&[one], &allowed[..1]).is_empty());
+        let two = parse_fixture(
+            "governance/pricing.rs",
+            "pub struct Options { pub top_p: Option<f64>, pub cost_ratio: f64 }",
+        );
+        assert_eq!(
+            problems(&[two], &allowed[..1]),
+            ["float in money code: governance/pricing.rs :: Options :: f64 found x2, allowed x1"]
+        );
+        // And an allowance larger than what is there is stale-by-count.
+        let one = parse_fixture(
+            "governance/pricing.rs",
+            "pub struct Options { pub top_p: Option<f64> }",
+        );
+        assert_eq!(
+            problems(&[one], &[("governance/pricing.rs", "Options", "f64", 2)]),
+            ["float in money code: governance/pricing.rs :: Options :: f64 found x1, allowed x2"]
+        );
     }
 
     #[test]
