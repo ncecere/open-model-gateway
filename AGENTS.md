@@ -105,7 +105,23 @@ What it does is `docs/local-demo.md` in Kubernetes, in the order the invariants 
 - Example connections and deployments start disabled, as in the local demo, and there is no model server or provider: nothing here is paid or live-provider acceptance.
 - Secrets are generated per environment and stay in the cluster. Do not print or commit them.
 
-Only environments run on the cluster. The Rust and web test suites, the container and staging tests, and the browser tests still run locally or on GitHub (see Checks); running them as Jobs on the cluster is planned.
+### Running the test suites on the cluster
+
+`scripts/spark-test.py` runs the suites for a pushed commit as a job in its own namespace (demo environments keep running beside it), with the same safety design as `spark-env.py` (the Spark kubeconfig only, scrubbed child environment, only the namespaces `<base>-omg-test-s1` and `-s2`, which `spark-env.py` refuses to touch). Details, measurements and limits: `docs/verification.md` ("Tests on the Spark platform").
+
+```sh
+python3 -I scripts/spark-test.py run my-name --ref my-branch --suite lib|integration|web|checks|all [--summary result.json] [--keep|--detach]
+python3 -I scripts/spark-test.py status [my-name]      # the two slots, phase and current step
+python3 -I scripts/spark-test.py logs my-name [-f]
+python3 -I scripts/spark-test.py result my-name        # after --detach: the test result lines, failing tests and the JSON summary
+python3 -I scripts/spark-test.py down my-name          # deletes the run and its database; the cache volume stays
+python3 -I scripts/spark-test.py purge                 # deletes idle slots and their cache volumes
+```
+
+- The ref must already be pushed: the job fetches the public repository at the exact commit the ref resolves to and verifies `HEAD`. Nothing but the job manifest and the script is uploaded.
+- At most two runs at once (two cache slots): the shared quota leaves room for two runs and one demo environment, and a third `run` is refused with a message instead of a pod stuck Pending. `run` waits and exits 0 only if every selected suite passed (1 for failures, 2 for errors of the tool), then removes the run; `down` anything left behind.
+- `lib` is the gateway library on a disposable CloudNativePG PostgreSQL 17, in four processes one after the other (as CI's shards: one process of 2,465 tests needs more than 10 GiB), `integration` the gateway's integration targets, the runtime-privilege and ignored probes, the tools and the doctests (not `filestore_s3` or the backup drill, which need Docker), `web` is `npm ci`, typecheck and Vitest, `checks` is `cargo fmt` and both Clippy invocations, `all` is the four.
+- A run is an arm64 run on 1.8 CPUs. It shows that the suites pass on arm64 and finds failures early; it does not replace GitHub CI (amd64, Docker-based tests, the browser suite, the image and supply-chain jobs), and the coordinator still needs green GitHub CI to merge. Timing-sensitive tests can fail under the limited CPU: rerun a failure alone (`--test-args`) before calling it real.
 
 ## Checks
 
@@ -124,4 +140,4 @@ npm run test:container
 npm run test:staging
 ```
 
-`npm run test:web` runs Vitest unit tests; do not claim browser tests completed without running them. Use real database integration tests for tenancy constraints and authorization queries. Use mock upstream servers for provider contract tests; do not incur paid provider requests in CI. Keep the roadmap and README honest as features land.
+The Rust and web suites and the checks above also run on the Spark cluster for a pushed commit (`scripts/spark-test.py`, see "Running the test suites on the cluster"); that is an arm64 run and does not replace green GitHub CI. `npm run test:web` runs Vitest unit tests; do not claim browser tests completed without running them. Use real database integration tests for tenancy constraints and authorization queries. Use mock upstream servers for provider contract tests; do not incur paid provider requests in CI. Keep the roadmap and README honest as features land.
