@@ -606,63 +606,132 @@ test("the Spark test platform's values render the database and migrate Job it re
 });
 
 // AGENTS.md: "Never run migrations or bootstrap automatically in `serve`/the container entrypoint" (#591).
-// In every rendered profile the gateway Deployment's containers (init containers included) run only
-// `serve` and `wait-for-database`; the commands that change the schema or seed data
-// (migrate, grants, bootstrap-*, provision-user) appear only in Jobs. Plain-text reading, like the
-// rest of this file: containers are split by the indentation of the list item that follows
-// `containers:` / `initContainers:`.
-const STATE_CHANGING = ["migrate", "grants", "bootstrap-dev", "bootstrap-demo", "provision-user"];
+// In every rendered profile, every container and init container of every workload (Deployment,
+// StatefulSet, DaemonSet, ReplicaSet, CronJob, Job, Pod) must have command and args strings free of
+// migrat(e/ion), grants, bootstrap and provision (matched as substrings, so `sh -c "... migrate"` fails,
+// at any depth, so a probe's `exec.command` cannot hide one), with one named exception: the chart's
+// migrate Job, which is rendered only when migrations.run is true. The gateway container must run
+// exactly args ["serve"] with no command. Plain-text reading, like the rest of this file: containers
+// are split by the indentation of the list item that follows `containers:` / `initContainers:`.
+const STATE_CHANGING = ["migrat", "grants", "bootstrap", "provision"];
+const WORKLOADS = ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "CronJob", "Job", "Pod"];
+
+function stripComment(line) {
+  let quote = null;
+  for (let at = 0; at < line.length; at++) {
+    const c = line[at];
+    if (quote) {
+      if (c === quote && line[at - 1] !== "\\") quote = null;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === "#" && (at === 0 || /\s/.test(line[at - 1]))) {
+      return line.slice(0, at).trimEnd();
+    }
+  }
+  return line;
+}
+
+function unquote(text) {
+  const t = text.trim();
+  if ((t.startsWith('"') && t.endsWith('"') && t.length >= 2) || (t.startsWith("'") && t.endsWith("'") && t.length >= 2)) {
+    return t.slice(1, -1);
+  }
+  return t;
+}
+
+function flowItems(text) {
+  const inner = text.trim().replace(/^\[/, "").replace(/\]$/, "");
+  const items = [];
+  let quote = null;
+  let current = "";
+  for (const c of inner) {
+    if (quote) {
+      current += c;
+      if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+      current += c;
+    } else if (c === ",") {
+      items.push(current);
+      current = "";
+    } else {
+      current += c;
+    }
+  }
+  if (current.trim() !== "") items.push(current);
+  return items.map(unquote);
+}
+
+/** The strings under every `command:` / `args:` key of a text, with the key's indentation. */
+function keyedWords(lines) {
+  const found = [];
+  for (let at = 0; at < lines.length; at++) {
+    const match = lines[at].match(/^( *)(?:- )?(command|args):(.*)$/);
+    if (!match) continue;
+    const indent = match[1].length;
+    let value = stripComment(match[3]).trim();
+    let words;
+    if (value.startsWith("[")) {
+      let end = at;
+      while (!value.includes("]") && end + 1 < lines.length) value += ` ${stripComment(lines[++end]).trim()}`;
+      words = flowItems(value);
+    } else if (value === "") {
+      words = [];
+      for (let next = at + 1; next < lines.length; next++) {
+        const line = stripComment(lines[next]);
+        if (line.trim() === "") continue;
+        const item = line.match(/^( *)- (.*)$/);
+        if (!item || item[1].length < indent) break;
+        words.push(unquote(item[2]));
+      }
+    } else {
+      words = [unquote(value)];
+    }
+    found.push({ key: match[2], indent, words });
+  }
+  return found;
+}
 
 function podContainers(doc) {
   const out = [];
   const lines = doc.split("\n");
   for (let at = 0; at < lines.length; at++) {
-    const header = lines[at].match(/^( *)(containers|initContainers):\s*$/);
+    const header = lines[at].match(/^( *)(containers|initContainers|ephemeralContainers):\s*$/);
     if (!header) continue;
     let first = at + 1;
     while (first < lines.length && /^\s*(#.*)?$/.test(lines[first])) first++;
     const itemIndent = lines[first]?.match(/^( *)- /)?.[1];
     if (itemIndent === undefined) continue;
-    let end = first;
     let current = null;
-    for (; end < lines.length; end++) {
+    for (let end = first; end < lines.length; end++) {
       const line = lines[end];
       if (line.trim() !== "" && line.search(/\S/) < itemIndent.length) break;
-      if (line.startsWith(`${itemIndent}- `) && line.slice(itemIndent.length) !== "" && line.search(/\S/) === itemIndent.length) {
-        current = { kind: header[2], name: line.match(/- name:\s*"?([^"\s]+)"?/)?.[1] ?? "?", text: "" };
+      if (line.startsWith(`${itemIndent}- `) && line.search(/\S/) === itemIndent.length) {
+        current = { kind: header[2], name: line.match(/- name:\s*"?([^"\s]+)"?/)?.[1] ?? "?", indent: itemIndent.length + 2, lines: [] };
         out.push(current);
       }
-      if (current) current.text += `${line}\n`;
+      current?.lines.push(line);
     }
   }
   return out;
 }
 
-function words(text, key) {
-  // `args: ["a", "b"]` or a block list under `args:` (at the container's own indentation).
-  const match = text.match(new RegExp(`^ +${key}:(?: (\\[.*\\]))?\\s*$`, "m"));
-  if (!match) return undefined;
-  if (match[1]) return JSON.parse(match[1]);
-  const after = text.slice(match.index + match[0].length).split("\n").slice(1);
-  const items = [];
-  for (const line of after) {
-    const item = line.match(/^ +- "?([^"]*)"?$/);
-    if (!item) break;
-    items.push(item[1]);
-  }
-  return items;
-}
-
+/** Problems of one workload document; the migrate Job is the caller's exception. */
 function stateChanging(doc) {
   const found = [];
   for (const container of podContainers(doc)) {
-    for (const key of ["command", "args"]) {
-      for (const word of words(container.text, key) ?? []) {
-        if (STATE_CHANGING.includes(word)) found.push(`${container.kind} ${container.name}: ${key} has ${word}`);
+    const keyed = keyedWords(container.lines);
+    for (const { key, words } of keyed) {
+      for (const word of words) {
+        const hit = STATE_CHANGING.find((state) => word.toLowerCase().includes(state));
+        if (hit) found.push(`${container.kind} ${container.name}: ${key} ${JSON.stringify(word)} contains ${hit}`);
       }
     }
     if (container.name === "gateway" && container.kind === "containers") {
-      if (JSON.stringify(words(container.text, "args")) !== '["serve"]' || words(container.text, "command") !== undefined) {
+      const direct = keyed.filter((entry) => entry.indent === container.indent);
+      const args = direct.find((entry) => entry.key === "args");
+      const command = direct.find((entry) => entry.key === "command");
+      if (JSON.stringify(args?.words) !== '["serve"]' || command !== undefined) {
         found.push(`containers gateway: must run exactly args ["serve"] with the image entrypoint`);
       }
     }
@@ -670,56 +739,107 @@ function stateChanging(doc) {
   return found;
 }
 
-for (const [name, args] of Object.entries({
+const kindOf = (doc) => doc.match(/^kind: (\w+)$/m)?.[1];
+const isMigrateJob = (doc) => kindOf(doc) === "Job" && /app\.kubernetes\.io\/component: migrate\b/.test(doc);
+
+const helmProfiles = {
   ...profiles,
   "cnpg with the migrate Job": [...profiles.cnpg, "--set", "migrations.run=true"],
-})) {
-  test(`${name}: the gateway Deployment never migrates or bootstraps (#591)`, () => {
-    const deployments = docsOfKind(helmTemplate(args), "Deployment").filter((d) => podContainers(d).some((c) => c.name === "gateway"));
-    assert.ok(deployments.length >= 1, "a gateway Deployment is rendered");
-    for (const deployment of deployments) {
-      assert.deepEqual(stateChanging(deployment), []);
-      assert.match(deployment, /args: \["wait-for-database", "--schema"\]/, "the init container only waits");
+  "external-db with the migrate Job": [...profiles["external-db"], "--set", "migrations.run=true"],
+};
+
+for (const [name, args] of Object.entries(helmProfiles)) {
+  test(`${name}: no workload container migrates or bootstraps, and the gateway runs only serve (#591)`, () => {
+    const docs = docsOf(helmTemplate(args)).filter((doc) => WORKLOADS.includes(kindOf(doc)));
+    assert.ok(docs.some((doc) => podContainers(doc).some((c) => c.name === "gateway")), "a gateway workload is rendered");
+    for (const doc of docs) {
+      if (isMigrateJob(doc)) continue;
+      assert.deepEqual(stateChanging(doc), [], `${kindOf(doc)} ${doc.match(/^  name: (\S+)/m)?.[1]}`);
+    }
+    for (const doc of docs.filter((d) => kindOf(d) === "Deployment" && podContainers(d).some((c) => c.name === "gateway"))) {
+      assert.match(doc, /args: \["wait-for-database", "--schema"\]/, "the init container only waits");
     }
   });
 }
 
-test("the migrate Job, not the Deployment, holds the schema-changing commands (#591)", () => {
-  const rendered = helmTemplate([...profiles.cnpg, "--set", "migrations.run=true"]);
-  const [job] = docsOfKind(rendered, "Job");
-  assert.ok(stateChanging(job).length >= 2, "the Job migrates and applies grants");
+test("the migrate Job is the single exception, and it is rendered only when migrations.run is true (#591)", () => {
+  for (const [name, args] of Object.entries(helmProfiles)) {
+    const jobs = docsOf(helmTemplate(args)).filter(isMigrateJob);
+    if (args.includes("migrations.run=true")) {
+      assert.equal(jobs.length, 1, `${name}: exactly one migrate Job`);
+      const words = stateChanging(jobs[0]);
+      assert.ok(words.some((w) => w.includes("migrat")) && words.some((w) => w.includes("grants")), `${name}: ${words}`);
+    } else {
+      assert.equal(jobs.length, 0, `${name}: no migrate Job without migrations.run`);
+    }
+  }
 });
 
-test("the Deployment command check refuses planted migrate and bootstrap commands (#591)", () => {
-  const deployment = (initArgs, args, extra = "") => [
-    "kind: Deployment",
-    "spec:",
-    "  template:",
-    "    spec:",
-    "      initContainers:",
-    "        - name: wait-for-schema",
-    `          args: ${initArgs}`,
-    "      containers:",
+test("the workload check refuses planted migrate and bootstrap commands (#591)", () => {
+  const pod = (init, containers) =>
+    [
+      "kind: Deployment",
+      "spec:",
+      "  template:",
+      "    spec:",
+      "      initContainers:",
+      ...init,
+      "      containers:",
+      ...containers,
+    ].join("\n");
+  const gateway = (extra = [], args = '["serve"]') => [
     "        - name: gateway",
     "          image: x",
     `          args: ${args}`,
-    extra,
+    ...extra,
     "          env:",
     "            - name: GATEWAY_X",
     "              value: y",
+  ];
+  const wait = (args = '["wait-for-database", "--schema"]') => ["        - name: wait-for-schema", `          args: ${args}`];
+  assert.deepEqual(stateChanging(pod(wait(), gateway())), []);
+  // Trailing comments and a block list do not hide anything.
+  assert.deepEqual(stateChanging(pod(wait(), gateway([], '["serve"] # migrate later'))), []);
+  assert.deepEqual(stateChanging(pod(wait('["migrate"] # only on upgrade'), gateway())), ['initContainers wait-for-schema: args "migrate" contains migrat']);
+  assert.deepEqual(stateChanging(pod(wait(), gateway([], '["migrate"]'))), [
+    'containers gateway: args "migrate" contains migrat',
+    'containers gateway: must run exactly args ["serve"] with the image entrypoint',
+  ]);
+  assert.deepEqual(
+    stateChanging(pod(wait(), gateway([], "\n            - serve # first\n            # a comment\n            - bootstrap-demo"))),
+    ['containers gateway: args "bootstrap-demo" contains bootstrap', 'containers gateway: must run exactly args ["serve"] with the image entrypoint'],
+  );
+  // A shell wrapper, in an init container or the gateway.
+  const wrapped = ["        - name: seed", "          command: [\"sh\", \"-c\", \"wait && open-model-gateway migrate\"]"];
+  assert.deepEqual(stateChanging(pod([...wait(), ...wrapped], gateway())), ['initContainers seed: command "wait && open-model-gateway migrate" contains migrat']);
+  assert.deepEqual(stateChanging(pod(wait(), gateway(['          command: ["wrapper", "-c", "serve"]']))), [
+    'containers gateway: must run exactly args ["serve"] with the image entrypoint',
+  ]);
+  // grants, provision, and a mixed-case word.
+  for (const word of ["grants", "provision-user", "Bootstrap", "run-migrations"]) {
+    assert.equal(stateChanging(pod(wait(`["${word}"]`), gateway())).length, 1, word);
+  }
+  // A second container, of another name, in the same workload.
+  const worker = ["        - name: worker", "          image: x", '          args: ["grants", "apply"]'];
+  assert.deepEqual(stateChanging(pod(wait(), [...gateway(), ...worker])), ['containers worker: args "grants" contains grants']);
+  // A probe's nested exec.command cannot hide one.
+  const probe = ["          livenessProbe:", "            exec:", '              command: ["open-model-gateway", "migrate"]'];
+  assert.deepEqual(stateChanging(pod(wait(), gateway(probe))), ['containers gateway: command "migrate" contains migrat']);
+  // A second workload kind with a worker container.
+  const cron = [
+    "kind: CronJob",
+    "spec:",
+    "  jobTemplate:",
+    "    spec:",
+    "      template:",
+    "        spec:",
+    "          containers:",
+    "            - name: worker",
+    "              image: ghcr.io/x/open-model-gateway:v1",
+    '              args: ["migrate"]',
   ].join("\n");
-  assert.deepEqual(stateChanging(deployment('["wait-for-database", "--schema"]', '["serve"]')), []);
-  assert.deepEqual(stateChanging(deployment('["wait-for-database", "--schema"]', '["migrate"]')), [
-    "containers gateway: args has migrate",
-    'containers gateway: must run exactly args ["serve"] with the image entrypoint',
-  ]);
-  assert.deepEqual(stateChanging(deployment('["migrate"]', '["serve"]')), ["initContainers wait-for-schema: args has migrate"]);
-  assert.deepEqual(stateChanging(deployment('["grants", "apply"]', '["serve"]')), ["initContainers wait-for-schema: args has grants"]);
-  assert.deepEqual(stateChanging(deployment('["wait-for-database"]', '["serve", "bootstrap-demo"]')).length, 2);
-  assert.deepEqual(stateChanging(deployment('["wait-for-database"]', '["serve"]', '          command: ["wrapper", "-c", "migrate && serve"]')), [
-    'containers gateway: must run exactly args ["serve"] with the image entrypoint',
-  ]);
-  assert.deepEqual(stateChanging(deployment('["wait-for-database"]', '["serve"]', '          command: ["migrate"]')).length, 2);
-  const block = deployment('["wait-for-database"]', '["serve"]').replace('args: ["serve"]', 'args:\n            - "serve"\n            - provision-user');
-  assert.equal(stateChanging(block).length, 2);
+  assert.deepEqual(stateChanging(cron), ['containers worker: args "migrate" contains migrat']);
+  assert.ok(WORKLOADS.includes(kindOf(cron)));
+  assert.equal(isMigrateJob("kind: Job\nmetadata:\n  labels:\n    app.kubernetes.io/component: migrate\n"), true);
+  assert.equal(isMigrateJob("kind: Job\nmetadata:\n  labels:\n    app.kubernetes.io/component: loadgen\n"), false);
 });

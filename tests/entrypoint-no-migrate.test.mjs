@@ -4,15 +4,18 @@
 // Dockerfiles: the final stage's ENTRYPOINT and CMD (the HEALTHCHECK command is a separate
 // instruction and is a read-only probe) must be exec form and together run exactly
 // `open-model-gateway serve`: no shell, no wrapper script, and none of the commands that change
-// the schema or seed data.
+// the schema or seed data. Every Dockerfile or Containerfile git tracks is checked; one that is
+// not a gateway runtime image must be on NOT_GATEWAY with its reason (none today).
 //
 // Not covered: what the binary does for `serve` (Rust test), a compose file or an orchestrator
 // that overrides the command, and a base image's own entrypoint (the final stage sets its own).
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { gitEnv } from "./supply-chain/secret-scan-lib.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const STATE_CHANGING = ["migrate", "grants", "bootstrap-dev", "bootstrap-demo", "provision-user"];
@@ -59,7 +62,29 @@ export function entrypointProblems(text) {
   return problems;
 }
 
-for (const dockerfile of ["Dockerfile", "deploy/loadtest/Dockerfile"]) {
+/** Tracked Dockerfiles that do not run the gateway binary, with the reason. None today. */
+const NOT_GATEWAY = {};
+
+/** The tracked Dockerfiles and Containerfiles, from `git ls-files` output. */
+export function dockerfiles(listing) {
+  return listing
+    .split("\0")
+    .filter((path) => /(^|\/)(?:[^/]*Dockerfile[^/]*|[^/]*Containerfile[^/]*)$/.test(path))
+    .sort();
+}
+
+const tracked = dockerfiles(execFileSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8", env: gitEnv(), maxBuffer: 64 * 1024 * 1024 }));
+
+test("every tracked Dockerfile is found, and the exemptions match one (#591)", () => {
+  for (const expected of ["Dockerfile", "deploy/loadtest/Dockerfile"]) assert.ok(tracked.includes(expected), expected);
+  for (const exempt of Object.keys(NOT_GATEWAY)) assert.ok(tracked.includes(exempt), `${exempt} is exempt but not tracked`);
+  assert.deepEqual(
+    dockerfiles("a/Dockerfile\0b/app.Dockerfile\0c/Containerfile\0d/Dockerfile.dev\0e/README.md\0Dockerfile\0docs/dockerfile-notes.md"),
+    ["Dockerfile", "a/Dockerfile", "b/app.Dockerfile", "c/Containerfile", "d/Dockerfile.dev"],
+  );
+});
+
+for (const dockerfile of tracked.filter((path) => !(path in NOT_GATEWAY))) {
   test(`${dockerfile}: the container runs only \`serve\` (#591)`, () => {
     assert.deepEqual(entrypointProblems(readFileSync(join(root, dockerfile), "utf8")), []);
   });
