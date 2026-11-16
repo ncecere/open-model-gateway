@@ -55,7 +55,7 @@ export function PlatformOverview({ session }: { session: Session }) {
 
 /**
  * Spend and requests use the same period as Usage & costs (this month, UTC), from the platform usage overview;
- * while it loads or if it fails they read "…" / "—", never zero (review #25, rule 7).
+ * while it loads or if it fails they read "…" / "—", never zero.
  */
 function Glance({ data }: { data: PlatformOverviewData }) {
   const g = data.glance, count = (n: number) => formatCount(n), month = usagePeriod({});

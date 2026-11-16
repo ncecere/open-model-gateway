@@ -272,7 +272,7 @@ fn token_ready(method: &str, path: &str) -> bool {
             .iter()
             .any(|(rm, rp)| *rm == m && *rp == path)
     };
-    // Mirror route_policy::find's own HEAD->GET fallback (finding 1): the
+    // Mirror route_policy::find's own HEAD->GET fallback: the
     // Access/TokenPolicy lookup above already treats an undeclared HEAD as
     // its route's declared GET, so a GET-only entry here must answer ready
     // for HEAD too, or every token-readable GET route wrongly 501s on HEAD
@@ -356,7 +356,7 @@ async fn handle_admin_token(
     // (403/404/409/...) or, when the underlying failure is infrastructure
     // (a pool/view/storage error -- `ApiError`'s own `From<sqlx::Error>`
     // already maps those to a 5xx), a distinct "error" outcome reported at
-    // its own status rather than collapsed into a misleading 403 (finding 4).
+    // its own status rather than collapsed into a misleading 403.
     let mut authorization: Result<(), ApiError> = Err(denied());
     if let (Some(scope), Some(access)) = (required_scope, access) {
         let scope_ok = context.scopes.iter().any(|s| s.as_str() == scope.as_str());
@@ -379,7 +379,7 @@ async fn handle_admin_token(
                 // Normalize to 503, never whatever other 5xx the
                 // underlying failure happened to carry: the client-facing
                 // contract for an infrastructure error is always 503 with
-                // outcome 'error' (finding 4), not an incidental 500 or
+                // outcome 'error', not an incidental 500 or
                 // any other server-error status a future error source
                 // might construct. The expected-refusal branch below
                 // keeps the original status exactly as returned.

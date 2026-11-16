@@ -136,14 +136,13 @@ pub enum CreateAdminTokenError {
     /// The owner is not, at the instant of insertion, a currently
     /// effective Platform Admin (migration 0051's `BEFORE INSERT` trigger;
     /// never bypassed, including under a concurrent demotion). Mapped from
-    /// SQLSTATE `OM001` alone, never message text (coordinator review
-    /// issue 5a).
+    /// SQLSTATE `OM001` alone, never message text.
     OwnerNotAdmin,
     /// The caller's transaction is running at an isolation level other
     /// than READ COMMITTED when an admin-token authority guard (creation
     /// or role-loss) ran; under REPEATABLE READ/SERIALIZABLE the guard's
-    /// own snapshot can be stale behind its lock wait (coordinator review
-    /// issue 1), so it refuses outright instead. Mapped from SQLSTATE
+    /// own snapshot can be stale behind its lock wait, so it refuses
+    /// outright instead. Mapped from SQLSTATE
     /// `OM002` alone. The gateway's own transactions are always READ
     /// COMMITTED (`crate::db::begin`), so this should never occur on a
     /// production path; it exists as a hard backstop.
@@ -152,10 +151,9 @@ pub enum CreateAdminTokenError {
     /// lock exclusive (`governance::locks::exclusive(Scope::User(owner))`,
     /// taken up front, before the first write -- AGENTS.md's canonical
     /// lock order). Migration 0051's creation guard checks this directly
-    /// instead of acquiring the lock lazily (adversarial re-review of #37
-    /// PR1, issue 6); a real PR2 handler that forgets this gets an
-    /// unambiguous refusal instead of a lock-holding contract that was
-    /// only ever documentation. Mapped from SQLSTATE `OM003` alone.
+    /// instead of acquiring the lock lazily: a handler that forgets this
+    /// gets an unambiguous refusal instead of a lock-holding contract that
+    /// is only documentation. Mapped from SQLSTATE `OM003` alone.
     OwnerLockNotHeld,
     Database(sqlx::Error),
 }
@@ -220,9 +218,9 @@ fn valid_expires_in_days(days: i32) -> bool {
     (MIN_EXPIRES_IN_DAYS..=MAX_EXPIRES_IN_DAYS).contains(&days)
 }
 
-/// Validate and canonicalize an allowlist before any database round trip
-/// (coordinator review issue 5b): 1-32 entries, each `addr/len` (or a bare
-/// address), a parseable IP, `len<=32` (IPv4) or `len<=128` (IPv6), no
+/// Validate and canonicalize an allowlist before any database round trip:
+/// 1-32 entries, each `addr/len` (or a bare address), a parseable IP,
+/// `len<=32` (IPv4) or `len<=128` (IPv6), no
 /// host bits set and no IPv4-mapped IPv6 network (write it as plain IPv4
 /// instead) -- the same rules `egress::parse_network` already enforces
 /// for `GATEWAY_EGRESS_PRIVATE_ALLOW`, reused here so both apply exactly
@@ -242,9 +240,8 @@ fn canonical_allowlist(list: &[String]) -> Option<Vec<String>> {
             let (addr, prefix) = crate::egress::parse_network("ip_allowlist", entry).ok()?;
             // A zero-length prefix (`0.0.0.0/0` or `::/0`) stands for "every
             // address": accepting it here would let a caller believe a
-            // token is IP-restricted when it is not (adversarial
-            // re-review of #37 PR1, issue 4). That's already spelled by
-            // omitting the allowlist entirely, so reject it as malformed
+            // token is IP-restricted when it is not. That's already spelled
+            // by omitting the allowlist entirely, so reject it as malformed
             // input rather than silently accept an unrestricted entry
             // inside what is supposed to be a restriction.
             if prefix == 0 {
@@ -272,9 +269,8 @@ fn canonical_allowlist(list: &[String]) -> Option<Vec<String>> {
 /// itself, not cached). Route-scope enforcement is PR2's job.
 ///
 /// `ip_allowlist` is the token's canonical `addr/len` allowlist entries
-/// (empty/`None` means unrestricted), exactly as stored (coordinator/
-/// adversarial re-review of #37 PR1, issue 5): **PR2 must check the
-/// request's resolved client address against it before dispatching any
+/// (empty/`None` means unrestricted), exactly as stored: **PR2 must check
+/// the request's resolved client address against it before dispatching any
 /// request authenticated by this principal.** This PR only stores and
 /// returns it; nothing here enforces it yet.
 pub struct AdminTokenPrincipal {
@@ -298,9 +294,8 @@ struct TokenRecord {
 /// PR2's handler-level job — this is the storage primitive). Returns the
 /// plaintext once.
 ///
-/// Runs on the caller's own `tx`, never a separate pool connection
-/// (coordinator review of #37 PR1, issue 2: PR1 originally ran this on
-/// `&self.pool`. Migration 0051's `BEFORE INSERT` trigger takes the
+/// Runs on the caller's own `tx`, never a separate pool connection.
+/// Migration 0051's `BEFORE INSERT` trigger takes the
 /// owner's `governance::locks` user-scope authority lock
 /// (`Scope::User(owner_user_id)`) before checking that the owner is
 /// currently an effective Admin; that lock is transaction-scoped
@@ -308,7 +303,7 @@ struct TokenRecord {
 /// transaction — as PR2's handler is documented to, before calling this —
 /// and then ran this `INSERT` on a *different* connection would hang: the
 /// `INSERT`'s own re-entrant acquisition attempt blocks until the caller's
-/// transaction ends, which it cannot do until this call returns). **The
+/// transaction ends, which it cannot do until this call returns. **The
 /// caller must still take that same lock exclusive up front in `tx`**,
 /// like every other management change of that scope (AGENTS.md's
 /// canonical lock order), before calling this: the trigger's own
@@ -350,9 +345,9 @@ pub async fn create_admin_token(
         ),
     };
     let secret = GeneratedSecret::generate().map_err(CreateAdminTokenError::Entropy)?;
-    // created_at is never supplied here (adversarial re-review of #37
-    // PR1, issue 1): migration 0051's creation guard forces it to the
-    // database's own now() unconditionally, and the runtime role's own
+    // created_at is never supplied here: migration 0051's creation guard
+    // forces it to the database's own now() unconditionally, and the
+    // runtime role's own
     // column grant does not extend to created_at at all
     // (`runtime-grants.sql`), so a caller-chosen creation instant can
     // never be used to stretch the 1-90 day expiry CHECK past what it
@@ -413,9 +408,9 @@ pub async fn revoke_admin_token(
 
 /// Whether `client` satisfies `allowlist` (the token's canonical `addr/len`
 /// entries, exactly as returned by [`Store::authenticate_admin_token`]).
-/// `None` means unrestricted. Fails closed (#37 PR2 approved spec, section
-/// 3): a restricted token with no resolved client address never matches,
-/// regardless of the allowlist's contents.
+/// `None` means unrestricted. Fails closed: a restricted token with no
+/// resolved client address never matches, regardless of the allowlist's
+/// contents.
 pub fn ip_allowed(allowlist: Option<&[String]>, client: Option<std::net::IpAddr>) -> bool {
     let Some(allowlist) = allowlist else {
         return true;
@@ -519,10 +514,10 @@ impl Store {
     /// resolved client address (PR2's job to resolve it); absent here, it
     /// is stored as `NULL`.
     ///
-    /// Takes a parsed [`std::net::IpAddr`], not a string (coordinator
-    /// review issue 5c): the caller has necessarily already resolved and
-    /// validated an address object (the job of identity/session.rs and identity/throttle.rs, per
-    /// this module's own doc comment) by the time it gets here, so this
+    /// Takes a parsed [`std::net::IpAddr`], not a string: the caller has
+    /// necessarily already resolved and validated an address object (the
+    /// job of identity/session.rs and identity/throttle.rs, per this
+    /// module's own doc comment) by the time it gets here, so this
     /// signature cannot accept an arbitrary unparsed string and defer
     /// that validation to PostgreSQL's `inet` cast.
     pub async fn touch_admin_token_use(

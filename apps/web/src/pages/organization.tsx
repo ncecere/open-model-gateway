@@ -39,7 +39,7 @@ export function AuditHistory({ session, workspace }: { session?: Session; worksp
   const platform = !workspace;
   const scope = workspace ? { platform: false as const, ws: workspace.id } : { platform: true as const };
   const target = (e: Audit) => auditTarget(e, scope);
-  // Admin: sign-in side effects (group syncs) are hidden unless asked for (review #12); URL-backed as hide_sign_ins=false.
+  // Admin: sign-in side effects (group syncs) are hidden unless asked for; URL-backed as hide_sign_ins=false.
   const nav = useDashboardNavigation(), showSignIns = nav?.search.hide_sign_ins === "false";
   const signIns: FacetState | undefined = platform ? { values: { hide_sign_ins: showSignIns ? [] : ["true"] }, onChange: next => { const hide = Array.isArray(next.hide_sign_ins) && next.hide_sign_ins[0] === "true"; nav?.navigate({ ...nav.search, hide_sign_ins: hide ? undefined : "false", offset: undefined }); } } : undefined;
   const label = (t: AuditTarget) => t.search ? <ResourceLink search={t.search}>{t.name}</ResourceLink> : t.name;

@@ -303,6 +303,68 @@ fn prune(items: &mut Vec<Item>) {
     }
 }
 
+/// A source range: `((start line, start column), (end line, end column))`.
+pub(super) type SpanRange = ((usize, usize), (usize, usize));
+
+/// Where `file` (parsed from the unpruned text) holds items [`prune`] drops
+/// (lines from 1, columns from 0, in characters), attributes and doc comments
+/// included. For scans that read the text itself, such as comments, which
+/// `syn` does not keep.
+pub(super) fn dropped_spans(file: &syn::File) -> Vec<SpanRange> {
+    fn span(tokens: &impl syn::spanned::Spanned) -> SpanRange {
+        let s = tokens.span();
+        let (a, b) = (s.start(), s.end());
+        ((a.line, a.column), (b.line, b.column))
+    }
+    fn collect(list: &[Item], out: &mut Vec<SpanRange>) {
+        for item in list {
+            if !kept(item_attrs(item)) {
+                out.push(span(item));
+                continue;
+            }
+            match item {
+                Item::Mod(module) => {
+                    if let Some((_, inner)) = &module.content {
+                        collect(inner, out);
+                    }
+                }
+                Item::Impl(imp) => {
+                    for i in &imp.items {
+                        let attrs = match i {
+                            ImplItem::Const(c) => &c.attrs,
+                            ImplItem::Fn(f) => &f.attrs,
+                            ImplItem::Type(t) => &t.attrs,
+                            ImplItem::Macro(m) => &m.attrs,
+                            _ => continue,
+                        };
+                        if !kept(attrs) {
+                            out.push(span(i));
+                        }
+                    }
+                }
+                Item::Trait(tr) => {
+                    for i in &tr.items {
+                        let attrs = match i {
+                            TraitItem::Const(c) => &c.attrs,
+                            TraitItem::Fn(f) => &f.attrs,
+                            TraitItem::Type(t) => &t.attrs,
+                            TraitItem::Macro(m) => &m.attrs,
+                            _ => continue,
+                        };
+                        if !kept(attrs) {
+                            out.push(span(i));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    collect(&file.items, &mut out);
+    out
+}
+
 /// The enclosing modules, impls and functions of the node being visited.
 #[derive(Default)]
 pub(super) struct Scope(Vec<String>);

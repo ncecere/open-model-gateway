@@ -90,7 +90,8 @@ uuid = { version = "1", features = ["v4", "v7", "serde"] }
 jsonschema = { version = "=0.61.1", default-features = false }
 # Deterministic paused-time coverage of the metrics worker's missed ticks.
 tokio = { version = "1", features = ["test-util"] }
-proc-macro2 = "1"
+# `span-locations`: line and column of items, so the comment scan (#595) can leave out the test-only ones.
+proc-macro2 = { version = "1", features = ["span-locations"] }
 # Render parsed items back to tokens for the egress client module's allowlist (#569).
 quote = "1"
 # Parse source inventories for route declarations and the configuration surface.

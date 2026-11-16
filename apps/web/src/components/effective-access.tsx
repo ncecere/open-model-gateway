@@ -103,7 +103,7 @@ export const countsText = (c: AccessResponse["summary"]) => [`${c.available} ava
 /** Workspace Overview card: model availability counts with a link to the reasons. */
 export function AccessCard({ workspace }: { workspace: Workspace }) {
   const q = useApi<AccessResponse>(`${wsPath(workspace.id)}/access`);
-  // One link button in the card header (review #41): "See why" when some models are limited, else "Limits".
+  // One link button in the card header: "See why" when some models are limited, else "Limits".
   const limited = !!q.data && q.data.summary.unavailable + q.data.summary.partial > 0;
   const link = <Button variant="secondary" size="sm" render={<ResourceLink search={{ page: "workspace-settings", ws: workspace.id, tab: limited ? "access" : "limits" }} />}>{limited ? "See why" : "Limits"} <ArrowRight aria-hidden /></Button>;
   return <Card title="Access" description="Models your keys can use here." actions={link}>

@@ -330,7 +330,7 @@ impl Exporter {
     /// the URL checks and client of the webhook. `headers` is the
     /// `Key=Value,...` text of the operator's variable; errors never repeat it.
     pub fn otlp(url: &str, headers: Option<&str>, development: bool) -> anyhow::Result<Self> {
-        // #321 round 2 (LOW finding 2): a distinct purpose from the
+        // A distinct purpose from the
         // webhook/syslog `Purpose::Audit`, so this client's resolver (built
         // once below and reused for every delivery) can apply the same
         // transition-only, host-free logging the telemetry exporters use,
@@ -477,7 +477,7 @@ impl Exporter {
 /// HTTPS only (plain HTTP only to loopback in development), no credentials
 /// or fragment, the outbound address policy, no proxy, redirects or retries.
 /// `purpose` distinguishes the webhook/syslog destination (`Purpose::Audit`)
-/// from the OTLP collector (`Purpose::AuditOtlp`, #321 round 2) so their
+/// from the OTLP collector (`Purpose::AuditOtlp`) so their
 /// egress refusal logging policies can differ.
 fn https_client(
     setting: &str,
@@ -1113,11 +1113,11 @@ pub async fn status(store: &Store) -> Result<Value, sqlx::Error> {
     Ok(v)
 }
 
-/// The `start` delivery-failure/recovery log for one run's [`Outcome`]
-/// (#321 round 2, LOW finding 2): the OTLP collector host was otherwise
-/// named on every failed attempt (this loop retries every 2s, backed off),
-/// the same per-attempt destination leak the DNS-refusal layer had for
-/// telemetry export. `otlp_failing` is owned by the caller's single loop
+/// The `start` delivery-failure/recovery log for one run's [`Outcome`]:
+/// the OTLP collector host must not be named on every failed attempt (this
+/// loop retries every 2s, backed off), the same per-attempt destination
+/// leak the DNS-refusal layer avoids for telemetry export.
+/// `otlp_failing` is owned by the caller's single loop
 /// iteration (`start` is one sequential task, never a shared `Exporter`
 /// across tasks, so a plain `Cell` - no atomics - is enough): only an OTLP
 /// exporter logs a fixed, host-free warning on the transition into failure

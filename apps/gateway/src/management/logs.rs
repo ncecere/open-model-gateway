@@ -669,7 +669,7 @@ pub(super) fn routes() -> Router<Store> {
 mod with_trace_id_tests {
     use super::*;
 
-    /// #98 PR 2 review item 5: a row whose `workspace.kind` is missing
+    /// A row whose `workspace.kind` is missing
     /// entirely (`as_str()` on a missing/null field returns `None`) must be
     /// treated as shared's opposite - personal, never traced - not folded
     /// into "anything that isn't literally the string personal is shared".

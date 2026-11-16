@@ -908,7 +908,7 @@ async fn revoke_direct_model(
     change_model(s, u, ws, model, false, true).await
 }
 // `pub(super)` (not private) only so `management::tests`'s own test
-// modules can call it directly for the #37 PR2 review fail-closed guard
+// modules can call it directly for the fail-closed guard
 // below, without going through the type-safe `Extension<BrowserPrincipal>`
 // extractor that already makes a token actor unreachable at the HTTP layer.
 pub(super) async fn change_model(
@@ -921,13 +921,13 @@ pub(super) async fn change_model(
 ) -> ApiResult {
     let mut tx = resources::installation_tx(&s).await?;
     if direct {
-        // #37 PR2 item 1 exception: deferred to the merged `locks::exclusive`
-        // call below (this transaction takes Workspace/Lineage scope locks
-        // later; see `resources::platform_write_role_only`'s doc).
+        // Exception to taking every scope lock up front: deferred to the
+        // merged `locks::exclusive` call below (this transaction takes Workspace/
+        // Lineage scope locks later; see `resources::platform_write_role_only`'s doc).
         resources::platform_write_role_only(&mut tx, u.user_id()).await?;
         validate_ids(&mut tx, &[ws], "workspaces").await?;
     } else {
-        // Fail-closed guard (#37 PR2 review), not just a `debug_assert`: this
+        // Fail-closed guard, not just a `debug_assert`: this
         // branch's `workspace_access` takes its User-scope revalidation lock
         // (`resources::revalidate_admin_token`) up front, then this function
         // takes the Workspace/Lineage scope locks later (`locks::exclusive`

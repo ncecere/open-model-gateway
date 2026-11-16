@@ -75,15 +75,14 @@ async fn reconcile_batch(store: &Store, batch: i64) -> Result<usize, InferenceEr
 }
 /// The identity performing a usage reconciliation: the owning user, and --
 /// when an admin token (not a browser session) authenticated the call --
-/// that token's id (#37 PR2 review: the blocking finding that
-/// `resolve_usage`'s caller authenticates in its own, already-committed
-/// transaction before ever reaching this one, so an explicit revoke or
-/// expiry between the two must still be caught here, inside the write's own
-/// transaction, not just at the earlier authentication).
+/// that token's id (`resolve_usage`'s caller authenticates in its own,
+/// already-committed transaction before ever reaching this one, so an
+/// explicit revoke or expiry between the two must still be caught here,
+/// inside the write's own transaction, not just at the earlier
+/// authentication).
 ///
 /// `From<Uuid>` (a plain browser/test actor, `token_id: None`) keeps every
-/// existing caller of `resolve_usage` compiling unchanged: none of them
-/// need to change for this fix.
+/// existing caller of `resolve_usage` compiling unchanged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReconcilingActor {
     pub user_id: Uuid,
@@ -97,7 +96,7 @@ impl From<Uuid> for ReconcilingActor {
         }
     }
 }
-/// The token-row liveness check (#37 PR2 review): unrevoked, unexpired and
+/// The token-row liveness check: unrevoked, unexpired and
 /// still owned by `actor.user_id`, `FOR SHARE` so a concurrent explicit
 /// revoke blocks on this transaction until it commits. A no-op for a
 /// browser actor (`token_id: None`). Must run after this transaction's own
@@ -166,7 +165,7 @@ async fn resolve_usage_once(
         // actor needs the owner's authority lock held before the token
         // row check below, or a concurrent owner-loss trigger could revoke
         // the token between this check and the role check that follows,
-        // observing neither consistently (#37 PR2 review).
+        // observing neither consistently.
         if actor.token_id.is_some() {
             locks::shared(&mut tx, [locks::Scope::User(actor.user_id)])
                 .await

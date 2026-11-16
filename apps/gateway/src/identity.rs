@@ -90,18 +90,18 @@ pub struct IdentityState {
     trusted_proxies: throttle::TrustedProxies,
     /// Bounded per-replica rate limiting of admin-token authentication
     /// attempts (malformed credentials, unknown/expired/revoked tokens):
-    /// these are never individually audited (coordinator decision), only
-    /// aggregated and rate-limited, so a flood of garbage bearer tokens
-    /// cannot grow the audit log or the key-lookup load without bound.
+    /// these are never individually audited, only aggregated and
+    /// rate-limited, so a flood of garbage bearer tokens cannot grow the
+    /// audit log or the key-lookup load without bound.
     admin_token_limiter: Arc<throttle::Limiter>,
-    /// #37 PR2 finding 3: a second, independent admission bound on top of
+    /// A second, independent admission bound on top of
     /// the per-IP limiter above, checked *after* a token has successfully
     /// authenticated and before the attempt is started or dispatched --
     /// bounds how much one compromised or misbehaving token can do even
     /// from many different client addresses (which the per-IP limiter
     /// alone cannot see).
     admin_token_per_token_limiter: Arc<throttle::TokenLimiter>,
-    /// #37 PR2 finding 3: one shared, replica-wide admission bound, checked
+    /// One shared, replica-wide admission bound, checked
     /// *before* the expensive (one database round trip) authentication
     /// lookup -- bounds distributed floods of invalid-shape or unknown-id
     /// credentials spread across many client addresses, each individually
@@ -115,12 +115,12 @@ pub struct IdentityState {
 /// requests that at least look like an admin token (not merely bearing some
 /// Authorization header) ever consume this budget.
 const ADMIN_TOKEN_AUTH_RATE_PER_MINUTE: u32 = 1_000;
-/// #37 PR2 finding 3: per admitted (authenticated) admin token, per minute,
+/// Per admitted (authenticated) admin token, per minute,
 /// per replica. Same shape and magnitude as the per-IP rate above, but keyed
 /// on the token's own id instead of a client address, so it still bounds a
 /// single token's admission load even when spread across many addresses.
 const ADMIN_TOKEN_PER_TOKEN_RATE_PER_MINUTE: u32 = 1_000;
-/// #37 PR2 finding 3: every admin-token authentication attempt on one
+/// Every admin-token authentication attempt on one
 /// replica, successful or not, aggregated into a single shared bound. Ten
 /// times the per-IP/per-token rate: generous for one legitimate caller, but
 /// still a hard ceiling on the database work a distributed flood (many

@@ -108,7 +108,7 @@ export function KeyDetail({ session, workspace, id }: Scope & { id: string }) {
   const missing = one.error instanceof ApiError && one.error.status === 404 || one.isSuccess && !key;
   if (one.isPending) return <Stack gap={6} className={s.page}>{header("API key")}<p role="status">Loading key…</p></Stack>;
   if (one.isError && !missing) return <Stack gap={6} className={s.page}>{header("API key")}<ErrorNotice error={one.error} retry={() => void one.refetch()} /></Stack>;
-  // Same not-found state as the request and model pages (rule 8): plain words, Back to API keys, no previous/next.
+  // Same not-found state as the request and model pages: plain words, Back to API keys, no previous/next.
   if (!key) return <Stack gap={6} className={s.page}><PageHeader title="Key not found" breadcrumbs={<BackLink {...back} />} /><EmptyState icon={<FileQuestion />} titleAs="h2" title="This key doesn't exist or you can't see it" description="Members see only their own keys." action={<Button variant="secondary" render={<ResourceLink search={back.search} />}>Back to API keys</Button>} /></Stack>;
   const status = keyStatus(key), models = keyModelSummary(key, keyModelOptions(grants.data ?? []));
   // Revoked and expired keys are final: no danger zone, read-only copy throughout.

@@ -115,7 +115,7 @@ export function Keys({ session, workspace }: Scope) {
   const ready = grants.isSuccess && !grants.isFetching && (!p.manageServiceAccounts || accounts.isSuccess);
   const rowSearch = { status: search.status, q: search.q, risk: search.risk }, narrow = useMediaQuery(NARROW_QUERY);
   // Selection is ours (not DataTable's): revoked and expired keys can't be picked, and with no
-  // selectable rows there is no checkbox column and no "0 of 0 selected" footer (review #17).
+  // selectable rows there is no checkbox column and no "0 of 0 selected" footer.
   const selectableIds = rows.filter(selectableKey).map(x => x.id), picked = selected.filter(id => selectableIds.includes(id));
   const allPicked = selectableIds.length > 0 && picked.length === selectableIds.length;
   const toggle = (id: string, on: boolean) => setSelected(on ? [...selected.filter(x => x !== id), id] : selected.filter(x => x !== id));
@@ -123,7 +123,7 @@ export function Keys({ session, workspace }: Scope) {
     header: <Checkbox label={<span className="sr-only">Select all keys that can be disabled</span>} checked={allPicked} indeterminate={picked.length > 0 && !allPicked} onCheckedChange={on => setSelected(on ? selectableIds : [])} />,
     cell: key => selectableKey(key) ? <Checkbox label={<span className="sr-only">Select {key.name}</span>} checked={picked.includes(key.id)} onCheckedChange={on => toggle(key.id, on)} /> : null };
   const columns: DataTableColumn<KeyRow>[] = [
-    // On a phone rows become cards (review #27): the name leads the card, the checkbox comes after the details.
+    // On a phone rows become cards: the name leads the card, the checkbox comes after the details.
     ...(selectableIds.length && !narrow ? [selectColumn] : []),
     { id: "name", header: "Key", rowHeader: true, hideable: false, cell: key => { const st = keyStatus(key); return <span className={k.name} data-status={st}><ResourceLink search={{ ...rowSearch, page: "key-detail", ws: workspace.id, record: key.id }}>{key.name}</ResourceLink><span className={s.secondary}>{issuedTo(key, session, accounts.data)}</span></span>; } },
     { id: "status", header: "Status", cell: key => <span className={s.badges}><StatusPill {...keyPill(keyStatus(key))} explain /><KeyRiskBadge row={risks.get(key.id)} /></span> },

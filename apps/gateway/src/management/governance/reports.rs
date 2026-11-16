@@ -705,7 +705,7 @@ pub(super) async fn reconcile(
             "Execution has no complete pinned valuation",
         ),
         // The caller's admin token was revoked or expired between its own
-        // authentication and this write's own transaction (#37 PR2 review):
+        // authentication and this write's own transaction:
         // the same refusal `resources::platform_write`'s revalidation gives
         // a browser-session handler for the identical race, not a 503 and
         // never a ledger write.

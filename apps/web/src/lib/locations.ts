@@ -9,7 +9,7 @@ const detailCollections: Partial<Record<Page, string>> = { "alert-rule-detail": 
 const legacyWorkspaceSegments: Record<string, Page> = { requests: "requests" };
 /** Old record URLs that still open (and are rewritten to) their new path: /admin/deployments/{id} → /admin/routes/{id}, /admin/providers/{id} → /admin/connections/{id}. */
 const legacyDetailCollections: Record<string, Page> = { deployments: "deployment-detail", providers: "provider-detail" };
-/** Old list URLs (review rule 10: Connections, Limits, SSO groups); they open the page and are rewritten to its new path. */
+/** Old list URLs (Connections, Limits, SSO groups); they open the page and are rewritten to its new path. */
 export const legacyPlatformPaths: Record<string, Page> = { "/admin/providers": "providers", "/admin/policies": "policies", "/admin/limits": "policies", "/admin/settings": "settings-general", "/admin/oidc": "oidc" };
 export function canonicalSearch(input: DashboardSearch): DashboardSearch {
   const s = dashboardSearch(input);

@@ -35,7 +35,7 @@ export function PersonCell({ name, shape, children }: { name: string; shape?: "c
   return <span className={s.person}><Avatar name={name} shape={shape} size="sm" decorative /><span className={s.personText}>{children}</span></span>;
 }
 /**
- * A person as Grounded shows them (review #33, rule 15): display name over email, "(you)" for the viewer. Without a
+ * A person as Grounded shows them: display name over email, "(you)" for the viewer. Without a
  * display name from the identity provider, the email is the primary line. `link` makes the name open their page.
  * A long email is cut to one line with an ellipsis (full address in its title), never broken mid-word.
  */

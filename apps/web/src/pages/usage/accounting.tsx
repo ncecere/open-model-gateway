@@ -129,7 +129,7 @@ export function meterSummary(cost: Pick<Cost, "meter_usage" | "output_image_vari
   const parts = meterUsageLabels.filter(l => u[l.key] != null).map(l => l.audio ? `${l.label.toLowerCase()} ${formatAudio(u[l.key])}` : l.key === "output_images" ? `${formatCount(u[l.key])} image${u[l.key] === "1" ? "" : "s"}${cost.output_image_variant ? ` (${cost.output_image_variant})` : ""}` : countNoun(l.key, u[l.key]!));
   return parts.length ? parts.join(" · ") : "Not reported";
 }
-/** Tokens as everywhere else (rule 5, lib/format): "145 in · 0 out", "Not applicable" for audio, "Unknown" when unreported. */
+/** Tokens as everywhere else (lib/format): "145 in · 0 out", "Not applicable" for audio, "Unknown" when unreported. */
 export function tokenUsageText(c: Pick<Cost, "workload_kind" | "input_tokens" | "output_tokens">): string {
   return tokensText(c.input_tokens, c.output_tokens, c.workload_kind);
 }

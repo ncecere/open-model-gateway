@@ -117,7 +117,7 @@ fixed_enum!(Provider { OpenAi => "openai", Anthropic => "anthropic", Bedrock => 
 fixed_enum!(Route { Chat => "/v1/chat/completions", Responses => "/v1/responses", Messages => "/v1/messages" });
 fixed_enum!(Outcome { Completed => "completed", Error => "error", Cancelled => "cancelled", Unknown => "unknown" });
 fixed_enum!(ErrorKind { InvalidRequest => "invalid_request", Unauthorized => "unauthorized", Forbidden => "forbidden", NotFound => "not_found", Unsupported => "unsupported", Busy => "busy", Timeout => "timeout", Upstream => "upstream", Storage => "storage", Configuration => "configuration", Cancelled => "cancelled", Unknown => "unknown" });
-// `Invalid` (#98 PR 2 review item 5): `Span::new`/`Span::reserved` return
+// `Invalid`: `Span::new`/`Span::reserved` return
 // `None` on a malformed shape (end < start, a zero id/trace) or entropy
 // exhaustion. No existing reason describes that: `SpanLimit` is a
 // successfully-built span too large/unserializable, not one that was
@@ -421,8 +421,8 @@ impl Recorder {
     }
 }
 
-/// The fixed allowlist [`Recorder::record_background`] accepts (#98 PR 2
-/// review item 7): only the two independent maintenance-run roots, never
+/// The fixed allowlist [`Recorder::record_background`] accepts: only the
+/// two independent maintenance-run roots, never
 /// an arbitrary [`SpanName`] - which would let a caller mis-tag a
 /// background run as a request-scoped span such as `admission`, or bypass
 /// `SharedAdmission`'s eligibility design for request spans by routing one
@@ -517,8 +517,8 @@ impl Context {
         span.trace = self.trace;
         self.spans.push(span);
     }
-    /// Recorded outside the ordinary per-request child-span budget (#98 PR 2
-    /// review item 6), in the one slot [`Context::record`] reserves for it:
+    /// Recorded outside the ordinary per-request child-span budget, in the
+    /// one slot [`Context::record`] reserves for it:
     /// the root span (`inference.request`) is the trace's sole anchor,
     /// recorded exactly once, last, once the terminal outcome is known.
     /// Three failover attempts plus an admission deadlock retry can fill
@@ -531,7 +531,7 @@ impl Context {
     /// its own `finished` flag - but a second call from anywhere else must
     /// still be safe rather than growing `self.spans` without bound, so a
     /// repeat call here is counted `DropReason::RequestLimit` and dropped,
-    /// never pushed twice (#98 PR 2 review item 1).
+    /// never pushed twice.
     pub(crate) fn record_root(&mut self, mut span: Span) {
         if self.root_recorded {
             self.recorder.counts.drop_spans(DropReason::RequestLimit, 1);
@@ -541,8 +541,8 @@ impl Context {
         span.trace = self.trace;
         self.spans.push(span);
     }
-    /// Counts one span that could never be built at all (#98 PR 2 review
-    /// item 5): `DropReason::Invalid`, never a silent, uncounted loss.
+    /// Counts one span that could never be built at all:
+    /// `DropReason::Invalid`, never a silent, uncounted loss.
     pub(crate) fn drop_invalid(&self) {
         self.recorder.counts.drop_spans(DropReason::Invalid, 1);
     }
@@ -671,8 +671,8 @@ fn set_shared_eligibility(request: Uuid, alias: &str) {
 /// Records the [`SharedAdmission`] an admission commit resolved for the
 /// ambient request, if telemetry is active. `proof` is a
 /// [`crate::governance::SharedEligibilityCommitted`] token: it is only
-/// constructible inside `governance`'s own private `proof` submodule
-/// (#98 PR 2 review item 3), which `governance.rs`'s commit branch of
+/// constructible inside `governance`'s own private `proof` submodule,
+/// which `governance.rs`'s commit branch of
 /// `admit_unobserved` - gated on the workspace being `team`/`project`,
 /// after `tx.commit()` has succeeded, never personal, never from client
 /// text - calls to produce one before calling this at all. The compiler

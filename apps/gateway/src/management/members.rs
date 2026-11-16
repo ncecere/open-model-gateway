@@ -132,9 +132,9 @@ pub(super) async fn platform_add_member(
     Json(b): Json<MemberInput>,
 ) -> ApiResult {
     let mut tx = resources::installation_tx(&s).await?;
-    // #37 PR2 item 1 exception: deferred to `set_member`/`manual_member`'s
-    // merged lock below (this transaction takes a target User scope lock
-    // later; see `manual_member`'s own doc).
+    // Exception to taking every scope lock up front: deferred to
+    // `set_member`/`manual_member`'s merged lock below (this transaction
+    // takes a target User scope lock later; see `manual_member`'s own doc).
     resources::platform_write_role_only(&mut tx, u.user_id()).await?;
     platform_shared(&mut tx, ws).await?;
     set_member(&mut tx, &u, ws, &b).await?;
@@ -241,8 +241,8 @@ async fn manual_member(
     // Replacing the manual grant revokes the old one: the member's
     // admissions finish first (scoped lock order). Called before any write.
     //
-    // #37 PR2 item 1 exception: an admin token's owner scope is merged into
-    // this same call (ascending canonical key order against the *target*
+    // Exception to taking every scope lock up front: an admin token's
+    // owner scope is merged into this same call (ascending canonical key order against the *target*
     // member's own User-class key) rather than taken separately and early
     // by `resources::platform_write` -- two admins managing each other
     // through their own tokens must request the same pair of keys in the
@@ -404,9 +404,9 @@ async fn unset_member(
 }
 /// The locks a member's removal takes before any write: the member, then the
 /// lineages of their keys here, plus `extra` scopes (#90: the reviewer's own),
-/// in one canonical call. #37 PR2 item 1 exception: an admin token's owner
-/// scope is merged into this same call; see `manual_member`'s own doc for
-/// why (opposing owner/target order).
+/// in one canonical call. Exception to taking every scope lock up front: an
+/// admin token's owner scope is merged into this same call; see
+/// `manual_member`'s own doc for why (opposing owner/target order).
 pub(super) async fn lock_member_removal(
     tx: &mut Transaction<'_, Postgres>,
     u: &impl Actor,

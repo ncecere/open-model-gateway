@@ -43,9 +43,9 @@ fn storage_at(signal: fn(&sqlx::Error), error: sqlx::Error) -> InferenceError {
 }
 /// A private submodule so [`SharedEligibilityCommitted`]'s own tuple field
 /// (and therefore `SharedEligibilityCommitted(())` construction) is scoped
-/// to this submodule alone, not to the whole `governance` module tree
-/// (#98 PR 2 review item 3). A private field on a struct defined directly
-/// in `governance.rs` would have been constructible from *every* submodule
+/// to this submodule alone, not to the whole `governance` module tree.
+/// A private field on a struct defined directly
+/// in `governance.rs` would be constructible from *every* submodule
 /// declared there (`batch`, `jobs`, `locks`, `pressure`, `rates`, `totals`,
 /// `realtime`): Rust grants a private item's defining module *and all of
 /// that module's descendants* access, and those submodules are all

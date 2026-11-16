@@ -64,8 +64,8 @@ pub enum Purpose {
     Catalog,
     Smtp,
     Audit,
-    /// The audit export destination only when it is an OTLP collector
-    /// (#321 round 2): a distinct purpose from [`Self::Audit`] (which stays
+    /// The audit export destination only when it is an OTLP collector:
+    /// a distinct purpose from [`Self::Audit`] (which stays
     /// the webhook/syslog destination's purpose) so the OTLP collector's
     /// resolver, built once and reused for every delivery, can apply the
     /// same transition-only, host-free logging the telemetry exporters use
@@ -91,10 +91,9 @@ impl Purpose {
 
     /// Whether this purpose's egress refusals are logged (host and resolved
     /// address) on every attempt, or only when its connectivity state
-    /// changes (#321: telemetry export's shared egress refusal logs
-    /// repeated and named the collector host on every periodic attempt;
-    /// round 2 extended this to the OTLP audit exporter, #321 LOW finding
-    /// 2). Telemetry/OTLP export and the OTLP audit exporter (both build
+    /// changes (a periodic exporter would otherwise repeat the refusal and
+    /// name the collector host on every attempt). Telemetry/OTLP export and
+    /// the OTLP audit exporter (both build
     /// their one, reused-per-client resolver through
     /// `otlp::export_http_client`/`audit_export::https_client` with their
     /// own purpose) use the quieter policy; every other purpose, including
@@ -204,9 +203,9 @@ pub struct Networks(Vec<(IpAddr, u8)>);
 /// bounds (32 for IPv4, 128 for IPv6, defaulting to the host prefix when
 /// omitted), no set host bits, and no IPv4-mapped IPv6 form (write it as
 /// plain IPv4 instead). Shared by [`Networks::parse`] and
-/// `admin_tokens`'s own allowlist validator (#37 PR1 coordinator review
-/// issue 5b), so both apply exactly the same rules PostgreSQL's `cidr`
-/// type would otherwise be the only thing enforcing.
+/// `admin_tokens`'s own allowlist validator, so both apply exactly the
+/// same rules PostgreSQL's `cidr` type would otherwise be the only thing
+/// enforcing.
 pub(crate) fn parse_network(name: &str, item: &str) -> anyhow::Result<(IpAddr, u8)> {
     let (addr, prefix) = item
         .split_once('/')
@@ -473,7 +472,7 @@ fn filter_tracked(
         );
     }
     if !allowed.is_empty() {
-        // #321 round 2 (LOW finding 1): a mixed DNS answer's dropped
+        // A mixed DNS answer's dropped
         // addresses are a DEBUG diagnostic, but for a `TransitionOnly`
         // purpose (telemetry/OTLP export, the OTLP audit exporter) this is
         // the same resolve-on-every-attempt path as a full refusal, so it

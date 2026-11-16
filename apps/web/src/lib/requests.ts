@@ -239,7 +239,7 @@ export function countText(value: string | number | null | undefined): string {
   return BigInt(value).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 /**
- * "10 in · 2 out" everywhere (review rule 5); speech and transcription requests that report no tokens read "Not applicable"
+ * "10 in · 2 out" everywhere; speech and transcription requests that report no tokens read "Not applicable"
  * (as Records does). An unreported count makes the whole value "Unknown", never "Unknown in · 0 out".
  */
 export function tokensText(input: string | number | null | undefined, output: string | number | null | undefined, workload?: string): string {
@@ -248,7 +248,7 @@ export function tokensText(input: string | number | null | undefined, output: st
   return `${countText(input)} in · ${countText(output)} out`;
 }
 /**
- * A request's start for a dense list (review rule 4, lib/format): "Oct 8, 2:30 AM" (12-hour, the viewer's time zone;
+ * A request's start for a dense list (lib/format): "Oct 8, 2:30 AM" (12-hour, the viewer's time zone;
  * the year only when it isn't this year) and "Oct 8, 2026, 2:30 AM EDT" for the tooltip. Invalid values are returned as given.
  */
 export function compactDateTime(iso: string, now = new Date(), timeZone?: string): { text: string; full: string } {
