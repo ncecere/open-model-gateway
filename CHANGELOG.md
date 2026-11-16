@@ -6,7 +6,11 @@ The project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). 
 
 ## [Unreleased]
 
-Changes after v0.16.0: [unreleased notes](docs/releases/unreleased.md).
+Changes after v0.17.0: [unreleased notes](docs/releases/unreleased.md).
+
+## [0.17.0]
+
+A minor release: `serve` releases its job leases when start-up fails (#527); a realtime client that breaks the WebSocket protocol or drops the connection no longer ends as a clean stop (#410); six more accounting-failure stages are counted in `gateway_accounting_failures_total` (#497); lost upstream connections are counted in the new `gateway_upstream_connection_lost_total{client}` and pooled clients drop idle connections sooner (#483); a Bedrock stream exception is classified by its type, and a rejection inside a returned stream no longer settles as a known zero on a free price for any adapter (#486). Also CI and test verification work (compiler-enforced egress client rule, secret scanning, pinned image jobs), Spark test platform and arm64 branch images (#599), and more internal splits; two log events have a new target. No migration (schema stays **0080**), no runtime-grant change; the OpenAPI inference document gains realtime close codes 1002 and 1007. [Notes](docs/releases/v0.17.0.md).
 
 ## [0.16.0]
 
@@ -118,7 +122,8 @@ Alerts, key safety, model compare, SCIM, JWKS refresh, metrics and backup toolin
 
 The single-enterprise rebuild: Team, Project and personal workspaces, OIDC platform roles, catalogs, multimodal workloads across five provider families, immutable micro-USD accounting, logs and Admin settings. Migrations `0001` to `0010`. Notes: [`docs/releases/v0.1.0.md`](docs/releases/v0.1.0.md).
 
-[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/ncecere/open-model-gateway/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/ncecere/open-model-gateway/compare/v0.15.1...v0.16.0
 [0.15.1]: https://github.com/ncecere/open-model-gateway/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/ncecere/open-model-gateway/compare/v0.14.1...v0.15.0
