@@ -52,6 +52,8 @@ enum Element {
     Skip(usize),
     /// The word before this position is none of these.
     NotBefore(Vec<String>),
+    /// The word at this position is none of these (or there is none).
+    NotNext(Vec<String>),
 }
 
 #[derive(Debug)]
@@ -104,6 +106,8 @@ fn parse_rules(text: &str) -> Rules {
                             Element::Number
                         } else if let Some(set) = body.strip_prefix('^') {
                             Element::NotBefore(set.split('|').map(str::to_owned).collect())
+                        } else if let Some(set) = body.strip_prefix('$') {
+                            Element::NotNext(set.split('|').map(str::to_owned).collect())
                         } else {
                             Element::Words {
                                 words: body.split('|').map(str::to_owned).collect(),
@@ -172,6 +176,9 @@ fn matches_from(elements: &[Element], at: usize, words: &[String]) -> bool {
         Element::NotBefore(set) => {
             (at == 0 || !set.contains(&words[at - 1])) && matches_from(rest, at, words)
         }
+        Element::NotNext(set) => {
+            (at >= words.len() || !set.contains(&words[at])) && matches_from(rest, at, words)
+        }
         Element::Number => {
             at < words.len()
                 && words[at].bytes().all(|b| b.is_ascii_digit())
@@ -189,6 +196,23 @@ fn matches_from(elements: &[Element], at: usize, words: &[String]) -> bool {
     }
 }
 
+/// `text` occurs in `lower`; `<n>` in `text` stands for one or more digits.
+fn raw_matches(lower: &str, text: &str) -> bool {
+    let parts: Vec<&str> = text.split("<n>").collect();
+    let mut starts = lower.match_indices(parts[0]).map(|(i, _)| i);
+    starts.any(|start| {
+        let mut at = start + parts[0].len();
+        for part in &parts[1..] {
+            let digits = lower[at..].bytes().take_while(u8::is_ascii_digit).count();
+            if digits == 0 || !lower[at + digits..].starts_with(part) {
+                return false;
+            }
+            at += digits + part.len();
+        }
+        true
+    })
+}
+
 /// The patterns that refuse `comment` (whitespace collapsed by the caller).
 fn refused_by<'a>(rules: &'a Rules, comment: &str) -> Vec<&'a str> {
     let words = words(comment);
@@ -200,7 +224,7 @@ fn refused_by<'a>(rules: &'a Rules, comment: &str) -> Vec<&'a str> {
             Pattern::Words(_, elements) => {
                 (0..words.len()).any(|start| matches_from(elements, start, &words))
             }
-            Pattern::Raw(text) => lower.contains(text.as_str()),
+            Pattern::Raw(text) => raw_matches(&lower, text),
         })
         .map(Pattern::source)
         .collect()
@@ -406,7 +430,17 @@ fn blocks(comments: Vec<Comment>) -> Vec<Block> {
             && comment.line == last_end + 1;
         last_end = comment.end_line;
         last_own_line_comment = comment.line_comment && comment.own_line;
-        let text = comment.text;
+        let text = if comment.line_comment {
+            comment.text
+        } else {
+            // The `*` that leads each line of a block comment is not text.
+            comment
+                .text
+                .lines()
+                .map(|line| line.trim_start().trim_start_matches('*'))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
         if join {
             let block = out.last_mut().expect("joined to a block");
             block.text.push(' ');
@@ -750,6 +784,48 @@ fn f() -> usize {
     }
 
     #[test]
+    fn a_doc_comment_before_a_test_only_attribute_goes_with_the_item() {
+        let rules = rules();
+        for source in [
+            "/// #98 PR 2 review item 5 planted\n#[cfg(test)]\nfn f() {}\n",
+            "/// #98 PR 2 review item 5 planted\n#[cfg(test)]\nmod tests {}\n",
+            "struct S;\nimpl S {\n    /// #98 PR 2 review item 5 planted\n    #[cfg(test)]\n    fn f(&self) {}\n}\n",
+            "/// #98 PR 2 review item 5 planted\n#[test]\nfn f() {}\n",
+        ] {
+            let (_, hits) = scan(&rules, "doc_before.rs", source);
+            assert!(hits.is_empty(), "{source:?}: {hits:?}");
+        }
+        // The same doc comment on a production item is read.
+        let (_, hits) = scan(
+            &rules,
+            "doc_before.rs",
+            "/// #98 PR 2 review item 5 planted\nfn f() {}\n",
+        );
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn a_block_comment_reads_across_its_leading_stars() {
+        let rules = rules();
+        let (_, hits) = scan(
+            &rules,
+            "stars.rs",
+            "/**\n * Same as the page (rule\n * 8): words.\n */\nfn f() {}\n",
+        );
+        assert_eq!(hits.len(), 1, "{hits:?}");
+    }
+
+    #[test]
+    fn raw_patterns_take_digits() {
+        assert!(raw_matches("a (rule 12: b", "(rule <n>"));
+        assert!(raw_matches("a finding 3) b", "finding <n>)"));
+        assert!(!raw_matches("a (rule x", "(rule <n>"));
+        assert!(!raw_matches("finding 2 of the output", "finding <n>:"));
+        assert!(raw_matches("x finding 2 of, finding 4: y", "finding <n>:"));
+        assert!(raw_matches("a (round 2", "(round <n>"));
+    }
+
+    #[test]
     fn spans_carry_positions() {
         // `proc-macro2/span-locations` is on for tests: with it off every
         // position is 0:0 and the test-only items would never be excluded.
@@ -780,9 +856,12 @@ fn f() -> usize {
     fn production_comments_state_invariants_not_review_history() {
         let rules = rules();
         let (files, blocks, hits) = scan_tree(&rules);
-        // A floor, so a walk that finds nothing cannot pass.
-        assert!(files >= 200, "only {files} production files read");
-        assert!(blocks >= 3_500, "only {blocks} comments read");
+        // A floor, about 90% of what the tree held when the check landed (261
+        // files, 4,313 comments), so a walk that finds nothing cannot pass.
+        assert!(
+            files >= 235 && blocks >= 3_880,
+            "read {files} production files and {blocks} comments; the floor is 235 files and 3,880 comments"
+        );
         // Every allowlist entry must still match a comment.
         let hits_all: Vec<&Hit> = hits.iter().collect();
         for (file, text, reason) in ALLOWED {

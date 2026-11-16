@@ -44,7 +44,8 @@ type Element =
   | { kind: "words"; words: string[]; optional: boolean }
   | { kind: "number" }
   | { kind: "skip"; most: number }
-  | { kind: "notBefore"; words: string[] };
+  | { kind: "notBefore"; words: string[] }
+  | { kind: "notNext"; words: string[] };
 
 type Pattern = { source: string; elements: Element[] } | { source: string; raw: string };
 
@@ -69,6 +70,7 @@ function parseRules(text: string): Rules {
         if (body.startsWith("..")) return { kind: "skip", most: Number(body.slice(2)) };
         if (body === "<n>") return { kind: "number" };
         if (body.startsWith("^")) return { kind: "notBefore", words: body.slice(1).split("|") };
+        if (body.startsWith("$")) return { kind: "notNext", words: body.slice(1).split("|") };
         return { kind: "words", words: body.split("|"), optional };
       });
       rules.patterns.push({ source: rest, elements });
@@ -94,6 +96,8 @@ function matchesFrom(elements: Element[], at: number, w: string[]): boolean {
       return false;
     case "notBefore":
       return (at === 0 || !first.words.includes(w[at - 1])) && matchesFrom(rest, at, w);
+    case "notNext":
+      return (at >= w.length || !first.words.includes(w[at])) && matchesFrom(rest, at, w);
     case "number":
       return at < w.length && /^[0-9]+$/.test(w[at]) && matchesFrom(rest, at + 1, w);
     case "words":
@@ -105,13 +109,19 @@ function matchesFrom(elements: Element[], at: number, w: string[]): boolean {
 
 const collapse = (text: string) => text.split(/\s+/).filter(Boolean).join(" ");
 
+/** `text` occurs in `lower`; `<n>` in `text` stands for one or more digits. */
+function rawMatches(lower: string, text: string): boolean {
+  const escaped = text.split("<n>").map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(escaped.join("[0-9]+")).test(lower);
+}
+
 /** The patterns that refuse `comment`. */
 function refusedBy(rules: Rules, comment: string): string[] {
   const w = words(comment);
   const lower = collapse(comment).toLowerCase();
   return rules.patterns
     .filter((pattern) => {
-      if ("raw" in pattern) return lower.includes(pattern.raw);
+      if ("raw" in pattern) return rawMatches(lower, pattern.raw);
       for (let start = 0; start < w.length; start += 1) if (matchesFrom(pattern.elements, start, w)) return true;
       return false;
     })
@@ -154,7 +164,14 @@ function commentBlocks(fileName: string, text: string): Block[] {
     const lineStart = source.getPositionOfLineAndCharacter(start.line, 0);
     const ownLine = text.slice(lineStart, range.pos).trim() === "";
     const single = range.kind === ts.SyntaxKind.SingleLineCommentTrivia;
-    const body = single ? text.slice(range.pos + 2, range.end) : text.slice(range.pos + 2, range.end - 2);
+    // The `*` that leads each line of a block comment is not text.
+    const body = single
+      ? text.slice(range.pos + 2, range.end)
+      : text
+          .slice(range.pos + 2, range.end - 2)
+          .split("\n")
+          .map((line) => line.trimStart().replace(/^\*+/, ""))
+          .join(" ");
     if (single && ownLine && lastOwnLineComment && start.line === lastEnd + 1) {
       blocks[blocks.length - 1].text += ` ${body}`;
     } else {
@@ -319,6 +336,14 @@ describe("comments state invariants, not review history", () => {
     }
   });
 
+  it("reads a block comment across its leading stars, and raw patterns take digits", () => {
+    expect(scan(rules, "a.ts", "/**\n * Same as the page (rule\n * 8): words.\n */\nexport const x = 1;\n").hits).toHaveLength(1);
+    expect(rawMatches("a (rule 12: b", "(rule <n>")).toBe(true);
+    expect(rawMatches("a (rule x", "(rule <n>")).toBe(false);
+    expect(rawMatches("finding 2 of the output", "finding <n>:")).toBe(false);
+    expect(rawMatches("x finding 2 of, finding 4: y", "finding <n>:")).toBe(true);
+  });
+
   it("matches an allowlist entry exactly", () => {
     const list: typeof ALLOWED = [["a.ts", "review #1 here", "a reason"]];
     const allowed = (hit: { file: string; text: string }) => list.some(([file, text]) => file === hit.file && text === hit.text);
@@ -333,8 +358,11 @@ describe("comments state invariants, not review history", () => {
   it("finds no review history in the production sources", () => {
     const { files, comments, hits } = scanTree(rules);
     // A floor, so a walk that finds nothing cannot pass.
-    expect(files).toBeGreaterThanOrEqual(180);
-    expect(comments).toBeGreaterThanOrEqual(1800);
+    // About 90% of what the tree held when the check landed (221 files, 2,272 comments).
+    expect(
+      files >= 199 && comments >= 2040,
+      `read ${files} production files and ${comments} comments; the floor is 199 files and 2,040 comments`,
+    ).toBe(true);
     for (const [file, text, reason] of ALLOWED) {
       expect(
         hits.some((hit) => hit.file === file && hit.text === text),

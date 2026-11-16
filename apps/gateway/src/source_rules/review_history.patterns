@@ -12,14 +12,16 @@
 #   pattern <elements>   refuse a comment in which the elements match
 #                        consecutive words (anywhere in the comment)
 #   raw <text>           refuse a comment that contains <text> (lowercase,
-#                        whitespace collapsed), punctuation included
+#                        whitespace collapsed), punctuation included; `<n>`
+#                        in it stands for one or more digits
 #   refuse <comment>     must be refused (a planted violation)
 #   allow <comment>      must pass (product vocabulary and stated rules)
 #
 # Elements, separated by spaces: `a|b|c` one of these words; `<n>` a number;
 # `@` the `#` of an issue reference; a trailing `?` makes the element optional;
 # `..k` up to k words of any kind; `^a|b` is not a word but a condition on the
-# one before the next element: it is none of these (or there is none).
+# one before the next element: it is none of these (or there is none); `$a|b`
+# is the same for the word at that position (none of these, or no word left).
 #
 # What is refused is the record of who asked for a change and when: numbered
 # review artefacts (item, round, finding, rule, issue, `review #89`), a review
@@ -39,7 +41,7 @@ pattern ^access|campaign review item|items|finding|findings|round|rounds|issue|i
 pattern ^access|campaign review @ <n>
 pattern review finding|findings|feedback|round|rounds|thread
 pattern review ..4 round <n>
-pattern @ <n> review
+pattern @ <n> review $queue|queues|dialog|dialogs|step|campaign|campaigns|list|page|screen|flow|incident|incidents
 pattern pr <n> review
 pattern @ <n> ..1 round <n>
 pattern coordinator review|decision
@@ -53,7 +55,23 @@ pattern found|raised|noted|flagged|requested|asked|caught|reported|suggested in|
 pattern reviewer|reviewers s? said|asked|found|noted|flagged|wanted|requested|pointed|raised|caught|suggested|insisted|complained|objected
 pattern as requested in the? review
 pattern per the review
-pattern finding|findings @? <n>
+pattern review|pr|adversarial ..2 finding|findings @? <n>
+raw finding <n>:
+raw finding <n>)
+raw finding #<n>
+raw (rule <n>
+raw (rules <n>
+raw (round <n>
+raw #round <n>
+pattern review comment|comments
+pattern review nit|nits
+pattern nit from
+pattern round of review
+pattern per|after code review
+pattern in response to the? review
+pattern pr feedback
+pattern comments on @ <n>
+pattern adversarial pass
 pattern pr <n> item|finding|issue <n>
 raw (review)
 
@@ -83,6 +101,22 @@ refuse Applied the review feedback from the last round.
 refuse Handled in a review round of its own.
 refuse A finding from the review thread.
 refuse Mirror find's HEAD fallback (finding 1).
+refuse Mirror find's HEAD fallback. Finding 1: it was missing.
+refuse Same not-found state as the request page (rule 8): plain words.
+refuse Tokens as everywhere else (rules 3, 5 and lib/format).
+refuse Read-only renderings carry their reason (rule 12: no banners).
+refuse Added (round 2) to bound the table.
+refuse Tagged #round 2 for the table bound.
+refuse Resolved a review comment on the lock order.
+refuse A review nit about the name was applied.
+refuse Nit from the PR: rename the helper.
+refuse Changed after a round of review.
+refuse Reworked per code review.
+refuse Reworked after code review.
+refuse Changed in response to review.
+refuse Applied the PR feedback here.
+refuse Addresses comments on #512 about the lock.
+refuse Added by the adversarial pass over the lock order.
 refuse Rate limited per token (#37 PR2 finding 3).
 refuse See finding #8 of the audit.
 refuse #37 PR2 item 1 exception: the owner lock is taken first.
@@ -102,6 +136,13 @@ allow A reviewer decides the items of an access review campaign.
 allow Each review item records the decision of one reviewer.
 allow The reviewer's inbox lists the items still open.
 allow The reviewer is never the author of the version.
+allow (#101) review queue lists the aged holds.
+allow The #101 review queue is read-only.
+allow Findings: 3 per key at most.
+allow Finding 2 of the verify output is the first orphan.
+allow The docs/governance.md, rule 3 first.
+allow A code review is required for this snapshot.
+allow Rounds are counted per request; round 2 starts after the first reply.
 allow Access review #90 lists the campaign's items.
 allow Fixed 24h/168h unknown-hold review; built in, never a rule.
 allow The aged unknown-hold review queue (#101), read-only.
