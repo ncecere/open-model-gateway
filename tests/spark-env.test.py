@@ -115,6 +115,16 @@ class Names(unittest.TestCase):
             with self.assertRaises(spark.SparkError, msg=repr(name)):
                 spark.validate_name(name)
 
+    def test_the_test_runner_prefix_is_reserved(self):
+        # <base>-omg-test-<slot> belongs to scripts/spark-test.py: this script never creates, targets or lists it.
+        for name in ("test-s1", "test-anything"):
+            with self.assertRaises(spark.SparkError, msg=name):
+                spark.validate_name(name)
+            with self.assertRaises(spark.SparkError, msg=name):
+                spark.check_namespace("coder-03", f"coder-03-omg-{name}")
+        spark.validate_name("tester")
+        spark.check_namespace("coder-03", "coder-03-omg-tester")
+
     def test_namespace_is_base_omg_name(self):
         self.assertEqual(spark.namespace_for("coder-03", "t599"), "coder-03-omg-t599")
 
@@ -585,7 +595,7 @@ class Workflow(unittest.TestCase):
         self.assertFalse([c for c in absent.commands() if " delete " in c])
 
     def test_status_lists_only_environment_namespaces(self):
-        listing = "namespace/coder-03\nnamespace/coder-03-omg-b\nnamespace/coder-02-omg-x\nnamespace/coder-03-omgx\nnamespace/coder-03-omg-a\nnamespace/coder-03-other\nnamespace/default\n"
+        listing = "namespace/coder-03\nnamespace/coder-03-omg-test-s1\nnamespace/coder-03-omg-b\nnamespace/coder-02-omg-x\nnamespace/coder-03-omgx\nnamespace/coder-03-omg-a\nnamespace/coder-03-other\nnamespace/default\n"
         recorder = Recorder(namespaces=listing)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
