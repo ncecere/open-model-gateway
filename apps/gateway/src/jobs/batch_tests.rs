@@ -59,6 +59,15 @@ struct Script {
     /// Result lines a native batch returns (fake format).
     results: Vec<Value>,
     calls: Vec<&'static str>,
+    /// Chat calls a test holds open, by first message text.
+    gates: std::collections::HashMap<String, Arc<Gate>>,
+}
+/// A provider call held open by a test: `entered` is signalled when the call
+/// starts and the call returns once `release` is signalled.
+#[derive(Default)]
+struct Gate {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
 }
 /// A fake provider. `native` enables its batch API. Prompts steer gateway
 /// runs: `fail` → upstream unavailable, `busy` → 429, `huge` → usage far
@@ -82,6 +91,16 @@ impl Fake {
     }
     fn calls(&self) -> Vec<&'static str> {
         self.script.lock().unwrap().calls.clone()
+    }
+    /// Hold every chat call whose first message is `text` until released.
+    fn gate(&self, text: &str) -> Arc<Gate> {
+        self.script
+            .lock()
+            .unwrap()
+            .gates
+            .entry(text.to_owned())
+            .or_default()
+            .clone()
     }
     fn push_batch(&self, status: BatchStatus) {
         let mut s = self.script.lock().unwrap();
@@ -216,6 +235,11 @@ impl ProviderAdapter for Fake {
             let mut script = self.script.lock().unwrap();
             script.executed.push(text.clone());
             script.maxima.push(request.max_output_tokens);
+        }
+        let gate = self.script.lock().unwrap().gates.get(&text).cloned();
+        if let Some(gate) = gate {
+            gate.entered.notify_one();
+            gate.release.notified().await;
         }
         match text.as_str() {
             "cache-hit" => {
@@ -3142,3 +3166,5 @@ async fn memoized_refusal_classification_stays_per_line(pool: PgPool) {
     );
     consistent(f).await;
 }
+
+mod fence;
