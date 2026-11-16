@@ -6,6 +6,7 @@
 //! rule, the check that enforces it, and what each check cannot see.
 #[macro_use]
 mod tree;
+mod engine_no_provider_switch;
+mod log_fields;
 mod money_float;
 mod serve_no_migrate;
-mod engine_no_provider_switch;

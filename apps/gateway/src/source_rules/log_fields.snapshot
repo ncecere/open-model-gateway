@@ -1,0 +1,40 @@
+# Reviewed logging values in the request path (source_rules/log_fields.rs, #591).
+# One line per logging call: file :: function :: macro :: sorted fields and format arguments.
+# Edit by hand after reviewing each change; never paste a generated list unread.
+http.rs :: authenticate_with :: error :: -
+http.rs :: models :: error :: -
+http.rs :: request_context :: info :: header_latency_ms=started.elapsed().as_millis() ; status=response.status().as_u16()
+http.rs :: request_context :: info_span :: method=%request.method() ; request_id=request_id
+inference/attempt.rs :: impl Engine::eligible_candidates :: warn :: error=?other ; provider=%deployment.provider
+inference/mod.rs :: impl ExecutionGuard::drop :: error :: execution_id=%execution_id ; trace_id=log_trace_id.as_ref().map(LogTraceId::as_str)
+inference/mod.rs :: impl ExecutionGuard::finish :: error :: execution_id=%self.id ; trace_id=self.log_trace_id.as_ref().map(LogTraceId::as_str)
+inference/mod.rs :: impl ExecutionGuard::finish :: warn :: execution_id=%self.id ; trace_id=self.log_trace_id.as_ref().map(LogTraceId::as_str)
+inference/realtime.rs :: impl RealtimeSession::drop :: error :: execution_id=%record.id
+inference/realtime.rs :: impl RealtimeSession::finish :: error :: execution_id=%self.id
+inference/realtime.rs :: impl RealtimeSession::finish :: warn :: execution_id=%self.id
+jobs/batch.rs :: impl Jobs::create_batch :: error :: execution_id=%request_id
+jobs/batch.rs :: impl Jobs::discard_work_file :: warn :: job_id=%job.id
+jobs/mod.rs :: impl Attempt::drop :: error :: execution_id=%record.id
+jobs/mod.rs :: impl Attempt::fail :: error :: execution_id=%self.id
+jobs/mod.rs :: impl Jobs::hold_until :: error :: execution_id=%execution
+jobs/mod.rs :: impl Jobs::settle :: warn :: job_id=%job.id
+jobs/native.rs :: impl Jobs::collect_native :: warn :: job_id=%job.id
+jobs/native.rs :: impl Jobs::submit_native :: warn :: job_id=%job.id
+jobs/plan.rs :: impl Jobs::every_candidate_route_refuses :: warn :: error=?other ; provider=%deployment.provider
+jobs/plan.rs :: impl ScanState::report_rejects :: warn :: error=?other
+jobs/poller.rs :: impl Jobs::poll_once :: warn :: job_id=%id
+jobs/poller.rs :: start :: debug :: jobs=n
+jobs/poller.rs :: start :: warn :: -
+jobs/runner.rs :: impl Runner::finalize :: warn :: job_id=%job.id
+jobs/runner.rs :: impl Runner::observe_queue :: warn :: -
+jobs/runner.rs :: impl Runner::publish_demand :: warn :: job_id=%job.id
+jobs/runner.rs :: impl Runner::settle_finished :: warn :: job_id=%job.id
+jobs/runner.rs :: impl Runner::tick :: warn :: job_id=%id
+jobs/runner.rs :: start :: warn :: -
+jobs/runner/line.rs :: impl LineRun::finished :: warn :: job_id=%self.job.id
+jobs/runner/repository.rs :: impl LineRepository::refuse_ungated :: warn :: deployment_id=%deployment.id ; execution_id=%record.id
+jobs/runner/segments.rs :: store_segment :: warn :: job_id=%job.id
+jobs/runner/segments.rs :: store_segment :: warn :: job_id=%job.id
+jobs/schedule.rs :: impl Scheduler::record_signal :: warn :: deployment_id=%deployment
+jobs/video.rs :: impl Jobs::create_video :: error :: execution_id=%request_id
+protocols/realtime.rs :: handle :: error :: -
