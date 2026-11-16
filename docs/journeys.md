@@ -10,7 +10,7 @@ python3 -I scripts/journeys run --base http://127.0.0.1:3000 --only keys signin 
 python3 -I scripts/journeys list
 ```
 
-`--shuffle [--seed N]` runs every journey in a random order; `--issuer URL` names the demo issuer when the forward uses another port. The exit code is 0 when every check passed, 1 when a check failed or a journey errored, 2 when the command was refused (below).
+`--base` must be the gateway's public origin, which for the demo is `http://127.0.0.1:3000`: another spelling of the same address (`localhost`) fails the Origin check on every mutation. `--shuffle [--seed N]` runs every journey in a random order; `--issuer URL` names the demo issuer when the forward uses another port. The exit code is 0 when every check passed, 1 when a check failed or a journey errored, 2 when the command was refused (below).
 
 ## What the suite promises
 
