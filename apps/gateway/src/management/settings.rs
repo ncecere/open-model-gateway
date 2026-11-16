@@ -79,7 +79,7 @@ async fn read_tx<'a>(s: &'a Store, u: &impl Actor) -> Result<Transaction<'a, Pos
 /// The address a test email goes to: a browser session's verified claim,
 /// or (for an admin token, which has no session) the owner's current
 /// directory email. Settings:write explicitly covers the email test for
-/// tokens too (#37 PR2 approved spec).
+/// tokens too.
 async fn test_recipient(
     tx: &mut Transaction<'_, Postgres>,
     u: &ManagementPrincipal,

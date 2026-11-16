@@ -168,7 +168,7 @@ pub async fn authenticate_management(
 /// failure (malformed credential, inference-key shape, or an unknown/
 /// expired/revoked/wrong-owner token -- `authenticate_admin_token` itself
 /// re-reads the primary database live, no cache) is rate-limited and
-/// aggregated only, never individually audited (coordinator decision: there
+/// aggregated only, never individually audited (there
 /// is no token id yet to attribute it to, and auditing unauthenticated noise
 /// would itself be a flood vector). Only after the token authenticates does
 /// an attempt exist to audit, which `management::authorization` does for
@@ -209,7 +209,7 @@ async fn authenticate_admin_token_request(
         );
     }
     // Aggregate, replica-wide gate, before the expensive (one database
-    // round trip) authentication lookup below (#37 PR2 finding 3): bounds
+    // round trip) authentication lookup below: bounds
     // a distributed flood of invalid-shape or unknown-id credentials spread
     // across many client addresses, each individually under the per-IP
     // limit above, before any of that database work happens.
@@ -228,7 +228,7 @@ async fn authenticate_admin_token_request(
         Ok(Some(principal)) => {
             // Per-token gate, only now that the token has successfully
             // authenticated, and before this attempt is started (audited)
-            // or dispatched (#37 PR2 finding 3): the key here is the
+            // or dispatched: the key here is the
             // token's own id, never allocated for an arbitrary
             // unauthenticated credential pre-authentication. A rejection
             // here is counted only in the fixed, low-cardinality
@@ -258,8 +258,7 @@ async fn authenticate_admin_token_request(
                 .insert(ManagementPrincipal::AdminToken(context));
             // Exempt from CSRF: the credential is a Bearer secret a
             // cross-site form or script can never already hold, unlike a
-            // cookie a browser attaches automatically (#37 PR2 coordinator
-            // decision). Browser-session mutations keep exact Origin and
+            // cookie a browser attaches automatically. Browser-session mutations keep exact Origin and
             // CSRF-token validation above, unchanged.
             private(next.run(request).await)
         }

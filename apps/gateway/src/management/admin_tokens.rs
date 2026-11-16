@@ -13,7 +13,7 @@ async fn admin_tx<'a>(
     u: &BrowserPrincipal,
 ) -> Result<Transaction<'a, Postgres>, ApiError> {
     let mut tx = crate::db::begin(&s.pool).await?;
-    // #37 PR2 review: catalog shared lock first, in canonical order. A
+    // Catalog shared lock first, in canonical order. A
     // `BrowserPrincipal` here never takes `platform_write`'s own
     // User-scope lock (`token_id()` is always `None` for a browser
     // session), so this adds no contention today; it keeps this call site
@@ -123,9 +123,8 @@ fn create_error(error: CreateAdminTokenError) -> ApiError {
 }
 
 /// Creation is for the caller only: `owner_user_id` is always the
-/// authenticated browser session's user, never taken from the request body
-/// (#37 PR2 coordinator decision: "creation only for oneself"). Takes the
-/// owner's user-scope authority lock exclusive before the first write
+/// authenticated browser session's user, never taken from the request body.
+/// Takes the owner's user-scope authority lock exclusive before the first write
 /// (`governance::locks::exclusive`, AGENTS.md's canonical order), as
 /// `create_admin_token`'s own contract requires of every caller.
 async fn create(
@@ -163,7 +162,7 @@ async fn create(
     // secret, so it must not depend solely on a cross-cutting default
     // that a future refactor of `request_context` could silently change
     // or a direct-router test (bypassing that middleware entirely, as
-    // this module's own tests do) would never catch (#37 PR2 item 2).
+    // this module's own tests do) would never catch.
     Ok((
         [(
             axum::http::header::CACHE_CONTROL,
@@ -180,8 +179,8 @@ async fn create(
         .into_response())
 }
 
-/// Idempotent, and any currently effective Admin may revoke any token
-/// (#37 PR2 coordinator decision), not only its owner.
+/// Idempotent, and any currently effective Admin may revoke any token, not
+/// only its owner.
 async fn revoke(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
