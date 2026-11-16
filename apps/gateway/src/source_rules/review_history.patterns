@@ -42,7 +42,8 @@ pattern review ..4 round <n>
 pattern @ <n> review
 pattern pr <n> review
 pattern @ <n> ..1 round <n>
-pattern coordinator review
+pattern coordinator review|decision
+pattern approved spec|issue
 pattern adversarial re? review|reviews|finding|findings
 pattern second review
 pattern re review
@@ -90,6 +91,11 @@ refuse Adversarial finding: a duplicate entry is rejected.
 refuse A change from the adversarial review.
 refuse Tagged for later (review).
 refuse See the coordinator review of this change.
+refuse Revoking is allowed for any admin (coordinator decision).
+refuse Fails closed (#37 PR2 approved spec, section 3).
+refuse Admin API tokens (#37 PR3, approved issue comment 6362968687).
+allow The spec is approved by the product owner before release.
+allow The decision is recorded in the audit event.
 refuse REVIEW ITEM 7 is handled here.
 
 allow A reviewer decides the items of an access review campaign.
