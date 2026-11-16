@@ -65,6 +65,8 @@ mod scheduled_reports_review_tests;
 #[cfg(test)]
 mod scheduled_reports_tests;
 pub mod scim;
+#[cfg(test)]
+mod source_rules;
 pub(crate) mod special_use;
 pub mod startup;
 pub mod store;
