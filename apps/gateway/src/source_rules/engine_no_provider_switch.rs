@@ -52,7 +52,7 @@ const ADJACENT: &[&str] = &[
 ///   provider name in admission (`governance.rs`, `governance/batch.rs`) and
 ///   in batch line planning (`jobs/plan/scan.rs`): provider-specific
 ///   behaviour that belongs behind `ProviderAdapter`. Real switches; not
-///   fixed in #591 (no behaviour change). Tracked as a follow-up issue.
+///   fixed in #591 (no behaviour change). Tracked in #624.
 /// * `jobs/schedule.rs` `PRIORITY_PROFILES` lists the local profiles whose
 ///   servers expose scheduling metrics (`vllm`, `openai_compatible`): also a
 ///   provider-kind switch. Same follow-up.
