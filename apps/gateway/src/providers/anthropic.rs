@@ -668,6 +668,8 @@ fn text_delta(delta: &Value, events: &mut Vec<ChatEvent>) -> Result<()> {
 mod batches;
 #[cfg(test)]
 mod fidelity_tests;
+#[cfg(test)]
+mod stream_property_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod terminal_tests;
 #[cfg(test)]
