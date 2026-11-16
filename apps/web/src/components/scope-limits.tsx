@@ -212,7 +212,7 @@ export function ReplacementLimitsDialog({ workspaceId, name, onClose }: { worksp
   </Dialog><NavigationGuard dirty={dirty && !busy} /></>;
 }
 
-/** Read-only renderings carry their reason in the card description (rule 12: no per-section "Read-only" banners). */
+/** Read-only renderings carry their reason in the card description (no per-section "Read-only" banners). */
 /** Group separators ("100,000") for a whole number, otherwise the text as typed. */
 export const groupedInteger = (raw: string) => /^\d+$/.test(raw.trim()) && Number.isSafeInteger(Number(raw.trim())) ? Number(raw.trim()).toLocaleString("en-US") : raw;
 /**
