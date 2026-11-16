@@ -11,27 +11,41 @@ import { describe, expect, it } from "vitest";
  * `VITE_*` variables".
  *
  * Source is read with the TypeScript compiler's parser (string literals, template
- * heads and call expressions, not text matches). Three checks:
+ * heads and call expressions, not text matches), in every `.ts`, `.tsx`, `.js`,
+ * `.jsx`, `.mjs` and `.cjs` file of `src/` (tests excluded), in `public/*.js`, and in
+ * `index.html` (absolute URLs by pattern, inline scripts parsed). Four checks:
  *
- * 1. Every network call in the production source (`fetch`, `new EventSource`,
- *    `new WebSocket`, `new XMLHttpRequest().open`, `navigator.sendBeacon`) takes
- *    a string whose first character is a single `/`, or is one of the reviewed
- *    expressions in PINNED_REQUESTS. A new call or a new URL expression fails
- *    until it is reviewed and added with its reason.
+ * 1. Every network call takes a string whose first character is a single `/`
+ *    (not `//` or `/\`), or is one of the reviewed expressions in PINNED_REQUESTS.
+ *    A network call is a call whose callee's final name is `fetch` or `sendBeacon`
+ *    (`fetch(u)`, `window.fetch(u)`, `window["fetch"](u)`, `(window as any).fetch(u)`,
+ *    `client.fetch(u)`), `fetch.call/apply/bind(..)`, `new EventSource`, `new WebSocket`,
+ *    `new Worker`, `new SharedWorker`, `new Request` and `new XMLHttpRequest` (the
+ *    constructor is refused outright: there is no relative form to check), a
+ *    dynamic `import(u)` of anything but a literal, and `fetch` or `sendBeacon`
+ *    used as a value (`const f = fetch`). A template that starts with `${` or
+ *    is exactly `/` followed by `${` cannot be proved relative and must be pinned.
+ *    A new call or a new URL expression fails until it is reviewed and pinned.
  * 2. Every absolute `http(s)://` or `ws(s)://` literal in the source is listed in
  *    ABSOLUTE_URLS with its reason (display text, placeholders, the SVG namespace,
  *    a base for parsing). A new one fails until it is reviewed.
- * 3. The `VITE_*` names read or defined anywhere (source, `vite.config.ts`, env
- *    files, workflows, Dockerfiles, compose files) are exactly PUBLIC_VITE_NAMES, none of them looks
- *    like a secret, `import.meta.env` is only read by name, and `envPrefix` is not
- *    changed.
+ * 3. No HTTP-capable package (axios, ky, got, node-fetch, undici, superagent,
+ *    socket.io, an Apollo or SWR data layer, ...) is imported, required or listed in
+ *    `apps/web/package.json` unless it is in PINNED_HTTP_PACKAGES (none today).
+ * 4. The `VITE_*` names read or defined anywhere (source, `vite.config.ts`, env
+ *    files, workflows, Dockerfiles, compose files) are exactly PUBLIC_VITE_NAMES,
+ *    none of them looks like a secret, `import.meta.env` is only read by name,
+ *    `envPrefix` and `define` are not used in `vite.config.ts`, and `loadEnv` is
+ *    called with a literal non-empty prefix.
  *
  * Cannot catch: a URL assembled from parts that is passed to a pinned call
  * (`api()` and `downloadExport` refuse anything but `/api/v1/` at run time, tested
- * in api.test.ts and by the call sites below), navigation by `<a href>`,
- * `window.open` or `location` (not API requests), a network call made through a
- * dependency, and secrets exposed under a name that is not on the list because
- * the reviewer allowed it.
+ * in api.test.ts and by the call sites below); navigation and resource loads that
+ * are not API requests: `<a href>`, `window.open`, `location.href =`, `.assign`,
+ * `.replace`, `new Image().src =`, `<form action>`; a network call made through
+ * a dependency or through a callee renamed first (`const f = x.get; f(u)` with `get`
+ * not a network name); a request made by code generated at build time; and secrets
+ * exposed under a name that is on the list because the reviewer allowed it.
  */
 
 const web = fileURLToPath(new URL("../../", import.meta.url));
@@ -53,23 +67,36 @@ const ABSOLUTE_URLS: Record<string, string> = {
   "src/lib/batch-scheduling.ts | http://gpu-host:8000/metrics": "input placeholder",
   "src/lib/bedrock.ts | https://vpce-….bedrock-runtime.<region>.vpce.amazonaws.com": "input placeholder",
   "src/lib/locations.ts | https://dashboard.invalid": "base for parsing a relative location, never requested",
-  "src/pages/catalog.tsx | http://127.0.0.1:8000/v1": "default endpoint shown in the connection form, sent to the API as data",
+  "src/pages/catalog.tsx | http://127.0.0.1:8000/v1": "input placeholder in the connection form",
   "src/pages/catalog.tsx | https://api.openai.com/v1": "fixed provider endpoint shown in the connection form",
   "src/pages/catalog.tsx | https://api.anthropic.com/v1": "fixed provider endpoint shown in the connection form",
   "src/pages/catalog.tsx | https://openrouter.ai/api/v1": "fixed provider endpoint shown in the connection form",
   "src/pages/settings/general.tsx | https://help.example.com": "input placeholder",
 };
 
+/** Reviewed HTTP-capable packages the browser code may use. None today. */
+const PINNED_HTTP_PACKAGES: string[] = [];
+
 /** Reviewed VITE_* variables. None today; each would be public in the bundle. */
 const PUBLIC_VITE_NAMES: string[] = [];
 
 const SECRET_NAME = /(KEY|TOKEN|SECRET|PASSW|CREDENTIAL|PRIVATE|AUTH|COOKIE|SESSION)/i;
 const ABSOLUTE = /^(?:https?|wss?):\/\//i;
-const NETWORK_FUNCTIONS = new Set(["fetch", "window.fetch", "globalThis.fetch", "self.fetch", "navigator.sendBeacon"]);
-const NETWORK_CONSTRUCTORS = new Set(["EventSource", "WebSocket", "XMLHttpRequest", "window.WebSocket", "window.EventSource", "window.XMLHttpRequest"]);
+const NETWORK_FUNCTIONS = new Set(["fetch", "sendBeacon"]);
+const FUNCTION_METHODS = new Set(["call", "apply", "bind"]);
+const NETWORK_CONSTRUCTORS = new Set(["EventSource", "WebSocket", "XMLHttpRequest", "Worker", "SharedWorker", "Request"]);
+const HTTP_PACKAGE =
+  /^(?:axios|ky|ky-universal|got|node-fetch|cross-fetch|isomorphic-fetch|whatwg-fetch|undici|superagent|ofetch|wretch|request|needle|socket\.io-client|ws|eventsource|reconnecting-websocket|@microsoft\/fetch-event-source|graphql-request|@apollo\/client|urql|@urql\/[^/]+|swr|@trpc\/client)(?:\/|$)/;
+const SOURCE_FILE = /\.(?:[cm]?[jt]sx?)$/;
 
 function parse(file: string, text: string): ts.SourceFile {
-  const kind = file.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  const kind = /\.tsx$/.test(file)
+    ? ts.ScriptKind.TSX
+    : /\.jsx$/.test(file)
+      ? ts.ScriptKind.JSX
+      : /\.[cm]?js$/.test(file)
+        ? ts.ScriptKind.JS
+        : ts.ScriptKind.TS;
   return ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, kind);
 }
 
@@ -78,17 +105,98 @@ function visit(node: ts.Node, each: (node: ts.Node) => void): void {
   ts.forEachChild(node, (child) => visit(child, each));
 }
 
-/** `file | callee | first argument` of every network call. */
-export function networkCalls(file: string, text: string): { key: string; first: ts.Expression | undefined }[] {
+function unwrap(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isNonNullExpression(current) ||
+    ts.isTypeAssertionExpression(current) ||
+    ts.isSatisfiesExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+/** The last name of an expression: `a.b.fetch`, `a["fetch"]` and `fetch` are all `fetch`. */
+function finalName(expression: ts.Expression): string | undefined {
+  const e = unwrap(expression);
+  if (ts.isIdentifier(e)) return e.text;
+  if (ts.isPropertyAccessExpression(e)) return e.name.text;
+  if (ts.isElementAccessExpression(e) && ts.isStringLiteralLike(e.argumentExpression)) return e.argumentExpression.text;
+  return undefined;
+}
+
+function receiver(expression: ts.Expression): ts.Expression | undefined {
+  const e = unwrap(expression);
+  return ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e) ? e.expression : undefined;
+}
+
+type Site = { key: string; first: ts.Expression | undefined; provable: boolean };
+
+/** `file | callee | first argument` of every network call, with the argument when it is checkable. */
+export function networkCalls(file: string, text: string): Site[] {
   const source = parse(file, text);
-  const found: { key: string; first: ts.Expression | undefined }[] = [];
+  const found: Site[] = [];
+  const argument = (node: ts.CallExpression | ts.NewExpression, at = 0) => node.arguments?.[at];
+  const callee = (node: ts.CallExpression | ts.NewExpression) => node.expression.getText(source);
   visit(source, (node) => {
-    if (!ts.isCallExpression(node) && !ts.isNewExpression(node)) return;
-    const callee = node.expression.getText(source);
-    const isNew = ts.isNewExpression(node);
-    if (!(isNew ? NETWORK_CONSTRUCTORS.has(callee) : NETWORK_FUNCTIONS.has(callee))) return;
-    const first = node.arguments?.[0];
-    found.push({ key: `${file} | ${callee} | ${first ? first.getText(source) : ""}`, first });
+    if (ts.isNewExpression(node)) {
+      const name = finalName(node.expression);
+      if (name && NETWORK_CONSTRUCTORS.has(name)) {
+        const first = argument(node);
+        found.push({ key: `${file} | ${callee(node)} | ${first ? first.getText(source) : ""}`, first, provable: true });
+      }
+      return;
+    }
+    if (ts.isCallExpression(node)) {
+      if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        const first = argument(node);
+        if (first && ts.isStringLiteralLike(first)) return;
+        found.push({ key: `${file} | import() | ${first ? first.getText(source) : ""}`, first, provable: false });
+        return;
+      }
+      const name = finalName(node.expression);
+      if (name && NETWORK_FUNCTIONS.has(name)) {
+        const first = argument(node);
+        found.push({ key: `${file} | ${callee(node)} | ${first ? first.getText(source) : ""}`, first, provable: true });
+      } else if (name && FUNCTION_METHODS.has(name)) {
+        const target = receiver(node.expression);
+        const targetName = target ? finalName(target) : undefined;
+        if (targetName && NETWORK_FUNCTIONS.has(targetName)) {
+          const args = node.arguments.map((arg) => arg.getText(source)).join(", ");
+          found.push({ key: `${file} | ${callee(node)} | ${args}`, first: undefined, provable: false });
+        }
+      }
+      return;
+    }
+    // `fetch` or `sendBeacon` named as a value (`const f = fetch`, `run(window.fetch)`).
+    const isName =
+      ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node);
+    if (!isName) return;
+    const name = finalName(node as ts.Expression);
+    if (!name || !NETWORK_FUNCTIONS.has(name)) return;
+    const parent = node.parent;
+    if (ts.isIdentifier(node)) {
+      if (ts.isPropertyAccessExpression(parent) && parent.name === node) return;
+      if (ts.isImportSpecifier(parent) || ts.isExportSpecifier(parent) || ts.isImportClause(parent)) return;
+      if (ts.isTypeQueryNode(parent) || ts.isTypeReferenceNode(parent)) return;
+      if ((ts.isFunctionDeclaration(parent) || ts.isMethodDeclaration(parent)) && parent.name === node) return;
+    }
+    if (ts.isCallExpression(parent) && parent.expression === node) return;
+    if (
+      (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) &&
+      parent.expression === node &&
+      FUNCTION_METHODS.has(finalName(parent) ?? "")
+    ) {
+      return;
+    }
+    if ((ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) && parent.expression === node) {
+      // `fetch.x`: the value's property; the name itself is not called or passed.
+      return;
+    }
+    found.push({ key: `${file} | ${node.getText(source)} (value) | `, first: undefined, provable: false });
   });
   return found;
 }
@@ -96,26 +204,27 @@ export function networkCalls(file: string, text: string): { key: string; first: 
 function isRelativeLiteral(expression: ts.Expression | undefined): boolean | undefined {
   if (!expression) return false;
   if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
-    return /^\/(?!\/)/.test(expression.text);
+    return /^\/(?![/\\])/.test(expression.text);
   }
   if (ts.isTemplateExpression(expression)) {
-    // A template that begins with text is judged by that text; one that begins with `${` is not provable.
-    return expression.head.text === "" ? undefined : /^\/(?!\/)/.test(expression.head.text);
+    // A template that begins with text is judged by that text; one that begins with `${`, or is
+    // exactly `/` before its first `${` (the substitution could start with `/` or `\`), is not provable.
+    const head = expression.head.text;
+    if (head === "" || head === "/") return undefined;
+    return /^\/(?![/\\])/.test(head);
   }
   return undefined;
 }
 
 export function requestProblems(file: string, text: string, pinned: Record<string, string>): string[] {
   const problems: string[] = [];
-  const seen = new Set<string>();
   for (const call of networkCalls(file, text)) {
-    seen.add(call.key);
-    const relative_ = isRelativeLiteral(call.first);
+    const relative_ = call.provable ? isRelativeLiteral(call.first) : undefined;
     if (relative_ === true) continue;
     if (relative_ === false) {
       problems.push(`${call.key}: not a same-origin relative URL (it must start with a single "/")`);
     } else if (!(call.key in pinned)) {
-      problems.push(`${call.key}: a request URL that is not a literal; review it and add it to PINNED_REQUESTS`);
+      problems.push(`${call.key}: a request URL that is not a checkable literal; review it and add it to PINNED_REQUESTS`);
     }
   }
   return problems;
@@ -135,11 +244,50 @@ export function absoluteUrls(file: string, text: string): string[] {
   return found;
 }
 
-/** Everything about `VITE_*` names and `import.meta.env` in one source file. */
+/** The HTML page: absolute URLs by pattern, inline scripts as source. */
+export function htmlProblems(file: string, text: string, pinned: Record<string, string>): { urls: string[]; problems: string[] } {
+  const urls = [...text.matchAll(/(?:https?|wss?):\/\/[^\s"'<>)]+/gi)].map((m) => `${file} | ${m[0]}`);
+  const problems: string[] = [];
+  for (const match of text.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)) {
+    problems.push(...requestProblems(file, match[1], pinned));
+  }
+  return { urls, problems };
+}
+
+/** HTTP-capable packages imported, required or loaded dynamically by literal. */
+export function httpPackages(file: string, text: string): string[] {
+  const source = parse(file, text);
+  const found: string[] = [];
+  const note = (specifier: string) => {
+    if (HTTP_PACKAGE.test(specifier)) found.push(`${file} | ${specifier}`);
+  };
+  visit(source, (node) => {
+    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+      note(node.moduleSpecifier.text);
+    } else if (ts.isCallExpression(node) && node.arguments.length > 0 && ts.isStringLiteralLike(node.arguments[0])) {
+      if (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === "require")) {
+        note(node.arguments[0].text);
+      }
+    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+      const e = node.moduleReference.expression;
+      if (ts.isStringLiteral(e)) note(e.text);
+    }
+  });
+  return found;
+}
+
+export function dependencyProblems(manifest: string): string[] {
+  const parsed = JSON.parse(manifest) as Record<string, Record<string, string> | undefined>;
+  const names = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"].flatMap((key) => Object.keys(parsed[key] ?? {}));
+  return names.filter((name) => HTTP_PACKAGE.test(name) && !PINNED_HTTP_PACKAGES.includes(name)).map((name) => `package.json lists ${name}, an HTTP-capable package`);
+}
+
+/** Everything about `VITE_*` names, `import.meta.env` and the Vite configuration in one file. */
 export function viteProblems(file: string, text: string): { names: string[]; problems: string[] } {
   const names = new Set<string>();
   const problems: string[] = [];
-  const code = /\.(?:[cm]?[jt]sx?)$/.test(file);
+  const code = SOURCE_FILE.test(file);
+  const config = /(^|\/)vite\.config\.[cm]?[jt]s$/.test(file);
   const source = parse(code ? file : "x.ts", code ? text : "");
   visit(source, (node) => {
     const shown = node.getText(source);
@@ -164,6 +312,19 @@ export function viteProblems(file: string, text: string): { names: string[]; pro
       }
     }
     if (ts.isIdentifier(node) && node.text === "envPrefix") problems.push(`${file}: envPrefix changes which variables reach the bundle`);
+    if (config) {
+      if ((ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) && node.name.getText(source) === "define") {
+        problems.push(`${file}: define injects values into the bundle`);
+      }
+      if (ts.isCallExpression(node) && finalName(node.expression) === "loadEnv") {
+        const prefix = node.arguments[2];
+        if (!prefix || !ts.isStringLiteralLike(prefix) || prefix.text === "") {
+          problems.push(`${file}: loadEnv needs a literal non-empty prefix (an empty one loads every variable)`);
+        } else if (prefix.text.startsWith("VITE_")) {
+          problems.push(`${file}: loadEnv with a VITE_ prefix puts values where the bundle can read them`);
+        }
+      }
+    }
   });
   // Names written as text (workflows, env files, Dockerfiles, compose files).
   for (const match of text.matchAll(/\bVITE_[A-Z0-9_]+\b/g)) names.add(match[0]);
@@ -180,12 +341,19 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 const rel = (path: string) => relative(web, path).split(sep).join("/");
-const productionSource = (path: string) => /\.(?:ts|tsx)$/.test(path) && !/\.test\.tsx?$/.test(path) && !/\.d\.ts$/.test(path);
+const productionSource = (path: string) => SOURCE_FILE.test(path) && !/\.test\.[cm]?[jt]sx?$/.test(path) && !/\.d\.ts$/.test(path);
 
 function sources(): { file: string; text: string }[] {
-  return walk(join(web, "src"))
-    .filter(productionSource)
-    .map((path) => ({ file: rel(path), text: readFileSync(path, "utf8") }));
+  return [...walk(join(web, "src")).filter(productionSource), ...walk(join(web, "public")).filter((path) => SOURCE_FILE.test(path))].map(
+    (path) => ({ file: rel(path), text: readFileSync(path, "utf8") }),
+  );
+}
+
+function pages(): { file: string; text: string }[] {
+  return [join(web, "index.html"), ...walk(join(web, "public")).filter((path) => /\.html?$/.test(path))].map((path) => ({
+    file: rel(path),
+    text: readFileSync(path, "utf8"),
+  }));
 }
 
 /** Tracked files that could define or pass a VITE_* variable. */
@@ -200,18 +368,24 @@ function configurationFiles(): { file: string; text: string }[] {
     !path.startsWith("docs/releases/") &&
     !/^CHANGELOG\.md$/.test(path) &&
     (/(^|\/)\.env[^/]*$/.test(path) ||
-      /(^|\/)(?:vite\.config\.[cm]?[jt]s|Dockerfile[^/]*|compose[^/]*\.ya?ml|package\.json)$/.test(path) ||
+      /(^|\/)(?:vite\.config\.[cm]?[jt]s|Dockerfile[^/]*|(?:docker-)?compose[^/]*\.ya?ml|package\.json)$/.test(path) ||
       path.startsWith(".github/") ||
       path.startsWith("deploy/") ||
       path.startsWith("scripts/"));
   return listed.filter(wanted).map((path) => ({ file: path, text: readFileSync(join(repository, path), "utf8") }));
 }
 
+/** About 80% of the production files read today (measured: 222). */
+const SOURCE_FLOOR = 180;
+
 describe("browser requests are same-origin and relative (AGENTS.md, #591)", () => {
   it("every network call in the production source takes a relative URL or a reviewed expression", () => {
     const all = sources();
-    expect(all.length).toBeGreaterThan(100);
-    const problems = all.flatMap(({ file, text }) => requestProblems(file, text, PINNED_REQUESTS));
+    expect(all.length).toBeGreaterThan(SOURCE_FLOOR);
+    const problems = [
+      ...all.flatMap(({ file, text }) => requestProblems(file, text, PINNED_REQUESTS)),
+      ...pages().flatMap(({ file, text }) => htmlProblems(file, text, PINNED_REQUESTS).problems),
+    ];
     expect(problems, "see PINNED_REQUESTS in apps/web/src/lib/browser-requests.test.ts").toEqual([]);
   });
 
@@ -220,28 +394,95 @@ describe("browser requests are same-origin and relative (AGENTS.md, #591)", () =
     expect([...Object.keys(PINNED_REQUESTS)].filter((key) => !keys.has(key))).toEqual([]);
   });
 
-  it("every absolute URL literal in the production source is reviewed", () => {
-    const found = sources().flatMap(({ file, text }) => absoluteUrls(file, text));
+  it("every absolute URL literal in the production source and the page is reviewed", () => {
+    const found = [
+      ...sources().flatMap(({ file, text }) => absoluteUrls(file, text)),
+      ...pages().flatMap(({ file, text }) => htmlProblems(file, text, PINNED_REQUESTS).urls),
+    ];
     const unreviewed = found.filter((entry) => !(entry in ABSOLUTE_URLS));
     expect(unreviewed, "an absolute URL in the browser source: add it to ABSOLUTE_URLS with its reason").toEqual([]);
     const stale = Object.keys(ABSOLUTE_URLS).filter((entry) => !found.includes(entry));
     expect(stale).toEqual([]);
   });
 
-  it("refuses planted absolute and unreviewed request URLs", () => {
-    const planted = (code: string) => requestProblems("src/lib/x.ts", code, {});
+  it("no HTTP-capable package is used or listed unless pinned", () => {
+    const used = sources().flatMap(({ file, text }) => httpPackages(file, text));
+    expect(used.filter((entry) => !PINNED_HTTP_PACKAGES.some((name) => entry.endsWith(`| ${name}`)))).toEqual([]);
+    expect(dependencyProblems(readFileSync(join(web, "package.json"), "utf8"))).toEqual([]);
+  });
+
+  it("scans every kind of source and the page", () => {
+    const files = sources().map((entry) => entry.file);
+    expect(files).toContain("src/lib/api.ts");
+    expect(files).toContain("src/main.tsx");
+    expect(files).toContain("public/color-mode.js");
+    expect(pages().map((entry) => entry.file)).toContain("index.html");
+  });
+
+  const planted = (code: string, file = "src/lib/x.ts") => requestProblems(file, code, {});
+
+  it("refuses planted absolute, protocol-relative and unprovable request URLs", () => {
     expect(planted('fetch("https://api.example.com/v1/x")')).toHaveLength(1);
     expect(planted('fetch("//evil.example/x")')).toHaveLength(1);
+    expect(planted('fetch("/\\\\evil.example/x")')).toHaveLength(1);
     expect(planted("fetch(`http://localhost:8080${path}`)")).toHaveLength(1);
     expect(planted("fetch(`${base}/api/v1/x`)")).toHaveLength(1);
+    expect(planted("fetch(`/${path}`)")).toHaveLength(1);
     expect(planted("fetch(url)")).toHaveLength(1);
     expect(planted('new EventSource("https://example.com/stream")')).toHaveLength(1);
     expect(planted('new WebSocket("wss://example.com/ws")')).toHaveLength(1);
+    expect(planted('new Worker("https://example.com/w.js")')).toHaveLength(1);
+    expect(planted('new SharedWorker("//example.com/w.js")')).toHaveLength(1);
+    expect(planted('new Request("https://example.com/r")')).toHaveLength(1);
+    expect(planted("const x = new XMLHttpRequest();")).toHaveLength(1);
     expect(planted('navigator.sendBeacon("https://example.com/b", data)')).toHaveLength(1);
     expect(planted("window.fetch(url)")).toHaveLength(1);
     expect(planted('fetch("/api/v1/me")')).toEqual([]);
     expect(planted("fetch(`/api/v1/workspaces/${id}`)")).toEqual([]);
+    expect(planted('new WebSocket("/v1/realtime")')).toEqual([]);
     expect(requestProblems("src/lib/x.ts", "fetch(url)", { "src/lib/x.ts | fetch | url": "reviewed" })).toEqual([]);
+  });
+
+  it("refuses planted callee spellings and fetch used as a value", () => {
+    for (const code of [
+      'window["fetch"]("https://example.com/x")',
+      '(window as any).fetch("https://example.com/x")',
+      'globalThis.fetch("https://example.com/x")',
+      'client.fetch("https://example.com/x")',
+      'self?.fetch("https://example.com/x")',
+      'navigator["sendBeacon"]("https://example.com/b")',
+    ]) {
+      expect(planted(code), code).toHaveLength(1);
+    }
+    expect(planted('(fetch as typeof fetch)("https://example.com/x")').length).toBeGreaterThanOrEqual(1);
+    for (const code of [
+      'fetch.call(window, "/api/v1/me")',
+      'fetch.apply(window, ["/api/v1/me"])',
+      "const f = fetch.bind(window);",
+      "const f = fetch;",
+      "run(window.fetch);",
+      "const { fetch: f } = window;",
+      'const f = window["fetch"];',
+      "export const f = navigator.sendBeacon;",
+    ]) {
+      expect(planted(code).length, code).toBeGreaterThanOrEqual(1);
+    }
+    expect(planted("import(someUrl)")).toHaveLength(1);
+    expect(planted('import("./page")')).toEqual([]);
+    expect(planted("q.refetch(); queryClient.fetchQuery(x); const fetched = 1;")).toEqual([]);
+    expect(planted("type F = typeof fetch; // fetch(url) in a comment")).toEqual([]);
+  });
+
+  it("reads JavaScript, JSX and the inline scripts of a page", () => {
+    expect(planted('fetch("https://example.com/x")', "public/x.js")).toHaveLength(1);
+    expect(planted('const a = <A onClick={() => fetch("https://example.com/x")} />;', "src/x.jsx")).toHaveLength(1);
+    const page = '<html><script src="/color-mode.js"></script><script>fetch("https://example.com/x")</script></html>';
+    expect(htmlProblems("index.html", page, {}).problems).toHaveLength(1);
+    expect(htmlProblems("index.html", page.replace("fetch(", "noop("), {}).problems).toEqual([]);
+    expect(htmlProblems("index.html", '<script src="https://cdn.example.com/x.js"></script><link href="http://a.example/s.css">', {}).urls).toEqual([
+      "index.html | https://cdn.example.com/x.js",
+      "index.html | http://a.example/s.css",
+    ]);
   });
 
   it("finds planted absolute URLs in strings, templates and JSX", () => {
@@ -251,13 +492,28 @@ describe("browser requests are same-origin and relative (AGENTS.md, #591)", () =
     expect(absoluteUrls("src/x.tsx", "const a = <p>see http://x.example</p>;")).toEqual([]);
     expect(absoluteUrls("src/x.tsx", 'const a = "/api/v1/me";')).toEqual([]);
   });
+
+  it("finds planted HTTP packages in imports, requires, dynamic imports and the manifest", () => {
+    expect(httpPackages("src/x.ts", 'import axios from "axios";')).toEqual(["src/x.ts | axios"]);
+    expect(httpPackages("src/x.ts", 'import { get } from "ky/distribution";')).toEqual(["src/x.ts | ky/distribution"]);
+    expect(httpPackages("src/x.ts", 'export * from "node-fetch";')).toEqual(["src/x.ts | node-fetch"]);
+    expect(httpPackages("src/x.js", 'const got = require("got");')).toEqual(["src/x.js | got"]);
+    expect(httpPackages("src/x.ts", 'const m = await import("undici");')).toEqual(["src/x.ts | undici"]);
+    expect(httpPackages("src/x.ts", 'import useSWR from "swr";')).toEqual(["src/x.ts | swr"]);
+    expect(httpPackages("src/x.ts", 'import { useQuery } from "@tanstack/react-query"; import r from "react";')).toEqual([]);
+    expect(dependencyProblems('{"dependencies":{"axios":"1","react":"19"},"devDependencies":{"ky":"1"}}')).toEqual([
+      "package.json lists axios, an HTTP-capable package",
+      "package.json lists ky, an HTTP-capable package",
+    ]);
+    expect(dependencyProblems('{"dependencies":{"react":"19"}}')).toEqual([]);
+  });
 });
 
 describe("no secrets in public VITE_* variables (AGENTS.md, #591)", () => {
   it("the VITE_* names in use are exactly the reviewed list", () => {
     const names = new Set<string>();
     const problems: string[] = [];
-    for (const { file, text } of [...sources(), ...configurationFiles()]) {
+    for (const { file, text } of [...sources(), ...pages(), ...configurationFiles()]) {
       const found = viteProblems(file, text);
       found.names.forEach((name) => names.add(name));
       problems.push(...found.problems);
@@ -274,7 +530,7 @@ describe("no secrets in public VITE_* variables (AGENTS.md, #591)", () => {
 
   it("scans the configuration that could define a variable", () => {
     const files = configurationFiles().map((entry) => entry.file);
-    for (const expected of ["apps/web/.env.example", "apps/web/vite.config.ts", "Dockerfile", ".github/workflows/ci.yml"]) {
+    for (const expected of ["apps/web/.env.example", "apps/web/vite.config.ts", "Dockerfile", ".github/workflows/ci.yml", "compose.yaml"]) {
       expect(files).toContain(expected);
     }
   });
@@ -284,6 +540,7 @@ describe("no secrets in public VITE_* variables (AGENTS.md, #591)", () => {
     expect(viteProblems("src/x.ts", 'const k = import.meta.env["VITE_TOKEN"];').names).toEqual(["VITE_TOKEN"]);
     expect(viteProblems("src/x.ts", "const k = process.env.VITE_SECRET;").names).toEqual(["VITE_SECRET"]);
     expect(viteProblems(".env", "VITE_PASSWORD=hunter2\n").names).toEqual(["VITE_PASSWORD"]);
+    expect(viteProblems("docker-compose.yml", "environment:\n  - VITE_API_KEY=x\n").names).toEqual(["VITE_API_KEY"]);
     expect(viteProblems("src/x.ts", "const all = { ...import.meta.env };").problems).toHaveLength(1);
     expect(viteProblems("src/x.ts", "log(import.meta.env);").problems).toHaveLength(1);
     expect(viteProblems("src/x.ts", "const k = import.meta.env[name];").problems).toHaveLength(1);
@@ -291,5 +548,18 @@ describe("no secrets in public VITE_* variables (AGENTS.md, #591)", () => {
     expect(viteProblems("src/x.ts", "const m = import.meta.env.MODE;")).toEqual({ names: [], problems: [] });
     expect(SECRET_NAME.test("VITE_API_KEY") && SECRET_NAME.test("VITE_TOKEN") && SECRET_NAME.test("VITE_PASSWORD")).toBe(true);
     expect(SECRET_NAME.test("VITE_APP_TITLE")).toBe(false);
+  });
+
+  it("refuses planted define and loadEnv calls in the Vite configuration", () => {
+    const config = (code: string) => viteProblems("apps/web/vite.config.ts", code).problems;
+    expect(config('export default { define: { "import.meta.env.X": JSON.stringify(process.env.SECRET) } };')).toHaveLength(1);
+    expect(config("const define = {}; export default { define };")).toHaveLength(1);
+    expect(config('const env = loadEnv(mode, dir, "");')).toHaveLength(1);
+    expect(config("const env = loadEnv(mode, dir);")).toHaveLength(1);
+    expect(config("const env = loadEnv(mode, dir, prefix);")).toHaveLength(1);
+    expect(config('const env = loadEnv(mode, dir, "VITE_");')).toHaveLength(1);
+    expect(config('const env = loadEnv(mode, dir, "GATEWAY_");')).toEqual([]);
+    // Only the configuration file is held to these rules.
+    expect(viteProblems("src/x.ts", "const define = 1;").problems).toEqual([]);
   });
 });
