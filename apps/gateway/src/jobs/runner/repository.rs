@@ -13,7 +13,7 @@ use super::*;
 /// #238) - a line that carries a plan is still judged against that one
 /// route, never every candidate.
 ///
-/// `claimed` is a separate, narrower fact (#243 review finding 1): whether
+/// `claimed` is a separate, narrower fact: whether
 /// THIS attempt actually holds the scheduler's route-capacity claim
 /// (`Runner`'s dispatch passed it a `Pin`). A plan alone is not a claim -
 /// an omitted-maximum line whose pinned route was briefly ineligible at
@@ -60,8 +60,7 @@ impl LineRepository {
     }
     /// Whether the scheduler actually claimed route capacity for `execution`
     /// at dispatch - never merely whether it carries a routing/pricing plan
-    /// (#243 review finding 1: those are different facts kept in `pins` and
-    /// `claimed`).
+    /// (those are different facts kept in `pins` and `claimed`).
     fn gated(&self, execution: Uuid) -> bool {
         self.claimed.lock().expect("claimed").contains(&execution)
     }
