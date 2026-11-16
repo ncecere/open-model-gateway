@@ -485,4 +485,6 @@ impl State {
     }
 }
 #[cfg(test)]
+mod stream_property_tests;
+#[cfg(test)]
 mod tests;
