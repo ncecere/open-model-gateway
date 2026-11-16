@@ -47,9 +47,16 @@ async fn store_segment(
                 .fence
                 .insert_segment(store, job.workspace_id, file, held)
                 .await;
-            if !matches!(state.written(recorded), Ok(Some(_))) {
-                let _ = files.delete(file, Some(job.workspace_id)).await;
-                tracing::warn!(job_id = %job.id, "batch segment not recorded; its lines are reported unavailable");
+            match state.written(recorded) {
+                Ok(Some(_)) => {}
+                // Refused: `written` ended the run's work and said so.
+                Ok(None) => {
+                    let _ = files.delete(file, Some(job.workspace_id)).await;
+                }
+                Err(_) => {
+                    let _ = files.delete(file, Some(job.workspace_id)).await;
+                    tracing::warn!(job_id = %job.id, "batch segment not recorded; its lines are reported unavailable");
+                }
             }
         }
         _ => {
@@ -87,6 +94,9 @@ pub(super) async fn write_segments(
                 }
             },
             _ = &mut deadline => true,
+            // The lease is in doubt: store what is held before a takeover
+            // can refuse it.
+            _ = state.doubt.notified() => true,
         };
         if !flush || lines.is_empty() {
             continue;
@@ -101,4 +111,52 @@ pub(super) async fn write_segments(
         }
     }
     Ok(())
+}
+
+/// The segment writer of one run, driven by tests.
+#[cfg(test)]
+pub(crate) struct Probe {
+    state: Arc<RunState>,
+    records: mpsc::Sender<Record>,
+    writer: tokio::task::JoinHandle<Result<(), InferenceError>>,
+}
+#[cfg(test)]
+impl Probe {
+    pub(crate) fn start(
+        store: Store,
+        files: crate::filestore::FileStorage,
+        job: JobRow,
+        fence: BatchFence,
+    ) -> Self {
+        let state = Arc::new(RunState::new(fence));
+        let (records, receiver) = mpsc::channel(8);
+        let writer = tokio::spawn(write_segments(store, files, job, state.clone(), receiver));
+        Self {
+            state,
+            records,
+            writer,
+        }
+    }
+    pub(crate) async fn finished(&self, line: i32) {
+        let value = json!({"custom_id": line.to_string()});
+        self.records
+            .send(Record {
+                line,
+                error: false,
+                value,
+            })
+            .await
+            .unwrap();
+    }
+    /// The lease is in doubt (a renewal failed).
+    pub(crate) fn doubt(&self) {
+        self.state.doubt.notify_one();
+    }
+    pub(crate) fn fenced(&self) -> bool {
+        self.state.fenced.load(Ordering::SeqCst)
+    }
+    pub(crate) async fn close(self) {
+        drop(self.records);
+        self.writer.await.unwrap().unwrap();
+    }
 }

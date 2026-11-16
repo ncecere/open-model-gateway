@@ -390,11 +390,39 @@ pub(crate) struct Finished<'a> {
     pub error_file: Option<Uuid>,
     pub counts: Option<RequestCounts>,
 }
+/// The statement that records a batch's terminal state. Parameters: `$1` the
+/// job, then (`fenced`) the runner `$2` and epoch `$3`, then the state, error
+/// code, output file, error file and the three counts.
+pub(crate) fn finish_batch_sql(fenced: bool) -> String {
+    let (guard, n) = if fenced {
+        (" AND runner_id=$2 AND runner_epoch=$3", 3)
+    } else {
+        ("", 1)
+    };
+    format!(
+        "UPDATE async_jobs SET state=${s},upstream_status=${s},error_code=coalesce(error_code,${e}),output_file_id=coalesce(output_file_id,${o}),error_file_id=coalesce(error_file_id,${r}),request_total=coalesce(${t},request_total),request_completed=coalesce(${c},request_completed),request_failed=coalesce(${f},request_failed),completed_at=coalesce(completed_at,clock_timestamp()) WHERE id=$1{guard} AND state IN('queued','in_progress') RETURNING {JOB_COLUMNS}",
+        s = n + 1,
+        e = n + 2,
+        o = n + 3,
+        r = n + 4,
+        t = n + 5,
+        c = n + 6,
+        f = n + 7
+    )
+}
 pub(crate) async fn finish_batch(store: &Store, id: Uuid, f: &Finished<'_>) -> Result<JobRow> {
-    sqlx::query("UPDATE async_jobs SET state=$2,upstream_status=$2,error_code=coalesce(error_code,$3),output_file_id=coalesce(output_file_id,$4),error_file_id=coalesce(error_file_id,$5),request_total=coalesce($6,request_total),request_completed=coalesce($7,request_completed),request_failed=coalesce($8,request_failed),completed_at=coalesce(completed_at,clock_timestamp()) WHERE id=$1 AND state IN('queued','in_progress')")
-        .bind(id).bind(f.state.as_str()).bind(f.error_code).bind(f.output_file).bind(f.error_file)
-        .bind(f.counts.map(|c| c.total as i32)).bind(f.counts.map(|c| c.completed as i32)).bind(f.counts.map(|c| c.failed as i32))
-        .execute(&store.pool).await.map_err(job_storage)?;
+    sqlx::query(&finish_batch_sql(false))
+        .bind(id)
+        .bind(f.state.as_str())
+        .bind(f.error_code)
+        .bind(f.output_file)
+        .bind(f.error_file)
+        .bind(f.counts.map(|c| c.total as i32))
+        .bind(f.counts.map(|c| c.completed as i32))
+        .bind(f.counts.map(|c| c.failed as i32))
+        .execute(&store.pool)
+        .await
+        .map_err(job_storage)?;
     reload(store, id).await
 }
 /// Observed provider progress (native): counts and the stall clock. The

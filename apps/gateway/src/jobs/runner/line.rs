@@ -22,6 +22,9 @@ pub(super) struct RunState {
     /// The fence refused a write: the batch belongs to another claim, so
     /// nothing the run holds may be stored.
     pub(super) fenced: AtomicBool,
+    /// Signalled when the lease is in doubt: the segment writer stores what
+    /// it holds now, before a takeover can refuse it.
+    pub(super) doubt: tokio::sync::Notify,
     pub(super) budget: AtomicBool,
     pub(super) busy_streak: AtomicU32,
     pub(super) pause_until: Mutex<Option<tokio::time::Instant>>,
@@ -35,6 +38,7 @@ impl RunState {
             cancel: AtomicBool::default(),
             lost: AtomicBool::default(),
             fenced: AtomicBool::default(),
+            doubt: tokio::sync::Notify::new(),
             budget: AtomicBool::default(),
             busy_streak: AtomicU32::default(),
             pause_until: Mutex::default(),
@@ -50,14 +54,14 @@ impl RunState {
         }
     }
     /// A fenced write's result: a refused write ends the run's work.
-    pub(super) fn written<T>(&self, result: FenceResult<T>) -> Result<Option<T>, FenceError> {
+    pub(super) fn written<T>(&self, result: FenceResult<T>) -> JobResult<Option<T>> {
         match result {
             Ok(v) => Ok(Some(v)),
             Err(FenceError::Stale) => {
                 self.lose();
                 Ok(None)
             }
-            Err(e) => Err(e),
+            Err(FenceError::Storage) => Err(InferenceError::Storage.into()),
         }
     }
     pub(super) fn stop_reason(&self, job: &JobRow) -> Option<Stop> {
@@ -123,7 +127,14 @@ impl LineRun {
         }
         let _ = records.send(Record { line, error, value }).await;
     }
-    async fn finished(&self, line: i32, ok: bool, status: Option<u16>, code: Option<&str>) {
+    async fn finished(
+        &self,
+        line: i32,
+        execution: Uuid,
+        ok: bool,
+        status: Option<u16>,
+        code: Option<&str>,
+    ) {
         let fence = &self.state.fence;
         match self.state.written(
             fence
@@ -141,7 +152,13 @@ impl LineRun {
             }
             // Already moved out of `running` (interrupted by the claim that
             // took the batch over): it is counted once, by that move.
-            Ok(Some(false)) | Ok(None) => {}
+            Ok(Some(false)) => {}
+            // Refused: the attempt ran and settles at its real cost, but its
+            // outcome is not recorded. Ids only, so a charged line the batch
+            // reports unavailable can be attributed.
+            Ok(None) => {
+                tracing::warn!(execution_id = %execution, line, "batch line outcome not recorded: the runner no longer holds the batch");
+            }
             Err(_) => {
                 tracing::warn!(job_id = %self.job.id, "batch line state not recorded");
             }
@@ -162,8 +179,14 @@ impl LineRun {
             Err(_) => {
                 let custom_id = lines::custom_id(&raw).unwrap_or_default();
                 let error = InferenceError::InvalidRequest;
-                self.finished(n, false, Some(400), Some("invalid_request_error"))
-                    .await;
+                self.finished(
+                    n,
+                    execution,
+                    false,
+                    Some(400),
+                    Some("invalid_request_error"),
+                )
+                .await;
                 let value = lines::failure_line(&custom_id, Some(execution), self.endpoint, error);
                 self.emit(&records, n, true, value).await;
                 return;
@@ -180,7 +203,7 @@ impl LineRun {
                     self.state.succeeded();
                     match lines::response_body(self.endpoint, execution, &model, response) {
                         Ok(body) => {
-                            self.finished(n, true, Some(200), None).await;
+                            self.finished(n, execution, true, Some(200), None).await;
                             let value = lines::success_line(&line.custom_id, Some(execution), body);
                             self.emit(&records, n, false, value).await;
                         }
@@ -191,7 +214,8 @@ impl LineRun {
                 Err(e) if e.is_budget_denial() => {
                     // Admission refused: the line never ran. The batch stops.
                     self.state.budget.store(true, Ordering::SeqCst);
-                    self.finished(n, false, None, Some("budget_exceeded")).await;
+                    self.finished(n, execution, false, None, Some("budget_exceeded"))
+                        .await;
                     let value = lines::not_run_line(&line.custom_id, NotRun::BudgetExceeded);
                     self.emit(&records, n, true, value).await;
                     return;
@@ -254,7 +278,7 @@ impl LineRun {
         records: &mpsc::Sender<Record>,
     ) {
         let (status, _) = crate::protocols::batch_line_error(false, error);
-        self.finished(n, false, Some(status), Some(error.code()))
+        self.finished(n, execution, false, Some(status), Some(error.code()))
             .await;
         let value = lines::failure_line(custom_id, Some(execution), self.endpoint, error);
         self.emit(records, n, true, value).await;

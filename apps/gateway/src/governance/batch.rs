@@ -365,7 +365,9 @@ pub(crate) struct LineContext {
 
 /// Admit one gateway-run line attempt (see the module docs). Errors: the
 /// usual admission errors; `Configuration` when the batch's envelope is no
-/// longer pending (closed or reconciled), so no line may start.
+/// longer pending (closed or reconciled), or when the runner no longer holds
+/// the batch's claim; no line may start then. A refused claim is not an
+/// admission failure and is not counted as one.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn admit_line(
     store: &Store,
@@ -378,7 +380,7 @@ pub(crate) async fn admit_line(
     output_limit: u32,
     generation_request: Option<&ChatRequest>,
 ) -> Result<crate::inference::repository::GenerationAdmission, InferenceError> {
-    let result = locks::retry_deadlocks!(
+    let admitted = locks::retry_deadlocks!(
         "admission",
         admit_line_unobserved(
             store,
@@ -393,9 +395,19 @@ pub(crate) async fn admit_line(
         )
         .await
     );
-    crate::metrics::observe_admission(&result.as_ref().map(|_| ()).map_err(|e| *e));
-    result
+    match admitted {
+        Ok(Some(admission)) => {
+            crate::metrics::observe_admission(&Ok(()));
+            Ok(admission)
+        }
+        Ok(None) => Err(InferenceError::Configuration),
+        Err(e) => {
+            crate::metrics::observe_admission(&Err(e));
+            Err(e)
+        }
+    }
 }
+/// `None`: the runner no longer holds the batch (nothing was written).
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 async fn admit_line_unobserved(
@@ -408,7 +420,7 @@ async fn admit_line_unobserved(
     planned_price: Option<Uuid>,
     output_limit: u32,
     generation_request: Option<&ChatRequest>,
-) -> Result<crate::inference::repository::GenerationAdmission, InferenceError> {
+) -> Result<Option<crate::inference::repository::GenerationAdmission>, InferenceError> {
     if !(1..=86_400).contains(&lease_seconds)
         || !matches!(
             workload.kind,
@@ -426,11 +438,11 @@ async fn admit_line_unobserved(
     // longer holds the batch admits nothing for it.
     if !batch
         .fence
-        .hold(&mut tx, Hold::Share)
+        .hold(&mut tx, Hold::Rows)
         .await
         .map_err(storage)?
     {
-        return Err(InferenceError::Configuration);
+        return Ok(None);
     }
     let envelope: Option<(String, Option<i64>, Uuid, DateTime<Utc>)> = sqlx::query_as("SELECT r.state,r.held_microusd,r.api_key_id,r.admitted_at FROM governance_reservations r JOIN async_jobs j ON j.execution_id=r.execution_id WHERE r.execution_id=$1 AND r.workspace_id=$2 AND j.id=$3 AND j.batch_mode='gateway' FOR UPDATE OF r")
         .bind(batch.envelope).bind(workspace).bind(batch.fence.job).fetch_optional(&mut *tx).await.map_err(storage)?;
@@ -540,7 +552,7 @@ async fn admit_line_unobserved(
             .map_err(storage)?;
     }
     tx.commit().await.map_err(storage)?;
-    Ok(admission)
+    Ok(Some(admission))
 }
 
 /// Settle a batch reservation at zero: a gateway-run batch's envelope when
@@ -603,7 +615,7 @@ async fn close_batch_once(
     // Before the reservation rows, like admission: a runner that no longer
     // holds the batch must not settle the envelope its successor still uses.
     if let Some(fence) = fence
-        && !fence.hold(&mut tx, Hold::Share).await.map_err(storage)?
+        && !fence.hold(&mut tx, Hold::Rows).await.map_err(storage)?
     {
         return Ok(Closed::Fenced);
     }

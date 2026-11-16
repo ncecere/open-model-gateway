@@ -25,7 +25,7 @@ impl Scheduler {
         let mut tx = crate::db::begin(&self.store.pool)
             .await
             .map_err(job_storage)?;
-        fence.hold_counted(&mut tx, Hold::Share).await?;
+        fence.hold_counted(&mut tx, Hold::Rows).await?;
         lock_route(&mut tx, deployment).await?;
         let running: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM batch_lines WHERE deployment_id=$1 AND state='running'",
@@ -89,7 +89,7 @@ impl Scheduler {
         let mut tx = crate::db::begin(&self.store.pool)
             .await
             .map_err(job_storage)?;
-        fence.hold_counted(&mut tx, Hold::Share).await?;
+        fence.hold_counted(&mut tx, Hold::Rows).await?;
         lock_route(&mut tx, deployment).await?;
         let running: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM batch_lines WHERE deployment_id=$1 AND state='running'",
@@ -120,7 +120,7 @@ impl Scheduler {
         let mut tx = crate::db::begin(&self.store.pool)
             .await
             .map_err(job_storage)?;
-        let hold = if legit { Hold::Update } else { Hold::Share };
+        let hold = if legit { Hold::Update } else { Hold::Rows };
         fence.hold_counted(&mut tx, hold).await?;
         let ids: Vec<Uuid> = rows.iter().map(|r| r.deployment).collect();
         let lines: Vec<i32> = rows
@@ -159,7 +159,7 @@ impl Scheduler {
         let mut tx = crate::db::begin(&self.store.pool)
             .await
             .map_err(job_storage)?;
-        fence.hold_counted(&mut tx, Hold::Share).await?;
+        fence.hold_counted(&mut tx, Hold::Rows).await?;
         sqlx::query("DELETE FROM batch_route_waits WHERE job_id=$1")
             .bind(fence.job)
             .execute(&mut *tx)

@@ -3,23 +3,32 @@
 //! A runner owns a batch while `(runner_id, runner_epoch)` on the job row are
 //! the pair it was given when it claimed the batch; the claim bumps the epoch,
 //! so a later claim by any runner, including a new run of the same process,
-//! ends the earlier run's ownership. Every runner write to the batch's
-//! rows starts its transaction by taking the job row (`FOR SHARE`, or `FOR NO
-//! KEY UPDATE` when the transaction also changes the row) with that pair in
-//! the predicate. A claim is `FOR UPDATE SKIP LOCKED`, so it skips a batch with
-//! a write in flight and takes it on a later tick; a write that starts after a
-//! claim finds no row and is refused ([`FenceError::Stale`]). The runner then
-//! writes nothing more to the batch.
+//! ends the earlier run's ownership. Every runner write to the batch's rows
+//! starts its transaction by locking the job row with that pair in the
+//! predicate: `FOR KEY SHARE` when it writes other rows only, `FOR NO KEY
+//! UPDATE` when it also changes the job row. A claim locks the row `FOR
+//! UPDATE` (`SKIP LOCKED`), which conflicts with both, so it skips a batch
+//! with a write in flight and takes it on a later tick; a write that starts
+//! after a claim finds no row and is refused ([`FenceError::Stale`]). The
+//! runner then writes nothing more to the batch. Every takeover must lock the
+//! row `FOR UPDATE`, as the claim does: a plain `UPDATE` takes only `NO KEY
+//! UPDATE`, which `KEY SHARE` does not exclude.
 //!
 //! Lock order: the job row is the first row lock of every runner transaction,
 //! before the route lock, line rows, segment rows and, in governance, the
 //! reservation and totals rows (docs/governance.md). Transactions that change
-//! the job row as well take it `FOR NO KEY UPDATE` at the start, so no
-//! transaction ever upgrades a share lock it already holds.
+//! the job row take it `FOR NO KEY UPDATE` at the start, so no transaction
+//! upgrades a lock it already holds; `KEY SHARE` and `NO KEY UPDATE` do not
+//! conflict, so admissions, segment writes and counter updates of one run do
+//! not queue behind each other on it.
+//!
+//! A frozen runner inside a fenced transaction would hold the row against
+//! every claim: each fenced transaction therefore ends the session after
+//! [`IDLE_IN_TRANSACTION`] without a statement, which releases the lock.
 use sqlx::{Postgres, Transaction, postgres::PgArguments, query::Query};
 use uuid::Uuid;
 
-use super::store::{Finished, JOB_COLUMNS, JobRow, job_storage};
+use super::store::{Finished, JobRow, finish_batch_sql, job_storage};
 use crate::store::Store;
 
 /// What a runner holds for one claim of a batch.
@@ -43,22 +52,27 @@ impl From<sqlx::Error> for FenceError {
         Self::Storage
     }
 }
-impl From<FenceError> for super::JobError {
-    fn from(error: FenceError) -> Self {
-        match error {
-            FenceError::Stale | FenceError::Storage => {
-                Self::Inference(super::InferenceError::Storage)
-            }
-        }
-    }
+/// What a lease renewal found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Renewed {
+    /// The claim is current; whether a cancel was requested.
+    Held { cancel: bool },
+    /// The batch is settled: nothing is left to renew.
+    Settled,
+    /// The claim ended.
+    Fenced,
 }
+
 pub(crate) type FenceResult<T> = Result<T, FenceError>;
+
+/// The longest a fenced transaction may sit between statements.
+pub(crate) const IDLE_IN_TRANSACTION: &str = "30s";
 
 /// How a transaction holds the job row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Hold {
-    /// Writes other rows only.
-    Share,
+    /// Writes other rows only (`FOR KEY SHARE`).
+    Rows,
     /// Also changes the job row.
     Update,
 }
@@ -72,18 +86,21 @@ impl BatchFence {
         tx: &mut Transaction<'_, Postgres>,
         hold: Hold,
     ) -> Result<bool, sqlx::Error> {
+        // The select-list `set_config` runs for the locked row: a refused
+        // fence rolls back, so the timeout only matters when it is held.
         let sql = match hold {
-            Hold::Share => {
-                "SELECT 1 FROM async_jobs WHERE id=$1 AND runner_id=$2 AND runner_epoch=$3 FOR SHARE"
+            Hold::Rows => {
+                "SELECT set_config('idle_in_transaction_session_timeout',$4,true) FROM async_jobs WHERE id=$1 AND runner_id=$2 AND runner_epoch=$3 FOR KEY SHARE"
             }
             Hold::Update => {
-                "SELECT 1 FROM async_jobs WHERE id=$1 AND runner_id=$2 AND runner_epoch=$3 FOR NO KEY UPDATE"
+                "SELECT set_config('idle_in_transaction_session_timeout',$4,true) FROM async_jobs WHERE id=$1 AND runner_id=$2 AND runner_epoch=$3 FOR NO KEY UPDATE"
             }
         };
-        Ok(sqlx::query_scalar::<_, i32>(sql)
+        Ok(sqlx::query_scalar::<_, String>(sql)
             .bind(self.job)
             .bind(self.runner)
             .bind(self.epoch)
+            .bind(IDLE_IN_TRANSACTION)
             .fetch_optional(&mut **tx)
             .await?
             .is_some())
@@ -149,16 +166,20 @@ impl BatchFence {
         Ok(())
     }
 
-    /// Renew the lease. `None` when the claim ended or the batch is settled;
-    /// otherwise whether a cancel was requested.
+    /// Renew the lease.
     pub(crate) async fn renew(
         &self,
         store: &Store,
         lease_seconds: f64,
-    ) -> Result<Option<bool>, sqlx::Error> {
-        sqlx::query_scalar("UPDATE async_jobs SET runner_lease_until=clock_timestamp()+make_interval(secs=>$4) WHERE id=$1 AND runner_id=$2 AND runner_epoch=$3 AND settled_at IS NULL RETURNING cancel_requested_at IS NOT NULL")
+    ) -> Result<Renewed, sqlx::Error> {
+        let row: Option<(bool, bool)> = sqlx::query_as("UPDATE async_jobs SET runner_lease_until=clock_timestamp()+make_interval(secs=>$4) WHERE id=$1 AND runner_id=$2 AND runner_epoch=$3 RETURNING cancel_requested_at IS NOT NULL,settled_at IS NOT NULL")
             .bind(self.job).bind(self.runner).bind(self.epoch).bind(lease_seconds)
-            .fetch_optional(&store.pool).await.map_err(job_storage)
+            .fetch_optional(&store.pool).await.map_err(job_storage)?;
+        Ok(match row {
+            None => Renewed::Fenced,
+            Some((_, true)) => Renewed::Settled,
+            Some((cancel, false)) => Renewed::Held { cancel },
+        })
     }
 
     /// Give the batch up at once (a failed run), so another runner need not
@@ -205,11 +226,20 @@ impl BatchFence {
         store: &Store,
         f: &Finished<'_>,
     ) -> FenceResult<JobRow> {
-        let row: Option<JobRow> = sqlx::query_as(&format!("UPDATE async_jobs SET state=$4,upstream_status=$4,error_code=coalesce(error_code,$5),output_file_id=coalesce(output_file_id,$6),error_file_id=coalesce(error_file_id,$7),request_total=coalesce($8,request_total),request_completed=coalesce($9,request_completed),request_failed=coalesce($10,request_failed),completed_at=coalesce(completed_at,clock_timestamp()) WHERE id=$1 AND runner_id=$2 AND runner_epoch=$3 AND state IN('queued','in_progress') RETURNING {JOB_COLUMNS}"))
-            .bind(self.job).bind(self.runner).bind(self.epoch)
-            .bind(f.state.as_str()).bind(f.error_code).bind(f.output_file).bind(f.error_file)
-            .bind(f.counts.map(|c| c.total as i32)).bind(f.counts.map(|c| c.completed as i32)).bind(f.counts.map(|c| c.failed as i32))
-            .fetch_optional(&store.pool).await.map_err(job_storage)?;
+        let row: Option<JobRow> = sqlx::query_as(&finish_batch_sql(true))
+            .bind(self.job)
+            .bind(self.runner)
+            .bind(self.epoch)
+            .bind(f.state.as_str())
+            .bind(f.error_code)
+            .bind(f.output_file)
+            .bind(f.error_file)
+            .bind(f.counts.map(|c| c.total as i32))
+            .bind(f.counts.map(|c| c.completed as i32))
+            .bind(f.counts.map(|c| c.failed as i32))
+            .fetch_optional(&store.pool)
+            .await
+            .map_err(job_storage)?;
         match row {
             Some(row) => Ok(row),
             // Already finished by this claim, or the claim ended.
@@ -235,7 +265,7 @@ impl BatchFence {
         line_no: i32,
         execution: Uuid,
     ) -> FenceResult<bool> {
-        let mut tx = self.begin(store, Hold::Share).await?;
+        let mut tx = self.begin(store, Hold::Rows).await?;
         let inserted = sqlx::query("INSERT INTO batch_lines(job_id,workspace_id,line_no,state,execution_id) VALUES($1,$2,$3,'running',$4) ON CONFLICT DO NOTHING")
             .bind(self.job).bind(workspace).bind(line_no).bind(execution)
             .execute(&mut *tx).await.map_err(job_storage)?.rows_affected() == 1;
@@ -251,7 +281,7 @@ impl BatchFence {
         attempts: i16,
         execution: Uuid,
     ) -> FenceResult<bool> {
-        let mut tx = self.begin(store, Hold::Share).await?;
+        let mut tx = self.begin(store, Hold::Rows).await?;
         let claimed = sqlx::query("UPDATE batch_lines SET state='running',attempts=attempts+1,execution_id=$4,status_code=NULL,error_code=NULL,finished_at=NULL WHERE job_id=$1 AND line_no=$2 AND state='failed' AND attempts=$3 AND segment IS NULL")
             .bind(self.job).bind(line_no).bind(attempts).bind(execution)
             .execute(&mut *tx).await.map_err(job_storage)?.rows_affected() == 1;
@@ -273,7 +303,7 @@ impl BatchFence {
         count: bool,
     ) -> FenceResult<bool> {
         let mut tx = self
-            .begin(store, if count { Hold::Update } else { Hold::Share })
+            .begin(store, if count { Hold::Update } else { Hold::Rows })
             .await?;
         let changed = sqlx::query("UPDATE batch_lines SET state=$3,status_code=$4,error_code=$5,finished_at=clock_timestamp() WHERE job_id=$1 AND line_no=$2 AND state='running'")
             .bind(self.job).bind(line_no).bind(if succeeded { "succeeded" } else { "failed" })
@@ -316,7 +346,7 @@ impl BatchFence {
         // take ours between the read and the insert: take the next one.
         let mut collisions = 0;
         loop {
-            let mut tx = self.begin(store, Hold::Share).await?;
+            let mut tx = self.begin(store, Hold::Rows).await?;
             let seq: Result<i32, sqlx::Error> = sqlx::query_scalar("INSERT INTO batch_segments(job_id,workspace_id,seq,file_id,lines) SELECT $1,$2,coalesce(max(seq)+1,0),$3,$4 FROM batch_segments WHERE job_id=$1 RETURNING seq")
                 .bind(self.job).bind(workspace).bind(file).bind(lines.len() as i32)
                 .fetch_one(&mut *tx).await;

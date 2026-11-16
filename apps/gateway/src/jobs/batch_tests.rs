@@ -2213,9 +2213,11 @@ async fn restart_resumes_without_re_executing_lines(pool: PgPool) {
     assert_eq!(w.openai.executed(), ["two"]);
     let job = w.reload(&job).await;
     assert_eq!(job.state, "completed");
+    // Line 1 succeeded but its result was never stored: it is listed in the
+    // error file as unavailable, so it counts failed with the interrupted line.
     assert_eq!(
         (job.request_completed, job.request_failed),
-        (Some(2), Some(1))
+        (Some(1), Some(2))
     );
     let out = w.read(f.principal.workspace_id, job.output_file_id).await;
     assert_eq!(out.len(), 1);

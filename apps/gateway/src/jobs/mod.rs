@@ -216,6 +216,36 @@ pub struct Jobs {
     /// wall-clock time (#243). Never read outside tests.
     #[cfg(test)]
     pub(crate) rate_limit_pauses: Arc<std::sync::atomic::AtomicUsize>,
+    /// Test-only pause between a finishing run's result files and recording
+    /// the batch as finished. Never used outside tests.
+    #[cfg(test)]
+    pub(crate) finalize_hold: Arc<FinalizeHold>,
+}
+/// The next finishing run waits here once armed (tests).
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct FinalizeHold {
+    armed: std::sync::atomic::AtomicBool,
+    reached: tokio::sync::Notify,
+    go: tokio::sync::Notify,
+}
+#[cfg(test)]
+impl FinalizeHold {
+    pub(crate) fn arm(&self) {
+        self.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    pub(crate) async fn reached(&self) {
+        self.reached.notified().await;
+    }
+    pub(crate) fn release(&self) {
+        self.go.notify_one();
+    }
+    pub(crate) async fn pause(&self) {
+        if self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            self.reached.notify_one();
+            self.go.notified().await;
+        }
+    }
 }
 impl Jobs {
     pub fn new(store: Store, engine: &Engine) -> Self {
@@ -235,6 +265,8 @@ impl Jobs {
             plan_lookup_counts: Arc::new(plan::PlanLookupCounts::default()),
             #[cfg(test)]
             rate_limit_pauses: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            #[cfg(test)]
+            finalize_hold: Arc::default(),
         }
     }
     /// Attach the approved local endpoints (batch scheduling load signals).

@@ -64,20 +64,20 @@ use crate::{
 mod dispatch;
 mod lanes;
 mod line;
+mod renewal;
 mod repository;
 mod segments;
 use dispatch::Dispatch;
 use lanes::{Head, Lane, Pin, Planned, note, permits, spawn_line, wait_reason_without_permits};
 use line::{LineRun, Record, RunState, Stop};
 use repository::LineRepository;
+#[cfg(test)]
+pub(crate) use segments::Probe as SegmentProbe;
 use segments::write_segments;
 
 /// Runner lease of a claimed batch, renewed every [`RENEW`].
 const LEASE_SECONDS: f64 = 60.0;
 const RENEW: Duration = Duration::from_secs(15);
-/// A run whose renewals keep failing stops working on its batch this long
-/// after the last success: the database lease may have ended by then.
-const RENEW_TRUST: Duration = Duration::from_secs(45);
 /// How often the runner looks for runnable batches.
 const TICK: Duration = Duration::from_secs(2);
 /// Batches one process runs at once.
@@ -236,47 +236,25 @@ impl Runner {
             pauses: self.jobs.rate_limit_pauses.clone(),
             ..RunState::new(fence)
         });
-        // Lease renewal (and cancel observation) while the batch runs. A
-        // renewal the fence refuses ends the run's work; so does a failing
-        // database for longer than the lease can be trusted.
+        // Lease renewal (and cancel observation) while the batch runs.
         let renewal = {
             let store = self.jobs.store.clone();
-            let state = state.clone();
-            tokio::spawn(async move {
-                let mut renewed = Instant::now();
-                loop {
-                    let attempt = Instant::now();
-                    match fence.renew(&store, LEASE_SECONDS).await {
-                        Ok(Some(cancel)) => {
-                            renewed = attempt;
-                            if cancel {
-                                state.cancel.store(true, Ordering::SeqCst);
-                            }
-                        }
-                        Ok(None) => {
-                            state.lose();
-                            return;
-                        }
-                        Err(_) => {
-                            tracing::warn!(job_id = %fence.job, "batch lease renewal failed");
-                            if renewed.elapsed() >= RENEW_TRUST {
-                                // The lease may have ended, but nothing says
-                                // it has: stop starting work, and let the
-                                // fence decide what is still written.
-                                state.lost.store(true, Ordering::SeqCst);
-                                return;
-                            }
-                        }
-                    }
-                    tokio::time::sleep(RENEW).await;
-                }
+            renewal::spawn(state.clone(), move || {
+                let store = store.clone();
+                async move { fence.renew(&store, LEASE_SECONDS).await.map_err(|_| ()) }
             })
         };
         let result = self
-            .run_claimed(&job, &files, engine, endpoint, work, state)
+            .run_claimed(&job, &files, engine, endpoint, work, state.clone())
             .await;
         renewal.abort();
-        if result.is_err() {
+        // A run that failed, or stopped because it doubted its lease, gives
+        // the batch up at once instead of making the next runner wait out the
+        // term. A refused release (the claim ended) is the normal case of a
+        // fenced run.
+        if result.is_err()
+            || (state.lost.load(Ordering::SeqCst) && !state.fenced.load(Ordering::SeqCst))
+        {
             let _ = fence.release(&self.jobs.store).await;
         }
         result
@@ -540,12 +518,32 @@ impl Runner {
             }
         };
         let output_file = out.finish().await?;
-        let error_file = err.finish().await?;
-        let (completed, failed): (i64, i64) = sqlx::query_as("SELECT count(*) FILTER(WHERE state='succeeded'),count(*) FILTER(WHERE state IN('failed','interrupted')) FROM batch_lines WHERE job_id=$1")
+        let error_file = match err.finish().await {
+            Ok(file) => file,
+            Err(e) => {
+                if let Some(file) = output_file {
+                    let _ = files.delete(file, Some(job.workspace_id)).await;
+                }
+                return Err(e.into());
+            }
+        };
+        #[cfg(test)]
+        self.jobs.finalize_hold.pause().await;
+        // A line recorded `succeeded` whose result was never stored (it sat in
+        // the segment buffer of a run that lost the batch) is listed in the
+        // error file as unavailable, so it is counted failed, not completed.
+        let counted = sqlx::query_as("SELECT count(*) FILTER(WHERE state='succeeded' AND segment IS NOT NULL),count(*) FILTER(WHERE state IN('failed','interrupted') OR (state='succeeded' AND segment IS NULL)) FROM batch_lines WHERE job_id=$1")
             .bind(job.id)
             .fetch_one(&store.pool)
             .await
-            .map_err(store::job_storage)?;
+            .map_err(store::job_storage);
+        let (completed, failed): (i64, i64) = match counted {
+            Ok(counts) => counts,
+            Err(e) => {
+                discard_unreferenced(files, store, job, [output_file, error_file]).await;
+                return Err(e.into());
+            }
+        };
         let final_state = match stop {
             None => JobState::Completed,
             Some(Stop::Cancelled) => JobState::Cancelled,
@@ -568,13 +566,16 @@ impl Runner {
                 },
             )
             .await;
-        // Result files of a run that lost the batch are not the batch's: no
-        // row references them, so they are removed.
-        let Some(job) = state.written(finished)? else {
-            for file in [output_file, error_file].into_iter().flatten() {
-                let _ = files.delete(file, Some(job.workspace_id)).await;
+        // Result files no row references are removed: a run that lost the
+        // batch wrote them for nobody, and a failed write may have left them
+        // unlinked.
+        let finished = state.written(finished);
+        let job = match finished {
+            Ok(Some(finished)) => finished,
+            Ok(None) | Err(_) => {
+                discard_unreferenced(files, store, job, [output_file, error_file]).await;
+                return finished.map(|_| ());
             }
-            return Ok(());
         };
         let _ = segments;
         self.settle_finished(&job, files, state).await?;
@@ -583,9 +584,9 @@ impl Runner {
     }
 
     /// Settle a finished batch (this run's claim is still current, checked in
-    /// the transaction that closes the envelope): release what no line used (lines keep their own
-    /// settlement or retained unknown holds), mark it settled, then delete
-    /// the segments and the private copy.
+    /// the transaction that closes the envelope): release what no line used
+    /// (lines keep their own settlement or retained unknown holds), mark it
+    /// settled, then delete the segments and the private copy.
     async fn settle_finished(
         &self,
         job: &JobRow,
@@ -605,7 +606,12 @@ impl Runner {
                 return Ok(());
             }
         }
-        state.fence.mark_settled(store).await?;
+        if state
+            .written(state.fence.mark_settled(store).await)?
+            .is_none()
+        {
+            return Ok(());
+        }
         for (_, file) in store::segments(store, job.id).await? {
             let _ = files.delete(file, Some(job.workspace_id)).await;
         }
@@ -721,6 +727,24 @@ impl Runner {
             return Ok(None);
         };
         Ok(candidates.into_iter().find(|d| d.id == *first))
+    }
+}
+
+/// Delete result files the batch row does not reference. If the row cannot
+/// be read they stay: the file sweeper removes them at retention expiry.
+async fn discard_unreferenced(
+    files: &crate::filestore::FileStorage,
+    store: &Store,
+    job: &JobRow,
+    created: [Option<Uuid>; 2],
+) {
+    let Ok(row) = store::reload(store, job.id).await else {
+        return;
+    };
+    for file in created.into_iter().flatten() {
+        if row.output_file_id != Some(file) && row.error_file_id != Some(file) {
+            let _ = files.delete(file, Some(job.workspace_id)).await;
+        }
     }
 }
 
