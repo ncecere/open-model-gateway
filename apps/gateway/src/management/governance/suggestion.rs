@@ -19,6 +19,8 @@ use std::{
 };
 
 mod mapping;
+#[cfg(test)]
+mod mapping_property_tests;
 pub(crate) use mapping::map;
 
 const BODY_CAP: usize = 4 * 1024 * 1024;
