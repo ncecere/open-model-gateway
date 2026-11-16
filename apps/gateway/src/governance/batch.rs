@@ -10,7 +10,8 @@
 //!   batch price lines, else `standard`) and settles from the provider's
 //!   aggregated usage. A **gateway-run** batch's reservation is an envelope
 //!   that pins no price: it is never settled from usage.
-//! - [`admit_line`]: each gateway-run line attempt gets its own execution and
+//! - [`admit_line`]: each gateway-run line attempt, admitted only while the
+//!   runner still holds the batch's claim ([`crate::jobs::fence`]), gets its own execution and
 //!   reservation at the standard price, like an interactive request, but its
 //!   hold is *transferred* out of the envelope (the budget totals stay
 //!   unchanged); only a hold the envelope can no longer cover is checked
@@ -21,6 +22,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
+use crate::jobs::fence::{BatchFence, Hold};
 
 /// The price list a batch reservation is valued with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -352,19 +354,22 @@ async fn admit_batch_unobserved(
     })
 }
 
-/// The gateway-run batch a line attempt belongs to.
+/// The gateway-run batch a line attempt belongs to, as the runner that holds
+/// its claim.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LineContext {
+pub(crate) struct LineContext {
     /// The batch's envelope execution (its reservation holds the ceiling).
     pub envelope: Uuid,
-    pub job: Uuid,
+    pub fence: BatchFence,
 }
 
 /// Admit one gateway-run line attempt (see the module docs). Errors: the
 /// usual admission errors; `Configuration` when the batch's envelope is no
-/// longer pending (closed or reconciled), so no line may start.
+/// longer pending (closed or reconciled), or when the runner no longer holds
+/// the batch's claim; no line may start then. A refused claim is not an
+/// admission failure and is not counted as one.
 #[allow(clippy::too_many_arguments)]
-pub async fn admit_line(
+pub(crate) async fn admit_line(
     store: &Store,
     batch: LineContext,
     record: &ExecutionStart,
@@ -375,7 +380,7 @@ pub async fn admit_line(
     output_limit: u32,
     generation_request: Option<&ChatRequest>,
 ) -> Result<crate::inference::repository::GenerationAdmission, InferenceError> {
-    let result = locks::retry_deadlocks!(
+    let admitted = locks::retry_deadlocks!(
         "admission",
         admit_line_unobserved(
             store,
@@ -390,9 +395,19 @@ pub async fn admit_line(
         )
         .await
     );
-    crate::metrics::observe_admission(&result.as_ref().map(|_| ()).map_err(|e| *e));
-    result
+    match admitted {
+        Ok(Some(admission)) => {
+            crate::metrics::observe_admission(&Ok(()));
+            Ok(admission)
+        }
+        Ok(None) => Err(InferenceError::Configuration),
+        Err(e) => {
+            crate::metrics::observe_admission(&Err(e));
+            Err(e)
+        }
+    }
 }
+/// `None`: the runner no longer holds the batch (nothing was written).
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 async fn admit_line_unobserved(
@@ -405,7 +420,7 @@ async fn admit_line_unobserved(
     planned_price: Option<Uuid>,
     output_limit: u32,
     generation_request: Option<&ChatRequest>,
-) -> Result<crate::inference::repository::GenerationAdmission, InferenceError> {
+) -> Result<Option<crate::inference::repository::GenerationAdmission>, InferenceError> {
     if !(1..=86_400).contains(&lease_seconds)
         || !matches!(
             workload.kind,
@@ -419,8 +434,18 @@ async fn admit_line_unobserved(
     let mut tx = crate::db::begin(&store.pool).await.map_err(begin_storage)?;
     admission_prefix(store, &mut tx, &record.principal).await?;
     let (lineage, _shared) = authorize(store, &mut tx, &record.principal).await?;
+    // After the scope locks and before the reservation rows: a runner that no
+    // longer holds the batch admits nothing for it.
+    if !batch
+        .fence
+        .hold(&mut tx, Hold::Rows)
+        .await
+        .map_err(storage)?
+    {
+        return Ok(None);
+    }
     let envelope: Option<(String, Option<i64>, Uuid, DateTime<Utc>)> = sqlx::query_as("SELECT r.state,r.held_microusd,r.api_key_id,r.admitted_at FROM governance_reservations r JOIN async_jobs j ON j.execution_id=r.execution_id WHERE r.execution_id=$1 AND r.workspace_id=$2 AND j.id=$3 AND j.batch_mode='gateway' FOR UPDATE OF r")
-        .bind(batch.envelope).bind(workspace).bind(batch.job).fetch_optional(&mut *tx).await.map_err(storage)?;
+        .bind(batch.envelope).bind(workspace).bind(batch.fence.job).fetch_optional(&mut *tx).await.map_err(storage)?;
     let Some((state, available, envelope_key, envelope_at)) = envelope else {
         return Err(InferenceError::Configuration);
     };
@@ -504,7 +529,7 @@ async fn admit_line_unobserved(
     )
     .await?;
     sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,started_at,root_request_id,attempt_number,workload_kind,cost_center_id,cost_center_name,cost_center_code,upstream_model,client_session_id,client_app,batch_job_id) SELECT $1,w.id,$3,$4,$5,$6,$7,'started',$8,$9,$10,$11,w.cost_center_id,c.name,c.code,$12,$13,$14,$15 FROM workspaces w LEFT JOIN cost_centers c ON c.id=w.cost_center_id WHERE w.id=$2")
-        .bind(record.id).bind(workspace).bind(record.principal.key_id).bind(record.deployment_id).bind(&record.model).bind(&record.provider).bind(record.streamed).bind(now).bind(record.root_request_id).bind(record.attempt_number).bind(workload.kind.as_str()).bind(&record.upstream_model).bind(&record.client.session_id).bind(&record.client.app).bind(batch.job).execute(&mut *tx).await.map_err(storage)?;
+        .bind(record.id).bind(workspace).bind(record.principal.key_id).bind(record.deployment_id).bind(&record.model).bind(&record.provider).bind(record.streamed).bind(now).bind(record.root_request_id).bind(record.attempt_number).bind(workload.kind.as_str()).bind(&record.upstream_model).bind(&record.client.session_id).bind(&record.client.app).bind(batch.fence.job).execute(&mut *tx).await.map_err(storage)?;
     sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,price_id,admitted_at,minute_start,month_start,lease_expires_at,state,reserved_tokens,held_microusd,unbounded_cost) VALUES($1,$2,$3,$4,$5,$6,date_trunc('minute',$6::timestamptz,'UTC'),date_trunc('month',$6::timestamptz,'UTC'),$7,'pending',$8,$9,false)")
         .bind(record.id).bind(workspace).bind(record.principal.key_id).bind(record.deployment_id).bind(p.id).bind(now).bind(lease).bind(tokens).bind(held).execute(&mut *tx).await.map_err(storage)?;
     ledger(
@@ -527,7 +552,7 @@ async fn admit_line_unobserved(
             .map_err(storage)?;
     }
     tx.commit().await.map_err(storage)?;
-    Ok(admission)
+    Ok(Some(admission))
 }
 
 /// Settle a batch reservation at zero: a gateway-run batch's envelope when
@@ -541,10 +566,41 @@ pub async fn close_batch(
     elapsed_ms: u64,
     cancelled: bool,
 ) -> Result<bool, InferenceError> {
+    Ok(close(store, envelope, elapsed_ms, cancelled, None).await? == Closed::Settled)
+}
+
+/// [`close_batch`] for a gateway-run batch's runner: only while it still holds
+/// the batch's claim, checked in the settling transaction.
+pub(crate) async fn close_gateway_batch(
+    store: &Store,
+    envelope: Uuid,
+    elapsed_ms: u64,
+    fence: &BatchFence,
+) -> Result<Closed, InferenceError> {
+    close(store, envelope, elapsed_ms, false, Some(fence)).await
+}
+
+/// What closing a batch envelope did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Closed {
+    Settled,
+    /// Not pending any more: its hold is left to reconciliation.
+    NotPending,
+    /// The runner no longer holds the batch; nothing was written.
+    Fenced,
+}
+
+async fn close(
+    store: &Store,
+    envelope: Uuid,
+    elapsed_ms: u64,
+    cancelled: bool,
+    fence: Option<&BatchFence>,
+) -> Result<Closed, InferenceError> {
     let _queued = gate(&store.lock_gates.settlement).await;
     locks::retry_deadlocks!(
         "settlement",
-        close_batch_once(store, envelope, elapsed_ms, cancelled).await
+        close_batch_once(store, envelope, elapsed_ms, cancelled, fence).await
     )
 }
 async fn close_batch_once(
@@ -552,9 +608,17 @@ async fn close_batch_once(
     envelope: Uuid,
     elapsed_ms: u64,
     cancelled: bool,
-) -> Result<bool, InferenceError> {
+    fence: Option<&BatchFence>,
+) -> Result<Closed, InferenceError> {
     let mut tx = crate::db::begin(&store.pool).await.map_err(begin_storage)?;
     settlement_prefix(store, &mut tx).await?;
+    // Before the reservation rows, like admission: a runner that no longer
+    // holds the batch must not settle the envelope its successor still uses.
+    if let Some(fence) = fence
+        && !fence.hold(&mut tx, Hold::Rows).await.map_err(storage)?
+    {
+        return Ok(Closed::Fenced);
+    }
     // The envelope's admission time (scoped mode reads it with its lock):
     // prunes the ledger's reservation lookup to its month.
     let mut admitted = None;
@@ -588,7 +652,7 @@ async fn close_batch_once(
         .rows_affected();
     if changed == 0 {
         tx.commit().await.map_err(storage)?;
-        return Ok(false);
+        return Ok(Closed::NotPending);
     }
     let changed = sqlx::query("UPDATE inference_executions SET state=$3,input_tokens=0,output_tokens=0,elapsed_ms=$2,completed_at=clock_timestamp(),finish_reason=CASE WHEN $3='cancelled' THEN 'cancelled' ELSE 'stop' END WHERE id=$1 AND state='started' AND workload_kind='batches'")
         .bind(envelope)
@@ -617,7 +681,7 @@ async fn close_batch_once(
     )
     .await?;
     tx.commit().await.map_err(storage)?;
-    Ok(true)
+    Ok(Closed::Settled)
 }
 
 /// Cost so far of a batch, in micro-USD: settled actual plus active holds of

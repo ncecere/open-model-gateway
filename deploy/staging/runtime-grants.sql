@@ -375,8 +375,11 @@ GRANT SELECT,UPDATE(recorded_through) ON public.storage_usage_progress TO gatewa
 -- batch records its upstream id once and a gateway-run batch's runner holds a
 -- renewable lease; result files are written once (trigger). Line rows are
 -- claimed by INSERT and move running -> finished (or a counted explicit
--- retry); segments are insert-only. No DELETE or TRUNCATE.
-GRANT UPDATE(upstream_id,output_file_id,error_file_id,runner_id,runner_lease_until,
+-- retry); segments are insert-only. No DELETE or TRUNCATE. The claim bumps
+-- runner_epoch (0081; a trigger keeps it from moving back) and every runner
+-- write checks it under FOR KEY SHARE or FOR NO KEY UPDATE of the job row, which
+-- the UPDATE grants below allow.
+GRANT UPDATE(upstream_id,output_file_id,error_file_id,runner_id,runner_epoch,runner_lease_until,
  submit_started_at,in_progress_at,finalizing_at,last_progress_at) ON public.async_jobs TO gateway_runtime;
 GRANT SELECT,INSERT ON public.batch_lines,public.batch_segments TO gateway_runtime;
 GRANT UPDATE(state,attempts,execution_id,status_code,error_code,segment,finished_at)

@@ -70,8 +70,9 @@ Three different "leases" exist:
   starts with `Fence::check` -> `omg_lease_fence` (epoch = fencing token); the `FOR SHARE` lives in
   the 0029 SQL (`PERFORM 1 FROM work_leases ... FOR SHARE`) and is held until commit. The money
   path itself uses none: reconciliation is a `SKIP LOCKED` queue on every replica.
-* A third, unfenced one: the gateway-run batch runner lease (`async_jobs.runner_id` /
-  `runner_lease_until`, `store::claim_gateway`, `store::renew_lease`). See finding 1.
+* A third: the gateway-run batch runner claim (`async_jobs.runner_id` / `runner_epoch` /
+  `runner_lease_until`, `store::claim_gateway`). It was unfenced when this model was written and
+  is fenced since 0081 (#638): see finding 1.
 
 ## 2. What is modelled, and what is not
 
@@ -87,7 +88,8 @@ numbers, `HOLD = 2` and `ACTUAL = 1`; "truth" is what the provider really billed
 
 `LeaseFence.tla`: two replicas, one lease row with epoch, local belief, check-then-write,
 `omg_lease_fence` with and without `FOR SHARE`, expiry, takeover, crash. Four designs: `InTx`
-(0029 as built), `InTxNoShare`, `Local`, `RunnerFlag` (the batch runner as coded).
+(0029 as built), `InTxNoShare`, `Local`, `RunnerFlag` (the batch runner as it was coded before
+0081; the runner now corresponds to `InTx`, see finding 1).
 
 Deliberately left out: budgets, limits, rate/in-flight counters and the trigger-maintained totals
 (the model computes spend from the rows; `budget verify` is the check for the triggers); pricing
@@ -108,7 +110,7 @@ wide runs dominate).
 | 2 | "Never delete unknown reservations"; a hold is never released before settlement or reconciliation (request path) | `UnknownRetainsHold`, `HoldNeverReleased` (action) | `reconcile_batch` only flips state; the settlement UPDATE keeps or raises `held`; docs/governance.md "Cancellation, reconciliation and retention" |
 | 3 | Settlement exactly once; no un-settling | `SettleOnce`, `LedgerConsistent`, `SettledTerminal` (action) | row lock + the state reads/predicates in section 1; ledger UNIQUE; `finished` flag in `ExecutionGuard` |
 | 4 | "Never treat unknown usage as zero" | `SettledMatchesTruth` | `finish_unobserved` (`let actual = if Succeeded && input/output present ... else if free && !violated ...`), `free_rejection` |
-| 5 | A fenced runner never writes | `NoStaleCommit`, `NoReorder` (`LeaseFence`) | `omg_lease_fence` + `FOR SHARE` (0029 SQL, `Fence::check`); **not** present for the batch runner |
+| 5 | A fenced runner never writes | `NoStaleCommit`, `NoReorder` (`LeaseFence`) | `omg_lease_fence` + `FOR SHARE` (0029 SQL, `Fence::check`); the batch runner had none when this was written; since 0081 it has the claim epoch checked under `FOR KEY SHARE` / `FOR NO KEY UPDATE` of the job row (#638) |
 | + | "Failover ... never after a stream is returned" | `NoFailoverAfterStream` | checks the model's own guard; in the code failover exists only in the `Err` arm of `Engine::attempt` |
 | + | Rows coherent (pending <=> execution started) | `ExecConsistent` | `reconcile_batch` aborts when it is not |
 | + | A pending reservation always leaves `pending` (settled or unknown), under fairness | `Resolves` (liveness) | reconciler on every replica, restart |
@@ -206,8 +208,14 @@ The model checker found no violation of invariants 1 to 4 **in the model of the 
 the comparison was by reading. None of the code findings below is a way to lose or double-count
 money.
 
-1. **The batch runner's lease is not a fencing token (#638): confirmed by reading; low-to-moderate,
-   no money impact.** Invariant 5 holds for `work_leases` (the model confirms the fence needs both
+1. **The batch runner's lease was not a fencing token (#638): confirmed by reading; low-to-moderate,
+   no money impact. Fixed in 0081; the model was not re-run.** Since 0081 the claim bumps
+   `async_jobs.runner_epoch` and every runner write checks `(runner_id, runner_epoch)` inside its own
+   transaction while holding the job row `FOR KEY SHARE` (or `FOR NO KEY UPDATE`), with the takeover
+   claim `FOR UPDATE SKIP LOCKED`: that is the `InTx` design (check in the write transaction plus the row lock),
+   not `RunnerFlag` (a local flag set by the renewal task). `RunnerFlag` keeps modelling the code as
+   it was before the fix, which is why the model still reproduces the finding. The text below is the
+   finding as made. Invariant 5 holds for `work_leases` (the model confirms the fence needs both
    the in-transaction check and `FOR SHARE`, and not the local clock) but not for the gateway-run
    batch runner. TLC, mode `RunnerFlag`, five steps: runner S claims the batch (`claim_gateway`),
    its lease lapses (renewal every 15 s, lease 60 s), runner N claims it, S writes. In the code: (a)

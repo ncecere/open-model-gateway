@@ -76,7 +76,7 @@ DO $$ DECLARE r record; t text; BEGIN
   IF has_column_privilege('gateway_runtime','public.async_job_files',t,'UPDATE') THEN RAISE EXCEPTION 'mutable async job file: %',t; END IF;
  END LOOP;
  IF has_column_privilege('gateway_runtime','public.governance_reservations','request_count','UPDATE') OR has_column_privilege('gateway_runtime','public.governance_reservations','admitted_at','UPDATE') THEN RAISE EXCEPTION 'mutable reservation admission snapshot'; END IF;
- IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'async_job%' AND tgenabled='O' AND NOT tgisinternal)<>6 THEN RAISE EXCEPTION 'async job guards missing or disabled'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'async_job%' AND tgenabled='O' AND NOT tgisinternal)<>7 THEN RAISE EXCEPTION 'async job guards missing or disabled'; END IF;
  IF has_table_privilege('gateway_runtime','public.installation_settings','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.installation_settings','singleton','UPDATE') THEN RAISE EXCEPTION 'installation settings row replaceable'; END IF;
  -- Installation logo (0023): a reviewed column set, guarded by a trigger.
  IF NOT has_column_privilege('gateway_runtime','public.installation_settings','branding_logo_file_id','UPDATE') THEN RAISE EXCEPTION 'installation logo not maintainable by runtime'; END IF;
@@ -973,7 +973,10 @@ BEGIN
   INSERT INTO inference_executions(started_at,id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,workload_kind) VALUES(now(),env,ws,k,d,'mixed','mixed',false,'started',env,'batches');
   INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,reserved_tokens,held_microusd,request_count,price_tier) VALUES(env,ws,k,d,now(),date_trunc('minute',now()),date_trunc('month',now()),now()+interval '26 hours','pending',220,10,2,'standard');
   INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,poll_deadline_at,batch_endpoint,batch_mode,user_id,input_file_id,work_file_id,request_total,request_completed,request_failed,upstream_status) VALUES(bj,'batch',ws,k,d,env,'mixed','mixed',now()+interval '26 hours','/v1/responses','gateway',u,fin,fw,2,0,0,'validating');
-  UPDATE async_jobs SET runner_id=gen_random_uuid(),runner_lease_until=clock_timestamp()+interval '60 seconds' WHERE id IN(SELECT id FROM async_jobs WHERE batch_mode='gateway' AND settled_at IS NULL AND (runner_lease_until IS NULL OR runner_lease_until<clock_timestamp()) LIMIT 1 FOR UPDATE SKIP LOCKED);
+  UPDATE async_jobs SET runner_id=gen_random_uuid(),runner_epoch=runner_epoch+1,runner_lease_until=clock_timestamp()+interval '60 seconds' WHERE id IN(SELECT id FROM async_jobs WHERE batch_mode='gateway' AND settled_at IS NULL AND (runner_lease_until IS NULL OR runner_lease_until<clock_timestamp()) AND id<>ALL(ARRAY[]::uuid[]) LIMIT 1 FOR UPDATE SKIP LOCKED);
+  PERFORM set_config('idle_in_transaction_session_timeout','30s',true) FROM async_jobs WHERE id=bj AND runner_id IS NOT NULL AND runner_epoch=1 FOR KEY SHARE;
+  PERFORM set_config('idle_in_transaction_session_timeout','30s',true) FROM async_jobs WHERE id=bj AND runner_id IS NOT NULL AND runner_epoch=1 FOR NO KEY UPDATE;
+  BEGIN UPDATE async_jobs SET runner_epoch=0 WHERE id=bj; RAISE EXCEPTION 'batch runner epoch moved back'; EXCEPTION WHEN check_violation THEN NULL; END;
   UPDATE async_jobs SET state='in_progress',upstream_status='in_progress',in_progress_at=clock_timestamp(),last_progress_at=clock_timestamp() WHERE id=bj AND state='queued';
   INSERT INTO batch_lines(job_id,workspace_id,line_no,state,execution_id) VALUES(bj,ws,0,'running',line) ON CONFLICT DO NOTHING;
   PERFORM r.state,r.held_microusd FROM governance_reservations r JOIN async_jobs j ON j.execution_id=r.execution_id WHERE r.execution_id=env AND j.id=bj AND j.batch_mode='gateway' FOR UPDATE OF r;
@@ -984,7 +987,7 @@ BEGIN
   UPDATE batch_lines SET state='running',attempts=attempts+1,execution_id=gen_random_uuid(),status_code=NULL,error_code=NULL,finished_at=NULL WHERE job_id=bj AND line_no=0 AND state='failed' AND attempts=1 AND segment IS NULL;
   UPDATE batch_lines SET state='succeeded',status_code=200,finished_at=clock_timestamp() WHERE job_id=bj AND line_no=0 AND state='running';
   UPDATE async_jobs SET request_completed=coalesce(request_completed,0)+1,request_failed=coalesce(request_failed,0)+0,last_progress_at=clock_timestamp() WHERE id=bj;
-  INSERT INTO batch_segments(job_id,workspace_id,seq,file_id,lines) VALUES(bj,ws,0,fs,1);
+  INSERT INTO batch_segments(job_id,workspace_id,seq,file_id,lines) SELECT bj,ws,coalesce(max(seq)+1,0),fs,1 FROM batch_segments WHERE job_id=bj;
   UPDATE batch_lines SET segment=0 WHERE job_id=bj AND line_no=ANY(ARRAY[0]) AND segment IS NULL AND state<>'running';
   UPDATE batch_lines SET state='interrupted',error_code='interrupted',finished_at=clock_timestamp() WHERE job_id=bj AND state='running';
   PERFORM seq,file_id FROM batch_segments WHERE job_id=bj ORDER BY seq;
