@@ -1440,6 +1440,66 @@ mod db {
             .unwrap();
         assert_eq!(r.status(), StatusCode::BAD_GATEWAY);
     }
+    /// #634: a malformed catalog entry is a well-formed draft, never a panic
+    /// (a dropped connection, which the client sees as a failed request).
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn price_suggestion_survives_a_malformed_top_provider(pool: PgPool) {
+        use super::super::suggestion::{OpenRouterCatalog, tests::mock};
+        use std::sync::Arc;
+        let f = fixture(pool).await;
+        let admin = user(f.owner, true);
+        let catalog = json!({"data":[{"id":"v/m","pricing":{"prompt":"1","completion":"2"},"top_provider":"x"}]});
+        let endpoints = json!({"data":{"id":"v/m","endpoints":[{"provider_name":"P","status":0,"pricing":{"prompt":"1","completion":"2"},"max_completion_tokens":100}]}});
+        let app = axum::Router::new()
+            .route(
+                "/models",
+                axum::routing::get(move || {
+                    let body = catalog.clone();
+                    async move { axum::Json(body) }
+                }),
+            )
+            .route(
+                "/models/v/m/endpoints",
+                axum::routing::get(move || {
+                    let body = endpoints.clone();
+                    async move { axum::Json(body) }
+                }),
+            );
+        let (url, task) = mock(app).await;
+        let catalog = Arc::new(OpenRouterCatalog::for_test(
+            url,
+            std::time::Duration::from_secs(2),
+        ));
+        let (connection, model, deployment) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref,endpoint,enabled) VALUES($1,'OpenRouter','openrouter','env:OPENROUTER_API_KEY','https://openrouter.ai/api/v1',true)").bind(connection).execute(&f.store.pool).await.unwrap();
+        sqlx::query("INSERT INTO models(id,public_name,supported_protocols) VALUES($1,'router/m',ARRAY['chat_completions'])").bind(model).execute(&f.store.pool).await.unwrap();
+        sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model) VALUES($1,$2,$3,'v/m')").bind(deployment).bind(model).bind(connection).execute(&f.store.pool).await.unwrap();
+        let r = platform_routes()
+            .layer(Extension(crate::identity::ManagementPrincipal::Browser(
+                admin.clone(),
+            )))
+            .layer(Extension(admin))
+            .layer(Extension(catalog))
+            .with_state(f.store.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/platform/deployments/{deployment}/price-suggestion"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        let v: Value =
+            serde_json::from_slice(&to_bytes(r.into_body(), 1 << 20).await.unwrap()).unwrap();
+        assert_eq!(v["draft"]["pricing_version"], 3);
+        assert_eq!(v["draft"]["output_token_limit"], 100);
+        assert_eq!(v["endpoint"]["provider"], "P");
+        assert_eq!(v["endpoint"]["selection"], "cheapest");
+        task.abort();
+    }
     #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn budget_headroom_hidden_scopes_never_read_totals_and_failures_are_not_zero(
         pool: PgPool,
