@@ -3,35 +3,42 @@
 //! logging call can carry is pinned to a reviewed snapshot, so a new logged
 //! field shows up in review and cannot arrive by accident.
 //!
-//! Scanned (production build only): `inference/`, `providers/`, `protocols/`,
-//! `jobs/`, `http.rs`, `auth.rs` and `auth/` ([`SCOPE`]). For every
-//! `tracing` event or span macro (`trace!`..`error!`, `event!`, `span!`,
-//! `*_span!`, as `tracing::x!` or bare, also inside the body of any other
-//! macro), `#[instrument]` attribute and `print!`-family macro the test
-//! records the macro, its function, each *field* (`name = value` with its
-//! `%`/`?` sigil, or a shorthand `name`), and each *format argument*
-//! (inline `{name}` captures and positional or named arguments), as
-//! whitespace-free token text. The sorted list must equal
-//! `log_fields.snapshot` line for line. Adding, removing or changing a logged
-//! value is a diff of that file.
+//! Every production file is scanned. For every `tracing` event or span macro
+//! (`trace!`..`error!`, `event!`, `span!`, `*_span!`, as `tracing::x!`,
+//! `log::x!` or bare, also inside the body of any other macro), `#[instrument]`
+//! attribute (also inside `cfg_attr`), `print!`-family macro, and call of a
+//! `macro_rules!` whose body forwards to one of those (a wrapper: its call
+//! sites are log calls), the test records the macro, its function, each
+//! *field* (`name = value` with its `%`/`?` sigil, or a shorthand `name`), and
+//! each *format argument* (inline `{name}` captures and positional or named
+//! arguments), as whitespace-free token text.
 //!
-//! Two rules need no snapshot entry to fail:
-//!
-//! * an identifier or field name made of a word from [`DENIED_WORDS`]
-//!   (`body`, `prompt`, `content`, `messages`, `token`, `secret`,
-//!   `credential`, `password`, `authorization`, `bearer`, `cookie`, ...) or
-//!   `api` + `key` anywhere in a logged value is refused, unless the exact
-//!   (entry, word) is in [`EXEMPT`];
-//! * `#[instrument]` without `skip_all` (it records every argument with
-//!   `Debug`) and `ret` (it records the return value) are refused.
+//! * In the request path ([`SCOPE`]: `inference/`, `providers/`, `protocols/`,
+//!   `jobs/`, `http.rs`, `http/`, `auth.rs`, `auth/`) the sorted list must
+//!   equal `log_fields.snapshot` line for line. Adding, removing or changing a
+//!   logged value is a diff of that file.
+//! * In every file, with no snapshot entry needed to fail: an identifier or
+//!   field name made of a word from [`DENIED_WORDS`] (`body`, `payload`,
+//!   `prompt`, `response`, `request`, `headers`, `content`, `messages`,
+//!   `token`, `jwt`, `session`, `secret`, `creds`, `credential`, `password`,
+//!   `authorization`, `bearer`, `cookie`, ...) or `api` + `key`, in a logged
+//!   name or value (string literals in values do not count), is refused
+//!   unless the exact (entry, word) is in [`EXEMPT`] with its reason; a
+//!   stale exemption fails. And `#[instrument]` without `skip_all` (it
+//!   records every argument with `Debug`) and `ret` (it records the return
+//!   value) are refused.
 //!
 //! Cannot catch: a value formatted into an allowed field (`error = ?e` is a
 //! `Debug` of whatever `e` holds, and `%path` of a path that embeds a secret);
 //! a `Debug`/`Display` impl that prints a secret field (see the redaction
 //! tests of the types themselves); a logging macro imported under another
-//! name (`use tracing::warn as w;`); logging through `ops_log` events, the
-//! `log` crate, writers or the metrics labels (each has its own tests);
-//! files outside [`SCOPE`]; `Span::record` calls.
+//! name (`use tracing::warn as w;`); `panic!`, `assert!`, `unwrap`/`expect`
+//! messages, `anyhow` context and error `Display` strings that reach a log
+//! through an error value; direct writes to stderr or stdout
+//! (`io::stderr().write_all`, `writeln!`); logging through `ops_log` events,
+//! writers or the metrics labels (each has its own tests); `Span::record`
+//! calls; a wrapper macro defined as a `macro_rules!` with a procedural
+//! macro in between.
 use std::collections::BTreeSet;
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
@@ -46,6 +53,7 @@ const SCOPE: &[&str] = &[
     "protocols/",
     "jobs/",
     "http.rs",
+    "http/",
     "auth.rs",
     "auth/",
 ];
@@ -77,11 +85,53 @@ const DENIED_WORDS: &[&str] = &[
     "plaintext",
     "token",
     "apikey",
+    "payload",
+    "payloads",
+    "response",
+    "responses",
+    "request",
+    "requests",
+    "headers",
+    "jwt",
+    "creds",
+    "session",
+    "sessions",
 ];
 
-/// (snapshot entry prefix, word): reviewed uses of a denied word. Empty: no
-/// logged value names one today.
-const EXEMPT: &[(&str, &str)] = &[];
+/// (exact entry line, word): reviewed uses of a denied word, with the
+/// reason. A stale entry (no such line, or the word no longer in it) fails.
+///
+/// * `request_id` and `execution_id=%request_id` are the UUID the gateway
+///   generated for the request (`http.rs`: "do not reflect arbitrary
+///   client-supplied values into logs"), never request content;
+/// * `request.method()` is the HTTP method; `response.status()` the status
+///   code: both are fixed, content-free values;
+/// * `commands.rs` `bootstrap_dev` prints the development keys to stdout
+///   once, on purpose ("Development keys: save these now. They cannot be
+///   retrieved again."). It is the operator's terminal output of a local
+///   command, not a log line; the keys are fresh, local-only credentials.
+const EXEMPT: &[(&str, &str)] = &[
+    (
+        "http.rs :: request_context :: info :: header_latency_ms=started.elapsed().as_millis() ; status=response.status().as_u16()",
+        "response",
+    ),
+    (
+        "http.rs :: request_context :: info_span :: method=%request.method() ; request_id=request_id",
+        "request",
+    ),
+    (
+        "jobs/batch.rs :: impl Jobs::create_batch :: error :: execution_id=%request_id",
+        "request",
+    ),
+    (
+        "jobs/video.rs :: impl Jobs::create_video :: error :: execution_id=%request_id",
+        "request",
+    ),
+    (
+        "commands.rs :: bootstrap_dev :: println :: arg serde_json::to_string_pretty(&serde_json::json!({\"notice\":\"Developmentkeys:savethesenow.Theycannotberetrievedagain.\",\"installation_id\":keys.installation_id,\"personal_workspace_id\":keys.personal_workspace_id,\"team_workspace_id\":keys.team_workspace_id,\"personal_api_key\":keys.personal_key.token,\"team_api_key\":keys.team_key.token,}))?",
+        "token",
+    ),
+];
 
 const EVENTS: &[&str] = &["trace", "debug", "info", "warn", "error", "event"];
 const SPANS: &[&str] = &[
@@ -116,6 +166,43 @@ fn words(ident: &str) -> Vec<String> {
         out.push(word);
     }
     out
+}
+
+/// The text with the contents of double-quoted strings removed.
+fn without_literals(text: &str) -> String {
+    let mut out = String::new();
+    let mut inside = false;
+    let mut escaped = false;
+    for c in text.chars() {
+        if inside {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                inside = false;
+            }
+        } else if c == '"' {
+            inside = true;
+            out.push(' ');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Denied words in an entry item: a field name, a value, or a format
+/// argument. Fixed string text in a value or argument does not count.
+fn denied_item(item: &str) -> BTreeSet<String> {
+    match item.split_once('=') {
+        Some((name, value)) if !item.starts_with("arg ") => {
+            let mut out = denied(name);
+            out.extend(denied(&without_literals(value)));
+            out
+        }
+        _ => denied(&without_literals(item)),
+    }
 }
 
 /// Denied words in a stretch of token text (a name or an expression).
@@ -306,14 +393,15 @@ fn read_parts(span_like: bool, parts: Vec<Vec<TokenTree>>) -> Vec<String> {
     items
 }
 
-struct Finder {
+struct Finder<'a> {
     file: String,
     scope: Scope,
+    wrappers: &'a BTreeSet<String>,
     entries: Vec<Entry>,
     problems: Vec<String>,
 }
 
-impl Finder {
+impl Finder<'_> {
     fn push(&mut self, kind: String, items: Vec<String>) {
         self.entries.push(Entry {
             file: self.file.clone(),
@@ -344,13 +432,22 @@ impl Finder {
         if EVENTS.contains(&name) || SPANS.contains(&name) || PRINTS.contains(&name) {
             let items = read_call(name, tokens.clone());
             self.push(name.to_owned(), items);
+        } else if self.wrappers.contains(name) {
+            // The call sites of a macro that forwards to a logging macro are
+            // log calls: every argument is a logged value.
+            let mut items: Vec<String> = segments(tokens.clone())
+                .iter()
+                .map(|part| format!("arg {}", compact(part.iter().cloned())))
+                .collect();
+            items.sort();
+            self.push(format!("wrapper {name}"), items);
         }
         // A logging call can sit inside the arguments of another macro.
         self.tokens(tokens);
     }
 }
 
-impl<'ast> Visit<'ast> for Finder {
+impl<'ast> Visit<'ast> for Finder<'_> {
     track_scope!();
 
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
@@ -367,14 +464,45 @@ impl<'ast> Visit<'ast> for Finder {
         let Some(last) = attr.path().segments.last() else {
             return;
         };
-        if last.ident != "instrument" {
+        let syn::Meta::List(list) = &attr.meta else {
+            if last.ident == "instrument" {
+                self.instrument(TokenStream::new());
+            }
             return;
-        }
-        let mut items = Vec::new();
-        let tokens = match &attr.meta {
-            syn::Meta::List(list) => list.tokens.clone(),
-            _ => TokenStream::new(),
         };
+        if last.ident == "instrument" {
+            self.instrument(list.tokens.clone());
+        } else if last.ident == "cfg_attr" {
+            // `cfg_attr(<predicate>, instrument(..), ..)`: read like `instrument`.
+            for part in segments(list.tokens.clone()).iter().skip(1) {
+                if let Some(args) = instrument_part(part) {
+                    self.instrument(args);
+                }
+            }
+        }
+    }
+}
+
+/// `instrument`, `tracing::instrument` or either with `(..)`: its arguments.
+fn instrument_part(part: &[TokenTree]) -> Option<TokenStream> {
+    let mut chain = Vec::new();
+    let mut args = TokenStream::new();
+    for token in part {
+        match token {
+            TokenTree::Ident(i) => chain.push(i.unraw().to_string()),
+            TokenTree::Punct(p) if p.as_char() == ':' => {}
+            TokenTree::Group(g) if g.delimiter() == Delimiter::Parenthesis => {
+                args = g.stream();
+            }
+            _ => return None,
+        }
+    }
+    (chain.last().is_some_and(|l| l == "instrument")).then_some(args)
+}
+
+impl Finder<'_> {
+    fn instrument(&mut self, tokens: TokenStream) {
+        let mut items = Vec::new();
         let parts = segments(tokens);
         let skip_all = parts
             .iter()
@@ -420,14 +548,70 @@ fn in_scope(path: &str) -> bool {
         .any(|s| path == *s || (s.ends_with('/') && path.starts_with(s)))
 }
 
-/// Every logging call in the scanned files, and the instrument problems.
+/// Names of the `macro_rules!` anywhere in the tree whose body forwards to a
+/// logging macro, directly or through another such macro.
+fn wrapper_macros(sources: &[Source]) -> BTreeSet<String> {
+    fn bodies(items: &[syn::Item], out: &mut Vec<(String, Vec<String>)>) {
+        for item in items {
+            match item {
+                syn::Item::Macro(m) => {
+                    if let Some(ident) = &m.ident {
+                        let mut called = Vec::new();
+                        macro_calls(m.mac.tokens.clone(), &mut called);
+                        out.push((ident.unraw().to_string(), called));
+                    }
+                }
+                syn::Item::Mod(m) => {
+                    if let Some((_, inner)) = &m.content {
+                        bodies(inner, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    fn macro_calls(tokens: TokenStream, out: &mut Vec<String>) {
+        let all: Vec<TokenTree> = tokens.into_iter().collect();
+        for (at, token) in all.iter().enumerate() {
+            match token {
+                TokenTree::Ident(i) if is_punct(all.get(at + 1), '!') => {
+                    out.push(i.unraw().to_string());
+                }
+                TokenTree::Group(g) => macro_calls(g.stream(), out),
+                _ => {}
+            }
+        }
+    }
+    let mut all = Vec::new();
+    for source in sources {
+        bodies(&source.file.items, &mut all);
+    }
+    let logging =
+        |name: &str| EVENTS.contains(&name) || SPANS.contains(&name) || PRINTS.contains(&name);
+    let mut wrappers = BTreeSet::new();
+    loop {
+        let before = wrappers.len();
+        for (name, called) in &all {
+            if called.iter().any(|c| logging(c) || wrappers.contains(c)) {
+                wrappers.insert(name.clone());
+            }
+        }
+        if wrappers.len() == before {
+            return wrappers;
+        }
+    }
+}
+
+/// Every logging call in every production file, and the instrument problems.
 pub(super) fn scan(sources: &[Source]) -> (Vec<Entry>, Vec<String>) {
+    let wrappers = wrapper_macros(sources);
     let mut entries = Vec::new();
     let mut problems = Vec::new();
-    for source in sources.iter().filter(|s| in_scope(&s.path)) {
+    for source in sources {
         let mut finder = Finder {
             file: source.path.clone(),
             scope: Scope::default(),
+            wrappers: &wrappers,
             entries: Vec::new(),
             problems: Vec::new(),
         };
@@ -439,20 +623,35 @@ pub(super) fn scan(sources: &[Source]) -> (Vec<Entry>, Vec<String>) {
     (entries, problems)
 }
 
-/// Denied words in an entry's fields and values, minus [`EXEMPT`].
+/// The entries in the request path, which the snapshot pins.
+pub(super) fn request_path(entries: &[Entry]) -> Vec<Entry> {
+    entries
+        .iter()
+        .filter(|e| in_scope(&e.file))
+        .cloned()
+        .collect()
+}
+
+/// Denied words in an entry's fields and values, minus [`EXEMPT`], and
+/// exemptions that match nothing.
 pub(super) fn denied_problems(entries: &[Entry], exempt: &[(&str, &str)]) -> Vec<String> {
     let mut out = Vec::new();
+    let mut used = BTreeSet::new();
     for entry in entries {
         let line = entry.line();
         for item in &entry.items {
-            for word in denied(item) {
-                if !exempt
-                    .iter()
-                    .any(|(prefix, w)| line.starts_with(prefix) && *w == word)
-                {
+            for word in denied_item(item) {
+                if let Some(at) = exempt.iter().position(|(l, w)| *l == line && *w == word) {
+                    used.insert(at);
+                } else {
                     out.push(format!("{line}: `{item}` names `{word}`"));
                 }
             }
+        }
+    }
+    for (at, (line, word)) in exempt.iter().enumerate() {
+        if !used.contains(&at) {
+            out.push(format!("stale exemption: {line} / {word}"));
         }
     }
     out
@@ -496,8 +695,9 @@ mod tests {
     fn logged_values_match_the_reviewed_snapshot() {
         let mut sources = production("lib.rs");
         sources.extend(production("main.rs"));
-        let (entries, problems) = scan(&sources);
+        let (all, problems) = scan(&sources);
         assert!(problems.is_empty(), "{}", problems.join("\n"));
+        let entries = request_path(&all);
         let changes = diff(&entries, SNAPSHOT);
         assert!(
             changes.is_empty(),
@@ -511,9 +711,14 @@ mod tests {
     }
 
     #[test]
-    fn no_logged_value_names_a_credential_or_a_body() {
-        let sources = production("lib.rs");
+    fn no_logged_value_in_any_file_names_a_credential_or_a_body() {
+        let mut sources = production("lib.rs");
+        sources.extend(production("main.rs"));
         let (entries, _) = scan(&sources);
+        assert!(
+            entries.len() > request_path(&entries).len(),
+            "only the request path was read"
+        );
         let found = denied_problems(&entries, EXEMPT);
         assert!(found.is_empty(), "{}", found.join("\n"));
     }
@@ -592,6 +797,7 @@ mod tests {
                 warn!(a = %self.apiKey, "x");
                 warn!("sent {authorization} {bearerToken}");
                 warn!(ok = %execution_id, "x");
+                warn!(ok = 1, "the token is fine in fixed text {}", "token");
             }"#,
         );
         let found = denied_problems(&entries, &[]);
@@ -609,12 +815,157 @@ mod tests {
             );
         }
         assert!(
-            !found.iter().any(|p| p.contains("execution_id")),
+            !found
+                .iter()
+                .any(|p| p.contains("execution_id") || p.contains("fixed text")),
             "{found:?}"
         );
-        let exempt = [("providers/openai.rs :: f :: warn :: body=%b", "body")];
-        let after = denied_problems(&entries, &exempt);
-        assert_eq!(after.len(), found.len() - 1);
+    }
+
+    #[test]
+    fn every_denied_word_is_refused() {
+        for word in DENIED_WORDS {
+            let (entries, _) = fixture(
+                "inference/x.rs",
+                &format!("fn f() {{ warn!(field = %self.{word}, \"x\"); }}"),
+            );
+            let found = denied_problems(&entries, &[]);
+            assert!(
+                found.iter().any(|p| p.contains(&format!("names `{word}`"))),
+                "{word}: {found:?}"
+            );
+            let (entries, _) = fixture(
+                "inference/x.rs",
+                &format!("fn f() {{ warn!({word} = 1, \"x\"); }}"),
+            );
+            assert!(!denied_problems(&entries, &[]).is_empty(), "name {word}");
+        }
+        for word in [
+            "payload", "response", "request", "headers", "jwt", "creds", "session",
+        ] {
+            assert!(DENIED_WORDS.contains(&word), "{word}");
+        }
+        let (entries, _) = fixture(
+            "x.rs",
+            "fn f() { warn!(a = %self.camelPayloadValue, \"x\"); }",
+        );
+        assert!(!denied_problems(&entries, &[]).is_empty());
+    }
+
+    #[test]
+    fn an_exemption_is_exact_and_a_stale_one_fails() {
+        let (entries, _) = fixture(
+            "http.rs",
+            r#"fn f() { info!(status = response.status(), "x"); }"#,
+        );
+        let line = "http.rs :: f :: info :: status=response.status()";
+        assert_eq!(
+            denied_problems(&entries, &[]),
+            [format!(
+                "{line}: `status=response.status()` names `response`"
+            )]
+        );
+        assert!(denied_problems(&entries, &[(line, "response")]).is_empty());
+        // A prefix, another word, or another line does not exempt.
+        assert_eq!(
+            denied_problems(&entries, &[("http.rs :: f", "response")]).len(),
+            2
+        );
+        assert_eq!(denied_problems(&entries, &[(line, "request")]).len(), 2);
+        let none = fixture("http.rs", "fn f() { info!(status = 1, \"x\"); }").0;
+        assert_eq!(
+            denied_problems(&none, &[(line, "response")]),
+            [format!("stale exemption: {line} / response")]
+        );
+    }
+
+    #[test]
+    fn wrapper_macros_make_their_call_sites_log_calls() {
+        let (entries, _) = fixture(
+            "inference/mod.rs",
+            r#"macro_rules! note { ($v:expr) => { tracing::info!(value = %$v, "x") }; }
+               macro_rules! twice { ($v:expr) => { note!($v) }; }
+               fn f(secret: &str) { note!(secret); twice!(self.id); }"#,
+        );
+        let lines: Vec<String> = entries.iter().map(Entry::line).collect();
+        assert!(
+            lines.contains(&"inference/mod.rs :: f :: wrapper note :: arg secret".to_owned()),
+            "{lines:?}"
+        );
+        assert!(
+            lines.contains(&"inference/mod.rs :: f :: wrapper twice :: arg self.id".to_owned()),
+            "{lines:?}"
+        );
+        let found = denied_problems(&entries, &[]);
+        assert!(
+            found
+                .iter()
+                .any(|p| p.contains("wrapper note") && p.contains("names `secret`")),
+            "{found:?}"
+        );
+        // A macro that does not log is not a wrapper.
+        let (entries, _) = fixture(
+            "inference/mod.rs",
+            "macro_rules! plain { ($v:expr) => { $v + 1 }; } fn f() { plain!(1); }",
+        );
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn instrument_inside_cfg_attr_is_read_like_instrument() {
+        let (entries, problems) = fixture(
+            "protocols/chat.rs",
+            "#[cfg_attr(feature = \"x\", tracing::instrument)] async fn a(body: Body) {}\n\
+             #[cfg_attr(feature = \"x\", instrument(skip(self)))] async fn b(&self) {}\n\
+             #[cfg_attr(feature = \"x\", derive(Debug), instrument(skip_all, ret))] async fn c() {}\n\
+             #[cfg_attr(feature = \"x\", instrument(skip_all, fields(request_id = %id)))] async fn d() {}\n\
+             #[cfg_attr(feature = \"x\", derive(Debug))] struct E;",
+        );
+        assert_eq!(problems.len(), 3, "{problems:?}");
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains(":: a:") && p.contains("skip_all"))
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains(":: b:") && p.contains("skip_all"))
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains(":: c:") && p.contains("ret"))
+        );
+        assert_eq!(
+            entries.len(),
+            4,
+            "a, b, c and d are recorded, the derive is not"
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.line().contains("instrument :: request_id=%id"))
+        );
+    }
+
+    #[test]
+    fn the_request_path_includes_http_and_every_file_is_scanned_for_denied_words() {
+        for path in [
+            "http.rs",
+            "http/auth.rs",
+            "auth.rs",
+            "auth/x.rs",
+            "jobs/a.rs",
+        ] {
+            assert!(in_scope(path), "{path}");
+        }
+        assert!(!in_scope("httpx.rs") && !in_scope("alerts/webhooks.rs"));
+        let (entries, _) = fixture("alerts/webhooks.rs", r#"fn f() { warn!(body = %b, "x"); }"#);
+        assert!(request_path(&entries).is_empty());
+        assert_eq!(denied_problems(&entries, &[]).len(), 1);
+        let (entries, _) = fixture("http/auth.rs", r#"fn f() { warn!(job = %b, "x"); }"#);
+        assert_eq!(request_path(&entries).len(), 1);
     }
 
     #[test]
@@ -658,9 +1009,7 @@ mod tests {
     }
 
     #[test]
-    fn files_outside_the_request_path_and_test_code_are_not_scanned() {
-        assert!(!in_scope("alerts/webhooks.rs"));
-        assert!(in_scope("inference/attempt.rs") && in_scope("http.rs") && in_scope("auth/x.rs"));
+    fn test_code_is_not_scanned() {
         let (entries, _) = fixture(
             "inference/mod.rs",
             r#"#[cfg(test)] mod tests { fn t() { warn!(body = 1, "x"); } }"#,
