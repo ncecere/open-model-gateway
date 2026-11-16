@@ -1,0 +1,126 @@
+# Comments state invariants, not review history (#595). One list for both
+# detectors: the Rust one (source_rules/review_history.rs, apps/gateway/src)
+# and the TypeScript one (apps/web/src/lib/review-history.test.ts, apps/web/src).
+# Each reads this file, runs its own tokeniser over every comment of the
+# production sources, and runs every `refuse` and `allow` line below as a
+# planted comment before it trusts itself on the tree.
+#
+# A comment (adjacent own-line `//` comments are one comment) is lowercased and
+# cut into words: runs of ASCII letters, runs of ASCII digits, and `#` (written
+# `@` in a pattern). Every other character separates words. Lines:
+#
+#   pattern <elements>   refuse a comment in which the elements match
+#                        consecutive words (anywhere in the comment)
+#   raw <text>           refuse a comment that contains <text> (lowercase,
+#                        whitespace collapsed), punctuation included
+#   refuse <comment>     must be refused (a planted violation)
+#   allow <comment>      must pass (product vocabulary and stated rules)
+#
+# Elements, separated by spaces: `a|b|c` one of these words; `<n>` a number;
+# `@` the `#` of an issue reference; a trailing `?` makes the element optional;
+# `..k` up to k words of any kind; `^a|b` is not a word but a condition on the
+# one before the next element: it is none of these (or there is none).
+#
+# What is refused is the record of who asked for a change and when: numbered
+# review artefacts (item, round, finding, rule, issue, `review #89`), a review
+# named by its source (coordinator, adversarial, second, a PR or issue number),
+# what a reviewer said, and a finding or round of an issue (`#321 round 2`,
+# `finding 3`).
+#
+# What stays allowed, with no list entry: "reviewer", "review campaign",
+# "review item" and "review queue" as product vocabulary of access reviews and
+# aged-hold review; "reviewed" and "needs review" as the state of data or of a
+# pinned list; "preview"; "findings" of the key-safety and history checks (a
+# finding is only refused when numbered); "security review" and "in review" as
+# a requirement ("a change to this needs a security review"); bare "round
+# trip"; "per review" and "after review" (a count or an ordering, not history).
+
+pattern ^access|campaign review item|items|finding|findings|round|rounds|issue|issues|rule|rules|point|points|fix|note|notes @? <n>
+pattern ^access|campaign review @ <n>
+pattern review finding|findings|feedback|round|rounds|thread
+pattern review ..4 round <n>
+pattern @ <n> review
+pattern pr <n> review
+pattern @ <n> ..1 round <n>
+pattern coordinator review
+pattern adversarial re? review|reviews|finding|findings
+pattern second review
+pattern re review
+pattern full ui review
+pattern review of @ <n>
+pattern found|raised|noted|flagged|requested|asked|caught|reported|suggested in|during|by|after the? review
+pattern reviewer|reviewers s? said|asked|found|noted|flagged|wanted|requested|pointed|raised|caught|suggested|insisted|complained|objected
+pattern as requested in the? review
+pattern per the review
+pattern finding|findings @? <n>
+pattern pr <n> item|finding|issue <n>
+raw (review)
+
+refuse #98 PR 2 review item 5: counted, never a silent, uncounted loss.
+refuse Review #89 overflow fix: whether a holder is still a member is decided elsewhere.
+refuse The preview of a patch body (review #89 round 5) mirrors PATCH merge semantics.
+refuse Sections are read-only description lists (review #22, rule 12).
+refuse Tabs hold cards, never a second page title (review rule 1).
+refuse Fail-closed guard (#37 PR2 review), not just a debug_assert.
+refuse #37 PR2 review: catalog shared lock first, in canonical order.
+refuse Created_at is never supplied here (adversarial re-review of #37 PR1, issue 1).
+refuse Validate an allowlist before any database round trip (coordinator review issue 5b).
+refuse #321 round 2 (LOW finding 2): a distinct purpose for the OTLP collector.
+refuse #321 round 2 extended this to the exporter.
+refuse The approval check as frozen here (#203 review finding): it used to call production code.
+refuse #106 review: the signing secret's variable can't be on an allowlist.
+refuse #174 review: switching export off directly in the database.
+refuse Found in the review of #37 that the lock was taken lazily.
+refuse The reviewer asked for the lock to be taken up front.
+refuse Reviewers flagged that this read could be stale.
+refuse A reviewer found the missing HEAD fallback.
+refuse This was added as requested in review.
+refuse Changed per the review.
+refuse Added after the second review.
+refuse Re-review: the cap is now per request.
+refuse Applied the review feedback from the last round.
+refuse Handled in a review round of its own.
+refuse A finding from the review thread.
+refuse Mirror find's HEAD fallback (finding 1).
+refuse Rate limited per token (#37 PR2 finding 3).
+refuse See finding #8 of the audit.
+refuse #37 PR2 item 1 exception: the owner lock is taken first.
+refuse Shared display formatters (full UI review, app-wide rules 3-6).
+refuse Adversarial finding: a duplicate entry is rejected.
+refuse A change from the adversarial review.
+refuse Tagged for later (review).
+refuse See the coordinator review of this change.
+refuse REVIEW ITEM 7 is handled here.
+
+allow A reviewer decides the items of an access review campaign.
+allow Each review item records the decision of one reviewer.
+allow The reviewer's inbox lists the items still open.
+allow The reviewer is never the author of the version.
+allow Access review #90 lists the campaign's items.
+allow Fixed 24h/168h unknown-hold review; built in, never a rule.
+allow The aged unknown-hold review queue (#101), read-only.
+allow needs_review is set on a price draft whose rates were guessed.
+allow The line is flagged for review.
+allow A change to this snapshot needs a security review.
+allow Security-relevant changes get two independent reviews.
+allow A new logged field shows up in review and cannot arrive by accident.
+allow The reviewed revision: an intervening change refuses the apply with 409.
+allow Reviewed fragments must not repeat a key.
+allow Every new review fetches a fresh observation.
+allow Mounted only while open; each review counts its route alone.
+allow The Review dialog is a preview and changes nothing.
+allow Key safety: findings per active key, most severe first (docs/key-safety.md).
+allow Keys counted by their worst finding.
+allow Open the incident on any finding of a history verify run.
+allow Counted once per review, not once per line.
+allow Reads the state after review and before publish.
+allow A handshake costs two round trips; round 2 carries the data.
+allow Only the round count is returned (rounds: 3).
+allow A database round trip per request is acceptable here.
+allow See #321 for the audit exporter, and #98 for telemetry.
+allow Previewing the draft changes nothing; the previews list is read-only.
+allow The rules are listed in docs/governance.md, rule 3 first.
+allow Issue 4 of the series is tracked as #512.
+allow Hardware item 5 is a pending item.
+allow A pull request touches many files (PR 12 changes them all).
+allow Matches review_item and access_review rows by campaign id.
