@@ -604,3 +604,122 @@ test("the Spark test platform's values render the database and migrate Job it re
   assert.deepEqual([...job.matchAll(/^\s+args: (\[.*\])$/gm)].map(m => m[1]), ['["wait-for-database"]', '["migrate"]', '["grants", "apply"]'], "wait, migrate, then the runtime grants");
   assert.match(job, /name: OMG_DB_MIGRATOR_USERNAME[\s\S]*name: omg-migrator-role/);
 });
+
+// AGENTS.md: "Never run migrations or bootstrap automatically in `serve`/the container entrypoint" (#591).
+// In every rendered profile the gateway Deployment's containers (init containers included) run only
+// `serve` and `wait-for-database`; the commands that change the schema or seed data
+// (migrate, grants, bootstrap-*, provision-user) appear only in Jobs. Plain-text reading, like the
+// rest of this file: containers are split by the indentation of the list item that follows
+// `containers:` / `initContainers:`.
+const STATE_CHANGING = ["migrate", "grants", "bootstrap-dev", "bootstrap-demo", "provision-user"];
+
+function podContainers(doc) {
+  const out = [];
+  const lines = doc.split("\n");
+  for (let at = 0; at < lines.length; at++) {
+    const header = lines[at].match(/^( *)(containers|initContainers):\s*$/);
+    if (!header) continue;
+    let first = at + 1;
+    while (first < lines.length && /^\s*(#.*)?$/.test(lines[first])) first++;
+    const itemIndent = lines[first]?.match(/^( *)- /)?.[1];
+    if (itemIndent === undefined) continue;
+    let end = first;
+    let current = null;
+    for (; end < lines.length; end++) {
+      const line = lines[end];
+      if (line.trim() !== "" && line.search(/\S/) < itemIndent.length) break;
+      if (line.startsWith(`${itemIndent}- `) && line.slice(itemIndent.length) !== "" && line.search(/\S/) === itemIndent.length) {
+        current = { kind: header[2], name: line.match(/- name:\s*"?([^"\s]+)"?/)?.[1] ?? "?", text: "" };
+        out.push(current);
+      }
+      if (current) current.text += `${line}\n`;
+    }
+  }
+  return out;
+}
+
+function words(text, key) {
+  // `args: ["a", "b"]` or a block list under `args:` (at the container's own indentation).
+  const match = text.match(new RegExp(`^ +${key}:(?: (\\[.*\\]))?\\s*$`, "m"));
+  if (!match) return undefined;
+  if (match[1]) return JSON.parse(match[1]);
+  const after = text.slice(match.index + match[0].length).split("\n").slice(1);
+  const items = [];
+  for (const line of after) {
+    const item = line.match(/^ +- "?([^"]*)"?$/);
+    if (!item) break;
+    items.push(item[1]);
+  }
+  return items;
+}
+
+function stateChanging(doc) {
+  const found = [];
+  for (const container of podContainers(doc)) {
+    for (const key of ["command", "args"]) {
+      for (const word of words(container.text, key) ?? []) {
+        if (STATE_CHANGING.includes(word)) found.push(`${container.kind} ${container.name}: ${key} has ${word}`);
+      }
+    }
+    if (container.name === "gateway" && container.kind === "containers") {
+      if (JSON.stringify(words(container.text, "args")) !== '["serve"]' || words(container.text, "command") !== undefined) {
+        found.push(`containers gateway: must run exactly args ["serve"] with the image entrypoint`);
+      }
+    }
+  }
+  return found;
+}
+
+for (const [name, args] of Object.entries({
+  ...profiles,
+  "cnpg with the migrate Job": [...profiles.cnpg, "--set", "migrations.run=true"],
+})) {
+  test(`${name}: the gateway Deployment never migrates or bootstraps (#591)`, () => {
+    const deployments = docsOfKind(helmTemplate(args), "Deployment").filter((d) => podContainers(d).some((c) => c.name === "gateway"));
+    assert.ok(deployments.length >= 1, "a gateway Deployment is rendered");
+    for (const deployment of deployments) {
+      assert.deepEqual(stateChanging(deployment), []);
+      assert.match(deployment, /args: \["wait-for-database", "--schema"\]/, "the init container only waits");
+    }
+  });
+}
+
+test("the migrate Job, not the Deployment, holds the schema-changing commands (#591)", () => {
+  const rendered = helmTemplate([...profiles.cnpg, "--set", "migrations.run=true"]);
+  const [job] = docsOfKind(rendered, "Job");
+  assert.ok(stateChanging(job).length >= 2, "the Job migrates and applies grants");
+});
+
+test("the Deployment command check refuses planted migrate and bootstrap commands (#591)", () => {
+  const deployment = (initArgs, args, extra = "") => [
+    "kind: Deployment",
+    "spec:",
+    "  template:",
+    "    spec:",
+    "      initContainers:",
+    "        - name: wait-for-schema",
+    `          args: ${initArgs}`,
+    "      containers:",
+    "        - name: gateway",
+    "          image: x",
+    `          args: ${args}`,
+    extra,
+    "          env:",
+    "            - name: GATEWAY_X",
+    "              value: y",
+  ].join("\n");
+  assert.deepEqual(stateChanging(deployment('["wait-for-database", "--schema"]', '["serve"]')), []);
+  assert.deepEqual(stateChanging(deployment('["wait-for-database", "--schema"]', '["migrate"]')), [
+    "containers gateway: args has migrate",
+    'containers gateway: must run exactly args ["serve"] with the image entrypoint',
+  ]);
+  assert.deepEqual(stateChanging(deployment('["migrate"]', '["serve"]')), ["initContainers wait-for-schema: args has migrate"]);
+  assert.deepEqual(stateChanging(deployment('["grants", "apply"]', '["serve"]')), ["initContainers wait-for-schema: args has grants"]);
+  assert.deepEqual(stateChanging(deployment('["wait-for-database"]', '["serve", "bootstrap-demo"]')).length, 2);
+  assert.deepEqual(stateChanging(deployment('["wait-for-database"]', '["serve"]', '          command: ["wrapper", "-c", "migrate && serve"]')), [
+    'containers gateway: must run exactly args ["serve"] with the image entrypoint',
+  ]);
+  assert.deepEqual(stateChanging(deployment('["wait-for-database"]', '["serve"]', '          command: ["migrate"]')).length, 2);
+  const block = deployment('["wait-for-database"]', '["serve"]').replace('args: ["serve"]', 'args:\n            - "serve"\n            - provision-user');
+  assert.equal(stateChanging(block).length, 2);
+});

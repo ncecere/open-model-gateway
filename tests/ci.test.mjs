@@ -176,6 +176,8 @@ test("special probes retain sequential ACL, exact contention/terminal, Docker an
   assert.ok(runs(loadWorkflow().jobs.web).includes("npm run test:ci"));
   // The file-size ratchet (#500) only holds while CI runs it.
   assert.ok(runs(loadWorkflow().jobs.web).includes("npm run test:structure"));
+  // The Dockerfile entrypoint rule (AGENTS.md rules as checks, #591) only holds while CI runs it.
+  assert.ok(runs(loadWorkflow().jobs.web).includes("npm run test:rules"));
   // The web job installs the same pinned age, once, before the staging tests that use it (#491).
   const webRuns = runs(loadWorkflow().jobs.web);
   assert.equal(webRuns.filter(run => run === AGE_INSTALL).length, 1);
