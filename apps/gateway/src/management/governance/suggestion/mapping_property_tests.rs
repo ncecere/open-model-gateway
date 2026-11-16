@@ -1196,7 +1196,7 @@ fn a_catalog_entry_without_prices_maps_to_unknown_not_free() {
 /// than its comment says ("an explicit unknown line for each meter whose price
 /// the catalog does not give").
 #[test]
-#[ignore = "#593 finding: a tier-only meter gets no explicit unknown base line in the draft"]
+#[ignore = "#635: a tier-only meter gets no explicit unknown base line in the draft"]
 fn a_tier_without_a_base_price_is_stated_unknown() {
     let model = json!({"id": "v/m", "pricing": {
         "input_cache_write": "1e400",
@@ -1221,7 +1221,7 @@ fn a_tier_without_a_base_price_is_stated_unknown() {
 /// The generated endpoint test keeps `top_provider` to an object or null so it
 /// stays green; this test is the shrunk regression.
 #[test]
-#[ignore = "#593 finding: map_with_endpoints panics when top_provider is not an object or null"]
+#[ignore = "#634: map_with_endpoints panics when top_provider is not an object or null"]
 fn a_malformed_top_provider_is_not_a_panic() {
     for tp in [json!("x"), json!(5), json!([]), json!(true)] {
         let model =

@@ -728,7 +728,7 @@ fn upstream_failure_events_are_refused_with_the_one_class() {
 /// `Done` and never pushes again, so no stream reaches this today; the guard
 /// belongs in the parser, as in `anthropic::State`.
 #[test]
-#[ignore = "#593 finding: openai_responses::State re-emits Finish/Usage/Done for a second terminal (unreachable via execute)"]
+#[ignore = "#636: openai_responses::State re-emits Finish/Usage/Done for a second terminal (unreachable via execute)"]
 fn a_terminal_pushed_after_the_terminal_is_refused() {
     let built = build(&Spec {
         items: vec![],
