@@ -37,7 +37,7 @@ function Amount({ amount, unit, list }: { amount: string | null | undefined; uni
     <span className={styles.price}>
       {showList && <><s className={styles.list}><span className="sr-only">List price </span>{formatMicroUsd(list)}</s>{" "}</>}
       <span className={styles.amount}>{showList && <span className="sr-only">now </span>}{formatMicroUsd(amount)}</span>{" "}
-      {/* Review rule 6: "$0.10 / M tokens", a space on both sides of the slash. */}
+      {/* "$0.10 / M tokens": a space on both sides of the slash. */}
       <span className={styles.unit}><span aria-hidden>/ </span><span className="sr-only">per </span>{unit}</span>
     </span>
   );

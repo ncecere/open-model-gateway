@@ -33,7 +33,7 @@ export type MappingReviewRequest = {
    * connected (for example, a row menu item removed when its menu closed). */
   fallbackFocus?: () => HTMLElement | null;
   /** Called when the confirmed apply is refused with 412 (the mapping
-   * changed between review and apply, #89 review item 6): reopen a fresh
+   * changed between review and apply): reopen a fresh
    * review instead of leaving the user with a stale one. */
   onStale?: () => void;
 };

@@ -1,5 +1,5 @@
 /*
- * Dates and times with the shared formatters (lib/format.ts, review rule 4), as
+ * Dates and times with the shared formatters (lib/format.ts), as
  * semantic <time> elements:
  *
  *   <TableTime value={row.started_at} />   "Oct 8, 2:30 AM" (title: "Oct 8, 2026, 2:30 AM EDT")

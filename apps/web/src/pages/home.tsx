@@ -61,7 +61,7 @@ export function loginHref(location: { pathname: string; search: string } | undef
 }
 /** Grounded-style centered sign-in (brand, card, one SSO action). Provenance: Grounded web/src/session.tsx SignInPage. */
 const SIGNED_OUT = "omg.enterprise.signedOut";
-/** Sign-out reloads the page, so the confirmation travels in sessionStorage and is shown once on the sign-in page (review #49). */
+/** Sign-out reloads the page, so the confirmation travels in sessionStorage and is shown once on the sign-in page. */
 export function takeSignedOutNotice(storage: Pick<Storage, "getItem" | "removeItem"> = window.sessionStorage): boolean {
   try { const set = storage.getItem(SIGNED_OUT) === "1"; if (set) storage.removeItem(SIGNED_OUT); return set; } catch { return false; }
 }

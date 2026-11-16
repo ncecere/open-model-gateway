@@ -136,7 +136,7 @@ export function ModelPage({ session, model, path, tab }: ModelPageProps) {
   // The lab logo is left of the title like the list rows (ui-principles 11); the lab badge keeps just its name.
   const labIds = [model.public_name, model.display_name, ...set.rows.map(row => row.route.upstream_model)];
   const r = model.readiness, serving = [...set.tiers.primary, ...set.tiers.fallback, ...set.tiers.unknown], servingPrices = serving.map(asPrice);
-  // Sections are read-only description lists; each editable one has its own Edit (a dialog), so Auditors see plain values (review #22, rule 12).
+  // Sections are read-only description lists; each editable one has its own Edit (a dialog), so Auditors see plain values.
   const membership = useApi<{ catalog_ids: string[] }>(`${path}/catalogs`), catalogs = useChoices<Catalog>(`${platformPath}/catalogs`);
   const sectionEdit = (label: string, onClick: () => void, disabled = false) => writable ? <Button size="sm" variant="secondary" disabled={disabled} onClick={onClick} aria-label={label}><Pencil aria-hidden />Edit</Button> : undefined;
   const editRouting = () => { const current = set.policy.data?.policy; if (current) ask({ title: "Edit routing policy", description: modelRoutingHelp, fields: modelRoutingFields(current), submitLabel: "Save routing policy", successNotice: "Routing policy saved.", run: (v, signal) => api(`${path}/routing`, { method: "PUT", body: modelRoutingBody(v), signal }) }); };
@@ -258,7 +258,7 @@ function RouteEditor({ route, workload, profile, editing, onClose }: { route: De
 function RouteActions({ row, workload, writable }: { row: RouteRow; model: Model; workload: WorkloadKind; writable: boolean }) {
   const { route } = row, ask = useAction(), [editing, setEditing] = useState<Editing>(null), [reviewing, setReviewing] = useState<HTMLElement | null>(null), profile = row.detail?.provider;
   const triggerId = `deployment-actions-${route.id}`;
-  // Read-only viewers get the same ⋯ menu (review #48), with only what they can do.
+  // Read-only viewers get the same ⋯ menu, with only what they can do.
   if (!writable) return <ActionMenu label={`Actions for route ${route.upstream_model}`} actions={[{ label: "Route page", render: <ResourceLink search={{ page: "deployment-detail", record: route.id }} /> }, { label: "Price history", render: <ResourceLink search={{ page: "deployment-detail", record: route.id, tab: "pricing" }} /> }]} />;
   return <><ActionMenu triggerId={triggerId} label={`Actions for route ${route.upstream_model}`} actions={[
     { label: "Edit routing…", disabled: !row.routing, disabledReason: "Routing could not be loaded", onSelect: () => row.routing && ask({ title: `Routing · ${route.upstream_model}`, description: "No implicit retries: fallback attempts follow the model's routing policy only.", fields: deploymentRoutingFields(row.routing.routing), submitLabel: "Save routing", run: (v, signal) => api(routingPath(route.id), { method: "PUT", body: deploymentRoutingBody(v, row.routing!.routing, true), signal }) }) },
@@ -343,7 +343,7 @@ export function RoutePage({ session, route: d, path, tab }: { session: Session; 
   const index = set.ordered.findIndex(r => r.id === d.id), prev = index > 0 ? set.ordered[index - 1] : undefined, next = index >= 0 ? set.ordered[index + 1] : undefined;
   const target = (r?: RouteRow) => r && { label: `${r.route.upstream_model} on ${r.route.provider_name ?? "its connection"}`, render: <ResourceLink search={{ page: "deployment-detail", record: r.id }} /> };
   const policy = routeDataPolicy(d.data_policy), meters = HEADLINE_METERS[workload].slice(0, 2);
-  // Breadcrumb: Admin › Models › {model display name} › {connection} route (review #20).
+  // Breadcrumb: Admin › Models › {model display name} › {connection} route.
   useResourceName(title);
   useResourceParent({ label: modelName, to: { page: "model-detail", record: d.model_id } });
   useSectionFromTab(routeSectionFor(tab));

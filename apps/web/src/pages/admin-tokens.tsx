@@ -1,5 +1,5 @@
 /*
- * Admin › Settings › Admin API tokens (#37 PR3, approved issue comment 6362968687). Long-lived
+ * Admin › Settings › Admin API tokens (#37 PR3). Long-lived
  * management credentials a Platform Admin can use from scripts and automation: five explicit
  * write-does-not-imply-read scopes plus platform:read, an optional CIDR allowlist, and a 1–90
  * day expiry (default 30; no renewal). They can never call inference or issue inference keys.

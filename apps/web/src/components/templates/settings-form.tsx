@@ -24,7 +24,7 @@ export function fieldDisplay(field: Field, value: string | undefined): string {
   if (field.type === "select") return field.options?.find(o => o.value === raw)?.label ?? (raw || "Not set");
   return raw.trim() ? raw : "Not set";
 }
-/** Read-only rendering of settings fields (review rule 12: a description list, no disabled form, no per-section banner). */
+/** Read-only rendering of settings fields (a description list, no disabled form, no per-section banner). */
 export function ReadOnlyFields({ fields, values }: { fields: Field[]; values?: Values }) {
   return <DescriptionList dividers items={fields.filter(f => !f.visibleWhen || f.visibleWhen(values ?? Object.fromEntries(fields.map(x => [x.name, x.value ?? ""])))).map(f => ({ label: f.label, value: fieldDisplay(f, values?.[f.name]) }))} />;
 }

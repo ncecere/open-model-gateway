@@ -70,7 +70,7 @@ export function StatTile({ label, value, hint, details, icon, series, seriesLabe
   const change = delta ? ("change" in delta ? delta.change : percentChange(delta.current, delta.previous)) : null;
   const points = series?.map(v => (v === null || !Number.isFinite(v) ? Number.NaN : v)) ?? [];
   const finite = points.filter(Number.isFinite);
-  // A single known point is a dot, not a trend (review #37): a sparkline needs two.
+  // A single known point is a dot, not a trend: a sparkline needs two.
   const drawn = points.length > 1 && finite.length > 1;
   // The chart slot is a fixed-size block pinned to the bottom of the tile (stat-tile.module.css), so every tile in a
   // row draws its sparkline at the same height and width however many text lines sit above it. A tile given a series
