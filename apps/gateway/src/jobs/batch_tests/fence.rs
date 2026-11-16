@@ -880,3 +880,92 @@ async fn a_failed_renewal_stores_the_buffered_results_at_once(pool: PgPool) {
     probe.close().await;
     assert_eq!(segments(&w, &job).await, 1);
 }
+
+/// A run that only doubts its lease (soft loss) never ends the batch: it
+/// finishes its in-flight lines, releases, and the batch stays open with the
+/// unstarted lines pending for the next claim.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_soft_lost_run_leaves_the_batch_open_and_a_second_runner_completes_it(pool: PgPool) {
+    let (w, job) = batch(
+        pool,
+        &[("a", "plain-a"), ("b", "plain-b"), ("c", "plain-c")],
+    )
+    .await;
+    w.jobs
+        .soft_loss
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(matches!(start(&w).await.unwrap(), Ok(true)));
+    let open = w.reload(&job).await;
+    assert_eq!(open.state, "in_progress", "a soft-lost run ended the batch");
+    assert_eq!(
+        (open.output_file_id, open.error_file_id, open.settled_at),
+        (None, None, None)
+    );
+    assert_eq!(envelope(&w, &job).await, "pending");
+    let started = count(&w, "SELECT count(*) FROM batch_lines WHERE job_id=$1", &job).await;
+    assert!(
+        (1..3).contains(&started),
+        "unstarted lines stay pending: {started}"
+    );
+    let lease: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT runner_lease_until FROM async_jobs WHERE id=$1")
+            .bind(job.id)
+            .fetch_one(&w.f.store.pool)
+            .await
+            .unwrap();
+    assert!(lease.is_none(), "the run gave the batch up");
+
+    // The next claim runs the rest and ends the batch.
+    assert!(matches!(start(&w).await.unwrap(), Ok(true)));
+    let done = w.reload(&job).await;
+    assert_eq!(done.state, "completed");
+    assert_eq!(
+        (done.request_completed, done.request_failed),
+        (Some(3), Some(0))
+    );
+    let out = w
+        .read(w.f.principal.workspace_id, done.output_file_id)
+        .await;
+    assert_eq!(out.len(), 3);
+    assert_eq!(w.openai.executed().len(), 3, "every line exactly once");
+    consistent(&w.f).await;
+}
+
+/// Failed `finish_batch` statements keep the result files only when the
+/// server may still commit them.
+#[test]
+fn only_a_connection_failure_leaves_the_outcome_unknown() {
+    use crate::jobs::fence::outcome_unknown;
+    assert!(outcome_unknown(&sqlx::Error::Io(std::io::Error::other(
+        "reset"
+    ))));
+    assert!(outcome_unknown(&sqlx::Error::WorkerCrashed));
+    assert!(!outcome_unknown(&sqlx::Error::PoolTimedOut));
+    assert!(!outcome_unknown(&sqlx::Error::PoolClosed));
+}
+
+/// A server error is certain: nothing was applied (a file id that does not
+/// exist violates a foreign key).
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_rejected_finish_is_a_certain_failure_and_a_refused_one_is_stale(pool: PgPool) {
+    let (w, job) = batch(pool, &[("a", "plain")]).await;
+    let old = claim(&w, &job).await;
+    let new = claim(&w, &job).await;
+    let done = |file: Option<Uuid>| crate::jobs::store::Finished {
+        state: JobState::Completed,
+        error_code: None,
+        output_file: file,
+        error_file: None,
+        counts: None,
+    };
+    assert!(matches!(
+        new.finish_batch(&w.f.store, &done(Some(Uuid::new_v4())))
+            .await,
+        Err(FenceError::Storage)
+    ));
+    assert!(matches!(
+        old.finish_batch(&w.f.store, &done(None)).await,
+        Err(FenceError::Stale)
+    ));
+    assert_eq!(w.reload(&job).await.state, "queued");
+}

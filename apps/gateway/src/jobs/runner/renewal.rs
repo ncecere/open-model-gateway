@@ -19,6 +19,10 @@ use crate::jobs::fence::Renewed;
 pub(super) const RENEW_TRUST: Duration =
     Duration::from_secs(LEASE_SECONDS as u64 - RENEW.as_secs());
 
+/// One renewal gets this long: a hung connection is a failed renewal, not a
+/// silence the trust window never sees.
+pub(super) const RENEW_TIMEOUT: Duration = Duration::from_secs(RENEW.as_secs() * 2 / 3);
+
 /// What one renewal attempt means for the run.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Step {
@@ -74,7 +78,10 @@ where
         let mut trust = Trust::new(Instant::now());
         loop {
             let attempt = Instant::now();
-            let outcome = renew().await;
+            let outcome = match tokio::time::timeout(RENEW_TIMEOUT, renew()).await {
+                Ok(outcome) => outcome,
+                Err(_) => Err(()),
+            };
             match trust.step(attempt, Instant::now(), outcome) {
                 Step::Held { cancel } => {
                     if cancel {
@@ -195,6 +202,33 @@ mod tests {
             "recovery is not a fence"
         );
         task.abort();
+    }
+
+    /// A renewal that never returns is a failed renewal: it asks for the
+    /// buffers to be stored at once and ends dispatch after the trust window.
+    #[tokio::test(start_paused = true)]
+    async fn a_hung_renewal_counts_as_failed() {
+        let state = state();
+        let task = spawn(state.clone(), || {
+            std::future::pending::<Result<Renewed, ()>>()
+        });
+        tokio::time::timeout(RENEW, state.doubt.notified())
+            .await
+            .expect("the first hung renewal sends the doubt notification");
+        assert!(
+            !state.lost.load(Ordering::SeqCst),
+            "not yet past the trust window"
+        );
+        tokio::time::sleep(RENEW_TRUST + RENEW + RENEW_TIMEOUT).await;
+        assert!(state.lost.load(Ordering::SeqCst), "dispatch stopped");
+        assert!(!state.fenced.load(Ordering::SeqCst));
+        assert!(!task.is_finished(), "it keeps trying");
+        task.abort();
+    }
+
+    #[test]
+    fn a_renewal_times_out_before_the_next_one_is_due() {
+        assert!(RENEW_TIMEOUT < RENEW && !RENEW_TIMEOUT.is_zero());
     }
 
     #[tokio::test(start_paused = true)]

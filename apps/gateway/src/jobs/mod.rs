@@ -220,6 +220,9 @@ pub struct Jobs {
     /// the batch as finished. Never used outside tests.
     #[cfg(test)]
     pub(crate) finalize_hold: Arc<FinalizeHold>,
+    /// Test-only: the next finished line of a run turns it soft-lost.
+    #[cfg(test)]
+    pub(crate) soft_loss: Arc<std::sync::atomic::AtomicBool>,
 }
 /// The next finishing run waits here once armed (tests).
 #[cfg(test)]
@@ -267,6 +270,8 @@ impl Jobs {
             rate_limit_pauses: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(test)]
             finalize_hold: Arc::default(),
+            #[cfg(test)]
+            soft_loss: Arc::default(),
         }
     }
     /// Attach the approved local endpoints (batch scheduling load signals).

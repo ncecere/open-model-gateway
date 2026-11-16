@@ -234,6 +234,8 @@ impl Runner {
         let state = Arc::new(RunState {
             #[cfg(test)]
             pauses: self.jobs.rate_limit_pauses.clone(),
+            #[cfg(test)]
+            soft_loss: self.jobs.soft_loss.clone(),
             ..RunState::new(fence)
         });
         // Lease renewal (and cancel observation) while the batch runs.
@@ -313,11 +315,15 @@ impl Runner {
         let segments = writer.await.map_err(|_| InferenceError::Storage)?;
         dispatched?;
         segments?;
-        if state.lost.load(Ordering::SeqCst) {
-            // Another runner owns the batch now; it finalizes.
+        // Read once. A run that lost the batch (fenced) or only doubts its
+        // lease (soft loss) never ends it: it leaves the batch non-terminal,
+        // and `run` releases it, so the claim that holds it next finalises.
+        // Only a real reason ends a batch: all lines done, cancel, expiry or
+        // a budget stop.
+        let stop = state.stop_reason(job);
+        if stop == Some(Stop::Lost) {
             return Ok(());
         }
-        let stop = state.stop_reason(job);
         self.finalize(job, files, work, stop, &state).await
     }
 
@@ -402,7 +408,7 @@ impl Runner {
             if let Err(e) = published_now {
                 match e {
                     FenceError::Stale => state.lose(),
-                    FenceError::Storage => {
+                    FenceError::Storage | FenceError::Unknown => {
                         tracing::warn!(job_id = %job.id, "batch demand not recorded");
                     }
                 }
@@ -422,13 +428,21 @@ impl Runner {
     ) -> JobResult<()> {
         let store = &self.jobs.store;
         let fence = &state.fence;
+        let final_state = match stop {
+            None => JobState::Completed,
+            Some(Stop::Cancelled) => JobState::Cancelled,
+            Some(Stop::Expired) => JobState::Expired,
+            Some(Stop::Budget) => JobState::Failed,
+            // Never a terminal state: see `run_claimed`.
+            Some(Stop::Lost) => return Ok(()),
+        };
         match self.scheduler.clear_waits(fence).await {
             Ok(()) => {}
             Err(FenceError::Stale) => {
                 state.lose();
                 return Ok(());
             }
-            Err(FenceError::Storage) => {
+            Err(FenceError::Storage | FenceError::Unknown) => {
                 tracing::warn!(job_id = %job.id, "batch demand not cleared; it goes stale");
             }
         }
@@ -521,9 +535,7 @@ impl Runner {
         let error_file = match err.finish().await {
             Ok(file) => file,
             Err(e) => {
-                if let Some(file) = output_file {
-                    let _ = files.delete(file, Some(job.workspace_id)).await;
-                }
+                remove_files(files, job, [output_file, None]).await;
                 return Err(e.into());
             }
         };
@@ -540,15 +552,9 @@ impl Runner {
         let (completed, failed): (i64, i64) = match counted {
             Ok(counts) => counts,
             Err(e) => {
-                discard_unreferenced(files, store, job, [output_file, error_file]).await;
+                remove_files(files, job, [output_file, error_file]).await;
                 return Err(e.into());
             }
-        };
-        let final_state = match stop {
-            None => JobState::Completed,
-            Some(Stop::Cancelled) => JobState::Cancelled,
-            Some(Stop::Expired) => JobState::Expired,
-            Some(Stop::Budget) | Some(Stop::Lost) => JobState::Failed,
         };
         let finished = fence
             .finish_batch(
@@ -566,16 +572,29 @@ impl Runner {
                 },
             )
             .await;
-        // Result files no row references are removed: a run that lost the
-        // batch wrote them for nobody, and a failed write may have left them
-        // unlinked.
-        let finished = state.written(finished);
+        // The result files are removed when the outcome is certain and the
+        // batch does not reference them: the claim ended (zero rows), or the
+        // statement was rolled back. When the connection failed with the
+        // statement possibly sent, the server may still commit it, so the
+        // files stay (a later sweep removes them if it did not).
         let job = match finished {
-            Ok(Some(finished)) => finished,
-            Ok(None) | Err(_) => {
-                discard_unreferenced(files, store, job, [output_file, error_file]).await;
-                return finished.map(|_| ());
+            Ok(row) => {
+                let unused = [output_file, error_file].map(|f| {
+                    f.filter(|f| row.output_file_id != Some(*f) && row.error_file_id != Some(*f))
+                });
+                remove_files(files, job, unused).await;
+                row
             }
+            Err(FenceError::Stale) => {
+                state.lose();
+                remove_files(files, job, [output_file, error_file]).await;
+                return Ok(());
+            }
+            Err(FenceError::Storage) => {
+                remove_files(files, job, [output_file, error_file]).await;
+                return Err(InferenceError::Storage.into());
+            }
+            Err(FenceError::Unknown) => return Err(InferenceError::Storage.into()),
         };
         let _ = segments;
         self.settle_finished(&job, files, state).await?;
@@ -730,21 +749,14 @@ impl Runner {
     }
 }
 
-/// Delete result files the batch row does not reference. If the row cannot
-/// be read they stay: the file sweeper removes them at retention expiry.
-async fn discard_unreferenced(
+/// Delete result files nothing references.
+async fn remove_files(
     files: &crate::filestore::FileStorage,
-    store: &Store,
     job: &JobRow,
     created: [Option<Uuid>; 2],
 ) {
-    let Ok(row) = store::reload(store, job.id).await else {
-        return;
-    };
     for file in created.into_iter().flatten() {
-        if row.output_file_id != Some(file) && row.error_file_id != Some(file) {
-            let _ = files.delete(file, Some(job.workspace_id)).await;
-        }
+        let _ = files.delete(file, Some(job.workspace_id)).await;
     }
 }
 

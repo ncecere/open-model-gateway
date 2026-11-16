@@ -44,8 +44,12 @@ pub(crate) struct BatchFence {
 pub(crate) enum FenceError {
     /// The claim ended: the batch belongs to another claim now.
     Stale,
-    /// A statement failed (counted where it ran).
+    /// A statement failed and was not applied (counted where it ran): the
+    /// server answered with an error, or the statement never reached it.
     Storage,
+    /// The connection failed with the statement possibly sent: the server may
+    /// still commit it. Counted where it ran.
+    Unknown,
 }
 impl From<sqlx::Error> for FenceError {
     fn from(_: sqlx::Error) -> Self {
@@ -86,8 +90,8 @@ impl BatchFence {
         tx: &mut Transaction<'_, Postgres>,
         hold: Hold,
     ) -> Result<bool, sqlx::Error> {
-        // The select-list `set_config` runs for the locked row: a refused
-        // fence rolls back, so the timeout only matters when it is held.
+        // `set_config` is evaluated for a row that matches and is local to
+        // the transaction; a refused hold (no row) ends the transaction.
         let sql = match hold {
             Hold::Rows => {
                 "SELECT set_config('idle_in_transaction_session_timeout',$4,true) FROM async_jobs WHERE id=$1 AND runner_id=$2 AND runner_epoch=$3 FOR KEY SHARE"
@@ -239,7 +243,15 @@ impl BatchFence {
             .bind(f.counts.map(|c| c.failed as i32))
             .fetch_optional(&store.pool)
             .await
-            .map_err(job_storage)?;
+            .map_err(|e| {
+                let unknown = outcome_unknown(&e);
+                job_storage(e);
+                if unknown {
+                    FenceError::Unknown
+                } else {
+                    FenceError::Storage
+                }
+            })?;
         match row {
             Some(row) => Ok(row),
             // Already finished by this claim, or the claim ended.
@@ -377,6 +389,16 @@ async fn count_lines(
         .bind(job).bind(completed).bind(failed)
         .execute(&mut **tx).await.map_err(job_storage)?;
     Ok(())
+}
+
+/// Whether a failed statement may still have been applied: the connection
+/// broke with the statement possibly sent. A server error (the statement was
+/// rolled back) and a statement that never left the pool are certain.
+pub(crate) fn outcome_unknown(error: &sqlx::Error) -> bool {
+    !matches!(
+        error,
+        sqlx::Error::Database(_) | sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed
+    )
 }
 
 fn is_unique_violation(error: &sqlx::Error) -> bool {

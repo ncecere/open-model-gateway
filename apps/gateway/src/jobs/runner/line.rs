@@ -8,7 +8,8 @@ pub(super) enum Stop {
     Cancelled,
     Expired,
     Budget,
-    /// Another runner took the lease.
+    /// The run lost its claim or doubts its lease. Never a reason to end the
+    /// batch: the run leaves it for the claim that holds it next.
     Lost,
 }
 
@@ -30,6 +31,9 @@ pub(super) struct RunState {
     pub(super) pause_until: Mutex<Option<tokio::time::Instant>>,
     #[cfg(test)]
     pub(super) pauses: Arc<std::sync::atomic::AtomicUsize>,
+    /// Test-only: turns the next finished line into a soft loss.
+    #[cfg(test)]
+    pub(super) soft_loss: Arc<AtomicBool>,
 }
 impl RunState {
     pub(super) fn new(fence: BatchFence) -> Self {
@@ -44,6 +48,8 @@ impl RunState {
             pause_until: Mutex::default(),
             #[cfg(test)]
             pauses: Arc::default(),
+            #[cfg(test)]
+            soft_loss: Arc::default(),
         }
     }
     /// The batch belongs to another claim: the run writes nothing more to it.
@@ -61,7 +67,7 @@ impl RunState {
                 self.lose();
                 Ok(None)
             }
-            Err(FenceError::Storage) => Err(InferenceError::Storage.into()),
+            Err(FenceError::Storage | FenceError::Unknown) => Err(InferenceError::Storage.into()),
         }
     }
     pub(super) fn stop_reason(&self, job: &JobRow) -> Option<Stop> {
@@ -142,6 +148,10 @@ impl LineRun {
                 .await,
         ) {
             Ok(Some(true)) => {
+                #[cfg(test)]
+                if self.state.soft_loss.swap(false, Ordering::SeqCst) {
+                    self.state.lost.store(true, Ordering::SeqCst);
+                }
                 let (c, f) = if ok { (1, 0) } else { (0, 1) };
                 crate::metrics::METRICS.observe_batch_lines(
                     "gateway",

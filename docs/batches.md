@@ -97,7 +97,7 @@ The output file holds successful lines and the error file holds everything else.
 
 - **Bodies:** the endpoint's normal response shape, with the public model name.
 - **Failed lines:** the error status and body. Native provider errors carry a sanitized code and a fixed message, never the provider's text.
-- **Counts:** `request_counts` is `{total, completed, failed}`. `failed` counts lines that ran and failed (and interrupted lines). Lines that never ran appear only in the error file.
+- **Counts:** `request_counts` is `{total, completed, failed}`. `failed` counts lines that ran and failed (and interrupted lines). Lines that never ran appear only in the error file, so `completed + failed` can be less than `total` when a batch ends by cancel, expiry or a budget stop. A line that succeeded but whose result was never stored (see runner takeover below) counts as `failed`.
 - **Statuses:** `validating`, `in_progress`, `finalizing`, `cancelling`, then `completed`, `failed`, `cancelled` or `expired`.
 
 Results count toward the workspace's [storage](files-api.md) but never fail on its quota, because the work was already paid for.
