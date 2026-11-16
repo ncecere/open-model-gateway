@@ -1,12 +1,12 @@
 //! Read-only dry-run diff for a proposed OIDC group mapping (#89). Mirrors
-//! the `deployment_configuration` preview pattern (#85/PR #336): a
+//! the `deployment_configuration` preview pattern (#85): a
 //! read-only snapshot, a pure evaluator, bounded output. Nothing here
 //! writes `oidc_group_mappings`, grants or `audit_events`, and no config
 //! version is bumped. Validation reuses `directory::{MappingInput,
 //! validate_mapping}` exactly, so an invalid proposal is rejected the same
 //! way create/update would reject it.
 //!
-//! Two separate things are reported (review round 2, #89):
+//! Two separate things are reported:
 //! * `immediate`: what `directory::revoke_mapping_grants` does
 //!   unconditionally and synchronously the instant a PATCH changes any
 //!   field or a DELETE commits -- every grant the *existing* mapping
@@ -44,8 +44,7 @@ pub(super) fn routes() -> Router<Store> {
 /// Up to 200 rows per category: the bound every list in the response respects.
 const LIMIT: usize = 200;
 /// How many users a group may have before a roster lookup marks the whole
-/// preview `complete:false` instead of silently undercounting (review #89
-/// item 5). Lowered under `cfg(test)` so the overflow path is exercised
+/// preview `complete:false` instead of silently undercounting. Lowered under `cfg(test)` so the overflow path is exercised
 /// without seeding 5,000+ rows.
 #[cfg(not(test))]
 const ROSTER_LIMIT: i64 = 5000;
@@ -53,8 +52,8 @@ const ROSTER_LIMIT: i64 = 5000;
 const ROSTER_LIMIT: i64 = 3;
 
 /// The new-mapping preview's own body: unlike the existing-mapping preview
-/// (which must mirror `PATCH`'s partial-merge semantics, review #89 round
-/// 5), there is no stored row to merge against, so this is always a full
+/// (which must mirror `PATCH`'s partial-merge semantics), there is no
+/// stored row to merge against, so this is always a full
 /// replacement -- every field required, exactly like `create_mapping`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -154,7 +153,7 @@ async fn require_platform_admin(
     Ok(())
 }
 /// SCIM is bound to exactly one issuer at startup (`identity::ScimRuntime`,
-/// `crate::scim`'s module docs). Review #89 item 2: a mapping's SCIM
+/// `crate::scim`'s module docs). A mapping's SCIM
 /// roster must never be trusted unless its own `issuer` equals this one.
 /// `Unknown` only happens when no sign-in state was wired into the request
 /// at all; the real router always layers `Extension<SignIn>` (every
@@ -292,7 +291,7 @@ async fn preview_existing_mapping(
             true,
         )
     } else {
-        // `PATCH`'s own merge semantics (review #89 round 5), not a full
+        // `PATCH`'s own merge semantics, not a full
         // replacement: a field this body omits keeps its stored value.
         let current = existing_as_value(&existing);
         let (merged, b) =
@@ -326,12 +325,12 @@ async fn preview_existing_mapping(
 /// otherwise the bounded set of users who already hold a `source='group'`
 /// grant from this issuer/group (sign-in derived, so it only reflects users
 /// who have already signed in with the group, not current IdP truth).
-/// Matching is exact (review #89 item 4): the real reconciliation
+/// Matching is exact: the real reconciliation
 /// (`lifecycle::apply_group_grants`) compares `group_value` by equality,
 /// never case-folded, and SCIM's own membership resolution
 /// (`scim::groups::managed_values`/`member_values`) matches `scim_groups`'
-/// `display_name`/`external_id` the same exact way. `scim_issuer` (review
-/// #89 item 2) is the one issuer SCIM is actually bound to; a mapping
+/// `display_name`/`external_id` the same exact way. `scim_issuer`
+/// is the one issuer SCIM is actually bound to; a mapping
 /// proposed under any other issuer can never receive SCIM-sourced grants in
 /// reality, so its SCIM roster is never trusted even when `group_value`
 /// happens to match a real `scim_groups` row.
@@ -449,7 +448,7 @@ async fn render_workspace(
     Ok((Value::Array(data), total, truncated))
 }
 
-/// `immediate` section (review #89 item 1): every grant `mapping_id`
+/// `immediate` section: every grant `mapping_id`
 /// currently produces, unconditionally, plus the consequent suspensions
 /// and permanent key revocations the real write would cause the instant it
 /// commits. Only called when the write would actually revoke something
@@ -501,7 +500,7 @@ async fn render_immediate(
 
 /// The evaluator: one roster lookup plus the net before/after precedence
 /// comparison for both platform and workspace targets, no writes.
-/// `immediate` (review item 1) is added by the caller only when the real
+/// `immediate` is added by the caller only when the real
 /// write would actually revoke something; otherwise it defaults to
 /// `applies:false`.
 async fn evaluate(
@@ -512,7 +511,7 @@ async fn evaluate(
     scim_issuer: &ScimIssuer,
 ) -> Result<Value, ApiError> {
     let (members, basis, complete) = roster(tx, issuer, group_value, scim_issuer).await?;
-    // Review #89 overflow fix: whether an existing grant holder is still a
+    // Whether an existing grant holder is still a
     // group member must never be decided by whether they landed inside the
     // capped `members` array -- it is checked independently (per user,
     // against the full SCIM/sign-in-derived source) by the evaluator

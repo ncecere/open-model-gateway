@@ -314,8 +314,8 @@ pub(crate) struct GroupMembershipBasis<'a> {
 /// unconditionally -- exactly the rows `directory::revoke_mapping_grants`
 /// revokes the instant a PATCH changes any field or a DELETE commits,
 /// regardless of whether the new definition (if any) would recreate them.
-/// Review #89-2: a management write's own immediate effect is distinct from
-/// what a later sign-in/SCIM reconciliation might restore.
+/// A management write's own immediate effect is distinct from what a later
+/// sign-in/SCIM reconciliation might restore.
 pub(crate) struct MappingActiveGrants {
     pub(crate) platform: Vec<(Uuid, String)>,
     pub(crate) workspace: Vec<(Uuid, Uuid, String)>,
@@ -338,8 +338,8 @@ pub(crate) async fn mapping_active_grants(
 /// exactly but as a read: whether the write would be refused outright
 /// (stranding the last platform admin), which currently-active users would
 /// lose their only platform entitlement and be suspended, and how many
-/// distinct currently-active keys would be permanently revoked -- review
-/// #89-3: `disable_for_entitlement_loss` revokes *every* key a newly
+/// distinct currently-active keys would be permanently revoked.
+/// `disable_for_entitlement_loss` revokes *every* key a newly
 /// unentitled user holds (any workspace), not only the one lost workspace
 /// membership's keys, so a user counted in `users_suspended` has all of
 /// their keys counted here too, counted once even if they also lose a
@@ -373,10 +373,10 @@ pub(crate) async fn immediate_consequences(
 /// Rank-compared platform-role effect for one candidate user: `before`/
 /// `after` are effective role names (`None` for no entitlement), already
 /// classified `gained` (`after` outranks `before`) or `lost` (a downgrade or
-/// total loss, review #89-2's "manual member + group admin" example).
+/// total loss).
 /// `reactivated` is set when a user currently suspended for entitlement
-/// loss, still inside its grace window, would regain entitlement (review
-/// #89-3); `would_be_suspended` when a currently active user would lose
+/// loss, still inside its grace window, would regain entitlement;
+/// `would_be_suspended` when a currently active user would lose
 /// every platform grant.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct PlatformEffectRow {
@@ -394,7 +394,7 @@ fn platform_role_name(rank: i32) -> Option<String> {
         _ => None,
     }
 }
-/// Net before/after effective platform role (review #89-2's precedence: the
+/// Net before/after effective platform role (precedence: the
 /// highest rank across every active grant, any source) for every roster
 /// member plus every current holder of `proposal.existing_mapping_id`'s own
 /// platform grants, after reconciliation would apply `proposal` -- i.e. with
@@ -409,7 +409,7 @@ fn platform_role_name(rank: i32) -> Option<String> {
 /// currently *active* user, or a currently disabled one exactly when the
 /// real reactivation condition in `synchronize_groups`/
 /// `synchronize_scim_groups` would fire (`disable_reason='entitlement_loss'
-/// AND cleanup_due_at>now()`, review #89-4): an administratively suspended
+/// AND cleanup_due_at>now()`): an administratively suspended
 /// user, or one whose grace window already expired, stays at `after=None`
 /// regardless of any grant row, because nothing in the real write path
 /// would lift their suspension. Cleaned users are always excluded. Never
@@ -511,27 +511,27 @@ fn workspace_role_name(rank: i32) -> Option<String> {
 /// mapping's own new contribution (both the entitlement check below and
 /// the workspace-role check in the final `SELECT`) is gated on
 /// `membership`, an independent per-user `EXISTS` check, never on whether
-/// the candidate happened to land inside the capped `roster` array (#89
-/// overflow fix): the roster array only discovers additional candidates.
+/// the candidate happened to land inside the capped `roster` array: the
+/// roster array only discovers additional candidates.
 /// `effective_workspace_memberships` requires live platform entitlement
-/// too (review #89-4), so `before` is forced to `None` for a user with no
+/// too, so `before` is forced to `None` for a user with no
 /// *current* active platform grant or who is currently disabled (ineligible
 /// for automatic reactivation). `after` instead reuses the exact
-/// `after_rank > 0` predicate of [`preview_platform_effect`] (adversarial
-/// finding, lifecycle.rs): the same `proposal` can itself change the
+/// `after_rank > 0` predicate of [`preview_platform_effect`]: the same
+/// `proposal` can itself change the
 /// user's platform entitlement (scenario A -- turning a user's sole
 /// platform mapping into a workspace mapping must not show a workspace
 /// gain, since applying it suspends them first) or a disabled user's grace-
 /// window reactivation can restore it (scenario B -- an entitlement-loss-
 /// suspended user with a *surviving*, unrelated platform grant reactivates
 /// during reconciliation and so still gains the workspace). Using the
-/// user's raw current `disabled_at`/grant state for `after`, as before,
-/// missed both. Candidates also include every *other*, unrelated
+/// user's raw current `disabled_at`/grant state for `after` would miss
+/// both. Candidates also include every *other*, unrelated
 /// shared-workspace membership (manual or group) a platform-entitlement
 /// candidate -- a roster member, or a current holder of
 /// `proposal.existing_mapping_id`'s own platform grants, the exact same
-/// set [`preview_platform_effect`] evaluates -- already holds (adversarial
-/// finding, round 6): a platform mapping's deletion/edit can suspend or
+/// set [`preview_platform_effect`] evaluates -- already holds: a platform
+/// mapping's deletion/edit can suspend or
 /// reactivate a user outright, which cascades into *every* Team/Project
 /// membership they hold, not only a workspace this mapping happens to
 /// also name. A workspace-target proposal cannot itself change platform
