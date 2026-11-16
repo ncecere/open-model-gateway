@@ -12,8 +12,9 @@ pub(super) enum Stop {
     Lost,
 }
 
-#[derive(Default)]
 pub(super) struct RunState {
+    /// This run's claim of the batch; every write it makes carries it.
+    pub(super) fence: BatchFence,
     pub(super) cancel: AtomicBool,
     pub(super) lost: AtomicBool,
     pub(super) budget: AtomicBool,
@@ -23,6 +24,35 @@ pub(super) struct RunState {
     pub(super) pauses: Arc<std::sync::atomic::AtomicUsize>,
 }
 impl RunState {
+    pub(super) fn new(fence: BatchFence) -> Self {
+        Self {
+            fence,
+            cancel: AtomicBool::default(),
+            lost: AtomicBool::default(),
+            budget: AtomicBool::default(),
+            busy_streak: AtomicU32::default(),
+            pause_until: Mutex::default(),
+            #[cfg(test)]
+            pauses: Arc::default(),
+        }
+    }
+    /// The batch belongs to another claim: the run writes nothing more to it.
+    pub(super) fn lose(&self) {
+        if !self.lost.swap(true, Ordering::SeqCst) {
+            tracing::warn!(job_id = %self.fence.job, "batch runner no longer holds its batch; it stops working on it");
+        }
+    }
+    /// A fenced write's result: a refused write ends the run's work.
+    pub(super) fn written<T>(&self, result: FenceResult<T>) -> Result<Option<T>, FenceError> {
+        match result {
+            Ok(v) => Ok(Some(v)),
+            Err(FenceError::Stale) => {
+                self.lose();
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
     pub(super) fn stop_reason(&self, job: &JobRow) -> Option<Stop> {
         if self.lost.load(Ordering::SeqCst) {
             Some(Stop::Lost)
@@ -79,24 +109,36 @@ pub(super) struct LineRun {
 impl LineRun {
     async fn emit(&self, records: &mpsc::Sender<Record>, line: i32, error: bool, value: Value) {
         // A closed writer means the batch is stopping; the line is then
-        // reported as unavailable at finalization.
+        // reported as unavailable at finalization. A run that lost the batch
+        // has nothing to store.
+        if self.state.lost.load(Ordering::SeqCst) {
+            return;
+        }
         let _ = records.send(Record { line, error, value }).await;
     }
     async fn finished(&self, line: i32, ok: bool, status: Option<u16>, code: Option<&str>) {
-        if store::finish_line(&self.store, self.job.id, line, ok, status, code)
-            .await
-            .is_err()
-        {
-            tracing::warn!(job_id = %self.job.id, "batch line state not recorded");
+        let fence = &self.state.fence;
+        match self.state.written(
+            fence
+                .finish_line(&self.store, line, ok, status, code, true)
+                .await,
+        ) {
+            Ok(Some(true)) => {
+                let (c, f) = if ok { (1, 0) } else { (0, 1) };
+                crate::metrics::METRICS.observe_batch_lines(
+                    "gateway",
+                    &self.job.provider,
+                    c as u64,
+                    f as u64,
+                );
+            }
+            // Already moved out of `running` (interrupted by the claim that
+            // took the batch over): it is counted once, by that move.
+            Ok(Some(false)) | Ok(None) => {}
+            Err(_) => {
+                tracing::warn!(job_id = %self.job.id, "batch line state not recorded");
+            }
         }
-        let (c, f) = if ok { (1, 0) } else { (0, 1) };
-        let _ = store::progress(&self.store, self.job.id, c, f).await;
-        crate::metrics::METRICS.observe_batch_lines(
-            "gateway",
-            &self.job.provider,
-            c as u64,
-            f as u64,
-        );
     }
 
     /// Run a claimed line (its `batch_lines` row exists) on its pinned route.
@@ -168,15 +210,12 @@ impl LineRun {
                         // Explicit retry policy only: a new attempt with its
                         // own execution and reservation.
                         let (status, _) = crate::protocols::batch_line_error(false, e);
-                        let _ = store::finish_line(
-                            &self.store,
-                            self.job.id,
-                            n,
-                            false,
-                            Some(status),
-                            Some(e.code()),
-                        )
-                        .await;
+                        let recorded = self
+                            .state
+                            .fence
+                            .finish_line(&self.store, n, false, Some(status), Some(e.code()), false)
+                            .await;
+                        let _ = self.state.written(recorded);
                         tokio::time::sleep(Duration::from_secs(1u64 << attempt)).await;
                         let next = Uuid::now_v7();
                         if self.claim_retry(n, attempt, next, pin).await {
@@ -185,7 +224,8 @@ impl LineRun {
                             continue;
                         }
                         // Could not claim the retry: the failure stands.
-                        let _ = store::progress(&self.store, self.job.id, 0, 1).await;
+                        let counted = self.state.fence.progress(&self.store, 0, 1).await;
+                        let _ = self.state.written(counted);
                         let value =
                             lines::failure_line(&line.custom_id, Some(execution), self.endpoint, e);
                         self.emit(&records, n, true, value).await;
@@ -217,16 +257,18 @@ impl LineRun {
     /// (waiting for room; a stop leaves the failure standing).
     async fn claim_retry(&self, n: i32, attempts: i16, execution: Uuid, pin: Option<Pin>) -> bool {
         let Some(pin) = pin else {
-            return matches!(
-                store::retry_line(&self.store, self.job.id, n, attempts, execution).await,
-                Ok(true)
-            );
+            let claimed = self
+                .state
+                .fence
+                .retry_line(&self.store, n, attempts, execution)
+                .await;
+            return matches!(self.state.written(claimed), Ok(Some(true)));
         };
         loop {
             match self
                 .scheduler
                 .claim_retry(
-                    self.job.id,
+                    &self.state.fence,
                     n,
                     attempts,
                     execution,
@@ -238,6 +280,10 @@ impl LineRun {
                 Ok(Some(claimed)) => return claimed,
                 Ok(None) if !self.state.should_stop(&self.job) => {
                     tokio::time::sleep(POLL).await;
+                }
+                Err(FenceError::Stale) => {
+                    self.state.lose();
+                    return false;
                 }
                 _ => return false,
             }

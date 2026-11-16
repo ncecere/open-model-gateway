@@ -19,6 +19,7 @@
 //! by the principal's workspace, so another workspace's id is "not found".
 //! Client ids are gateway ids; upstream ids never leave the gateway.
 pub mod batch;
+pub(crate) mod fence;
 pub(crate) mod io;
 pub(crate) mod lines;
 pub mod native;

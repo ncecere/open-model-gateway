@@ -2269,8 +2269,19 @@ async fn lines_never_run_twice_under_concurrency(pool: PgPool) {
     }
     // The claim itself is exclusive: one of many concurrent claims wins.
     let job = &batches[0];
+    let (runner, epoch): (Uuid, i64) =
+        sqlx::query_as("SELECT runner_id,runner_epoch FROM async_jobs WHERE id=$1")
+            .bind(job.id)
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    let fence = super::fence::BatchFence {
+        job: job.id,
+        runner,
+        epoch,
+    };
     let claims = futures_util::future::join_all(
-        (0..8).map(|_| store::claim_line(&f.store, job.id, job.workspace_id, 999, Uuid::new_v4())),
+        (0..8).map(|_| fence.claim_line(&f.store, job.workspace_id, 999, Uuid::new_v4())),
     )
     .await;
     assert_eq!(claims.iter().filter(|c| matches!(c, Ok(true))).count(), 1);

@@ -7,6 +7,10 @@
 //!   lease (a crashed runner's batches resume elsewhere). Lines run on a
 //!   bounded pool (`GATEWAY_BATCH_WORKERS`, default 4) with a per-batch cap
 //!   (`GATEWAY_BATCH_CONCURRENCY`, default 2).
+//! - **Claim fence (0081, [`super::fence`]):** each claim bumps the batch's
+//!   epoch; every write of a run checks it in its own transaction, so a run
+//!   that lost the batch (a stall past the lease, failed renewals) writes
+//!   nothing more and stops.
 //! - **Scheduling (0022, [`super::schedule`]):** a line starts only when its
 //!   route has capacity: the route's window, live traffic and server load
 //!   gates are open and a fair-share claim under the route's concurrency
@@ -42,6 +46,7 @@ use serde_json::{Value, json};
 use tokio::sync::{Semaphore, mpsc};
 
 use super::{
+    fence::{BatchFence, FenceError, FenceResult},
     io::{LazySink, LineReader, RESULT_LINE_BYTES},
     lines::{self, NotRun},
     schedule::{Claim, Pause, Scheduler, WaitRow},
@@ -70,6 +75,9 @@ use segments::write_segments;
 /// Runner lease of a claimed batch, renewed every [`RENEW`].
 const LEASE_SECONDS: f64 = 60.0;
 const RENEW: Duration = Duration::from_secs(15);
+/// A run whose renewals keep failing stops working on its batch this long
+/// after the last success: the database lease may have ended by then.
+const RENEW_TRUST: Duration = Duration::from_secs(45);
 /// How often the runner looks for runnable batches.
 const TICK: Duration = Duration::from_secs(2);
 /// Batches one process runs at once.
@@ -141,17 +149,32 @@ impl Runner {
         if room == 0 {
             return Ok(0);
         }
-        let claimed =
-            store::claim_gateway(&self.jobs.store, self.id, LEASE_SECONDS, room as i64).await?;
+        // The runs still going keep their claim: a claim of the same batch
+        // would end it (the epoch moves on) without starting another run.
+        let running: Vec<Uuid> = self
+            .active
+            .lock()
+            .expect("runner set")
+            .iter()
+            .copied()
+            .collect();
+        let claimed = store::claim_gateway(
+            &self.jobs.store,
+            self.id,
+            LEASE_SECONDS,
+            room as i64,
+            &running,
+        )
+        .await?;
         let started = claimed.len();
-        for job in claimed {
+        for (job, fence) in claimed {
             if !self.active.lock().expect("runner set").insert(job.id) {
                 continue;
             }
             let runner = self.clone();
             tokio::spawn(async move {
                 let id = job.id;
-                if runner.run(job).await.is_err() {
+                if runner.run(job, fence).await.is_err() {
                     tracing::warn!(job_id = %id, "gateway-run batch interrupted; it resumes after its lease");
                 }
                 runner.active.lock().expect("runner set").remove(&id);
@@ -187,18 +210,19 @@ impl Runner {
     /// Claim and run one batch to completion in the foreground (tests and
     /// operator tooling). `false` when nothing was runnable.
     pub async fn run_next(&self) -> JobResult<bool> {
-        let Some(job) = store::claim_gateway(&self.jobs.store, self.id, LEASE_SECONDS, 1)
-            .await?
-            .pop()
+        let Some((job, fence)) =
+            store::claim_gateway(&self.jobs.store, self.id, LEASE_SECONDS, 1, &[])
+                .await?
+                .pop()
         else {
             return Ok(false);
         };
-        self.run(job).await?;
+        self.run(job, fence).await?;
         Ok(true)
     }
 
     /// Run a claimed batch: resume, dispatch remaining lines, finalize.
-    async fn run(&self, job: JobRow) -> JobResult<()> {
+    async fn run(&self, job: JobRow, fence: BatchFence) -> JobResult<()> {
         let files = self.jobs.files()?.clone();
         let engine = self
             .jobs
@@ -210,26 +234,36 @@ impl Runner {
         let state = Arc::new(RunState {
             #[cfg(test)]
             pauses: self.jobs.rate_limit_pauses.clone(),
-            ..RunState::default()
+            ..RunState::new(fence)
         });
-        // Lease renewal (and cancel observation) while the batch runs.
+        // Lease renewal (and cancel observation) while the batch runs. A
+        // renewal the fence refuses ends the run's work; so does a failing
+        // database for longer than the lease can be trusted.
         let renewal = {
             let store = self.jobs.store.clone();
             let state = state.clone();
-            let (id, runner) = (job.id, self.id);
             tokio::spawn(async move {
+                let mut renewed = Instant::now();
                 loop {
-                    match store::renew_lease(&store, id, runner, LEASE_SECONDS).await {
+                    let attempt = Instant::now();
+                    match fence.renew(&store, LEASE_SECONDS).await {
                         Ok(Some(cancel)) => {
+                            renewed = attempt;
                             if cancel {
                                 state.cancel.store(true, Ordering::SeqCst);
                             }
                         }
                         Ok(None) => {
-                            state.lost.store(true, Ordering::SeqCst);
+                            state.lose();
                             return;
                         }
-                        Err(_) => {}
+                        Err(_) => {
+                            tracing::warn!(job_id = %fence.job, "batch lease renewal failed");
+                            if renewed.elapsed() >= RENEW_TRUST {
+                                state.lose();
+                                return;
+                            }
+                        }
                     }
                     tokio::time::sleep(RENEW).await;
                 }
@@ -240,7 +274,7 @@ impl Runner {
             .await;
         renewal.abort();
         if result.is_err() {
-            let _ = store::release_runner(&self.jobs.store, job.id, self.id).await;
+            let _ = fence.release(&self.jobs.store).await;
         }
         result
     }
@@ -258,15 +292,19 @@ impl Runner {
         if job.job_state().is_terminal() {
             // A runner stopped after recording the results but before
             // settling: only the settlement and cleanup remain.
-            return self.settle_finished(job, files).await;
+            return self.settle_finished(job, files, &state).await;
         }
         let claimed = self.resume(job, &state).await?;
+        if state.lost.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         let line = self.line_run(job, engine, endpoint, &state);
         let (records, receiver) = mpsc::channel::<Record>(64);
         let writer = tokio::spawn(write_segments(
             store.clone(),
             files.clone(),
             job.clone(),
+            state.clone(),
             receiver,
         ));
         let per_batch = Arc::new(Semaphore::new(self.jobs.limits.batch_concurrency));
@@ -299,7 +337,7 @@ impl Runner {
             return Ok(());
         }
         let stop = state.stop_reason(job);
-        self.finalize(job, files, work, stop).await
+        self.finalize(job, files, work, stop, &state).await
     }
 
     /// Resume a claimed batch: observe a recorded cancel, interrupt (and
@@ -310,12 +348,16 @@ impl Runner {
         if job.cancel_requested_at.is_some() {
             state.cancel.store(true, Ordering::SeqCst);
         }
-        // Resume: lines a crashed runner left running are never re-executed.
-        let interrupted = store::interrupt_running(store, job.id).await?;
-        if interrupted > 0 {
-            store::progress(store, job.id, 0, interrupted).await?;
+        // Resume: lines a crashed or lost runner left running are never
+        // re-executed (and are counted failed in the same transaction).
+        let fence = &state.fence;
+        if state
+            .written(fence.interrupt_running(store).await)?
+            .is_none()
+            || state.written(fence.mark_running(store).await)?.is_none()
+        {
+            return Ok(HashSet::new());
         }
-        store::mark_running(store, job.id).await?;
         let claimed: HashSet<i32> = store::line_states(store, job.id)
             .await?
             .into_iter()
@@ -338,7 +380,7 @@ impl Runner {
             store: store.clone(),
             batch: LineContext {
                 envelope: job.execution_id,
-                job: job.id,
+                fence: state.fence,
             },
             pins: Mutex::default(),
             claimed: Mutex::default(),
@@ -359,6 +401,7 @@ impl Runner {
     async fn publish_demand(
         &self,
         job: &JobRow,
+        state: &RunState,
         report: BTreeMap<Uuid, WaitRow>,
         published: &mut Option<(Instant, Vec<WaitRow>)>,
     ) {
@@ -371,13 +414,17 @@ impl Runner {
             .is_none_or(|(at, last)| *last != rows || at.elapsed() >= HEARTBEAT);
         if due {
             let legit = rows.iter().any(|r| r.reason.is_some_and(Pause::legitimate));
-            if self
+            let published_now = self
                 .scheduler
-                .publish_waits(job, &rows, legit)
-                .await
-                .is_err()
-            {
-                tracing::warn!(job_id = %job.id, "batch demand not recorded");
+                .publish_waits(&state.fence, job.workspace_id, &rows, legit)
+                .await;
+            if let Err(e) = published_now {
+                match e {
+                    FenceError::Stale => state.lose(),
+                    FenceError::Storage => {
+                        tracing::warn!(job_id = %job.id, "batch demand not recorded");
+                    }
+                }
             }
             *published = Some((Instant::now(), rows));
         }
@@ -390,13 +437,27 @@ impl Runner {
         files: &crate::filestore::FileStorage,
         work: Uuid,
         stop: Option<Stop>,
+        state: &RunState,
     ) -> JobResult<()> {
         let store = &self.jobs.store;
-        if self.scheduler.clear_waits(job.id).await.is_err() {
-            tracing::warn!(job_id = %job.id, "batch demand not cleared; it goes stale");
+        let fence = &state.fence;
+        match self.scheduler.clear_waits(fence).await {
+            Ok(()) => {}
+            Err(FenceError::Stale) => {
+                state.lose();
+                return Ok(());
+            }
+            Err(FenceError::Storage) => {
+                tracing::warn!(job_id = %job.id, "batch demand not cleared; it goes stale");
+            }
         }
-        if job.cancel_requested_at.is_none() && stop != Some(Stop::Cancelled) {
-            store::set_status(store, job.id, "finalizing").await?;
+        if job.cancel_requested_at.is_none()
+            && stop != Some(Stop::Cancelled)
+            && state
+                .written(fence.set_status(store, "finalizing").await)?
+                .is_none()
+        {
+            return Ok(());
         }
         let hex = job.id.simple();
         let template = |suffix: &str| {
@@ -488,43 +549,60 @@ impl Runner {
             Some(Stop::Expired) => JobState::Expired,
             Some(Stop::Budget) | Some(Stop::Lost) => JobState::Failed,
         };
-        let job = store::finish_batch(
-            store,
-            job.id,
-            &Finished {
-                state: final_state,
-                error_code: (stop == Some(Stop::Budget)).then_some("budget_exceeded"),
-                output_file,
-                error_file,
-                counts: job.request_total.map(|total| RequestCounts {
-                    total: total.max(0) as u32,
-                    completed: completed.max(0) as u32,
-                    failed: failed.max(0) as u32,
-                }),
-            },
-        )
-        .await?;
+        let finished = fence
+            .finish_batch(
+                store,
+                &Finished {
+                    state: final_state,
+                    error_code: (stop == Some(Stop::Budget)).then_some("budget_exceeded"),
+                    output_file,
+                    error_file,
+                    counts: job.request_total.map(|total| RequestCounts {
+                        total: total.max(0) as u32,
+                        completed: completed.max(0) as u32,
+                        failed: failed.max(0) as u32,
+                    }),
+                },
+            )
+            .await;
+        // Result files of a run that lost the batch are not the batch's: no
+        // row references them, so they are removed.
+        let Some(job) = state.written(finished)? else {
+            for file in [output_file, error_file].into_iter().flatten() {
+                let _ = files.delete(file, Some(job.workspace_id)).await;
+            }
+            return Ok(());
+        };
         let _ = segments;
-        self.settle_finished(&job, files).await?;
+        self.settle_finished(&job, files, state).await?;
         crate::metrics::METRICS.observe_batch_finished("gateway", final_state.as_str());
         Ok(())
     }
 
-    /// Settle a finished batch (the lease is still held, so no other runner
-    /// touches it): release what no line used (lines keep their own
+    /// Settle a finished batch (this run's claim is still current, checked in
+    /// the transaction that closes the envelope): release what no line used (lines keep their own
     /// settlement or retained unknown holds), mark it settled, then delete
     /// the segments and the private copy.
     async fn settle_finished(
         &self,
         job: &JobRow,
         files: &crate::filestore::FileStorage,
+        state: &RunState,
     ) -> JobResult<()> {
+        use crate::governance::batch::{Closed, close_gateway_batch};
         let store = &self.jobs.store;
         let elapsed = (Utc::now() - job.created_at).num_milliseconds().max(0) as u64;
-        if !crate::governance::batch::close_batch(store, job.execution_id, elapsed, false).await? {
-            tracing::warn!(job_id = %job.id, "batch envelope no longer pending; its hold is left to reconciliation");
+        match close_gateway_batch(store, job.execution_id, elapsed, &state.fence).await? {
+            Closed::Settled => {}
+            Closed::NotPending => {
+                tracing::warn!(job_id = %job.id, "batch envelope no longer pending; its hold is left to reconciliation");
+            }
+            Closed::Fenced => {
+                state.lose();
+                return Ok(());
+            }
         }
-        store::mark_settled(store, job.id).await?;
+        state.fence.mark_settled(store).await?;
         for (_, file) in store::segments(store, job.id).await? {
             let _ = files.delete(file, Some(job.workspace_id)).await;
         }

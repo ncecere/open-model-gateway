@@ -9,17 +9,19 @@ fn encode_record(r: &Record) -> Result<Vec<u8>, InferenceError> {
     Ok(bytes)
 }
 
-/// Writes one segment file and records it; returns whether it was recorded
-/// (the next segment number is then taken). A segment that is not stored or
-/// recorded leaves its lines reported unavailable.
+/// Writes one segment file and records it under the next segment number
+/// (taken in the database, inside the fence). A segment that is not stored or
+/// recorded leaves its lines reported unavailable; one the run is no longer
+/// allowed to record is deleted and ends the run's work.
 async fn store_segment(
     store: &Store,
     files: &crate::filestore::FileStorage,
     job: &JobRow,
-    next_seq: i32,
+    state: &RunState,
+    part: u32,
     body: Vec<u8>,
     held: &[i32],
-) -> bool {
+) {
     let mut sink = LazySink::new(
         files,
         io::batch_file(
@@ -27,7 +29,11 @@ async fn store_segment(
             job.workspace_id,
             job.api_key_id,
             job.user_id,
-            format!("batch_{}_part_{next_seq}.jsonl", job.id.simple()),
+            format!(
+                "batch_{}_part_{}_{part}.jsonl",
+                job.id.simple(),
+                state.fence.epoch
+            ),
         ),
     );
     let stored = async {
@@ -37,20 +43,17 @@ async fn store_segment(
     .await;
     match stored {
         Ok(Some(file)) => {
-            if store::insert_segment(store, job.id, job.workspace_id, next_seq, file, held)
-                .await
-                .is_err()
-            {
+            let recorded = state
+                .fence
+                .insert_segment(store, job.workspace_id, file, held)
+                .await;
+            if !matches!(state.written(recorded), Ok(Some(_))) {
                 let _ = files.delete(file, Some(job.workspace_id)).await;
                 tracing::warn!(job_id = %job.id, "batch segment not recorded; its lines are reported unavailable");
-                false
-            } else {
-                true
             }
         }
         _ => {
             tracing::warn!(job_id = %job.id, "batch segment not stored; its lines are reported unavailable");
-            false
         }
     }
 }
@@ -60,13 +63,10 @@ pub(super) async fn write_segments(
     store: Store,
     files: crate::filestore::FileStorage,
     job: JobRow,
+    state: Arc<RunState>,
     mut records: mpsc::Receiver<Record>,
 ) -> Result<(), InferenceError> {
-    let mut next_seq = store::segments(&store, job.id)
-        .await
-        .map_err(|_| InferenceError::Storage)?
-        .last()
-        .map_or(0, |s| s.0 + 1);
+    let mut part = 0u32;
     let mut buffer: Vec<u8> = Vec::new();
     let mut lines: Vec<i32> = Vec::new();
     let mut open = true;
@@ -93,8 +93,11 @@ pub(super) async fn write_segments(
         }
         let body = std::mem::take(&mut buffer);
         let held = std::mem::take(&mut lines);
-        if store_segment(&store, &files, &job, next_seq, body, &held).await {
-            next_seq += 1;
+        // A run that lost the batch stores nothing more; what it holds is
+        // dropped (the owner reports those lines unavailable).
+        if !state.lost.load(Ordering::SeqCst) {
+            store_segment(&store, &files, &job, &state, part, body, &held).await;
+            part += 1;
         }
     }
     Ok(())
