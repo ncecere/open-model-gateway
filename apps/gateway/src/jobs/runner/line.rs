@@ -16,7 +16,12 @@ pub(super) struct RunState {
     /// This run's claim of the batch; every write it makes carries it.
     pub(super) fence: BatchFence,
     pub(super) cancel: AtomicBool,
+    /// The run stops working on the batch: the fence refused a write, or the
+    /// lease can no longer be trusted.
     pub(super) lost: AtomicBool,
+    /// The fence refused a write: the batch belongs to another claim, so
+    /// nothing the run holds may be stored.
+    pub(super) fenced: AtomicBool,
     pub(super) budget: AtomicBool,
     pub(super) busy_streak: AtomicU32,
     pub(super) pause_until: Mutex<Option<tokio::time::Instant>>,
@@ -29,6 +34,7 @@ impl RunState {
             fence,
             cancel: AtomicBool::default(),
             lost: AtomicBool::default(),
+            fenced: AtomicBool::default(),
             budget: AtomicBool::default(),
             busy_streak: AtomicU32::default(),
             pause_until: Mutex::default(),
@@ -38,7 +44,8 @@ impl RunState {
     }
     /// The batch belongs to another claim: the run writes nothing more to it.
     pub(super) fn lose(&self) {
-        if !self.lost.swap(true, Ordering::SeqCst) {
+        self.lost.store(true, Ordering::SeqCst);
+        if !self.fenced.swap(true, Ordering::SeqCst) {
             tracing::warn!(job_id = %self.fence.job, "batch runner no longer holds its batch; it stops working on it");
         }
     }
@@ -111,7 +118,7 @@ impl LineRun {
         // A closed writer means the batch is stopping; the line is then
         // reported as unavailable at finalization. A run that lost the batch
         // has nothing to store.
-        if self.state.lost.load(Ordering::SeqCst) {
+        if self.state.fenced.load(Ordering::SeqCst) {
             return;
         }
         let _ = records.send(Record { line, error, value }).await;

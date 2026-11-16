@@ -93,9 +93,9 @@ pub(super) async fn write_segments(
         }
         let body = std::mem::take(&mut buffer);
         let held = std::mem::take(&mut lines);
-        // A run that lost the batch stores nothing more; what it holds is
+        // A run the fence refused stores nothing more; what it holds is
         // dropped (the owner reports those lines unavailable).
-        if !state.lost.load(Ordering::SeqCst) {
+        if !state.fenced.load(Ordering::SeqCst) {
             store_segment(&store, &files, &job, &state, part, body, &held).await;
             part += 1;
         }

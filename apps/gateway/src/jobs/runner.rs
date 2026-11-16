@@ -260,7 +260,10 @@ impl Runner {
                         Err(_) => {
                             tracing::warn!(job_id = %fence.job, "batch lease renewal failed");
                             if renewed.elapsed() >= RENEW_TRUST {
-                                state.lose();
+                                // The lease may have ended, but nothing says
+                                // it has: stop starting work, and let the
+                                // fence decide what is still written.
+                                state.lost.store(true, Ordering::SeqCst);
                                 return;
                             }
                         }
