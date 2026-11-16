@@ -14,7 +14,7 @@ Run from the repository root. None of them make paid provider calls or touch the
 | `cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact` | Anthropic terminal fidelity, ordinary SDKs, runtime-role settlement/unknown holds and cancellation | Disposable cluster only; changes maintenance-database ACLs. Run sequentially after the runtime ACL probe, never via an unrestricted ignored-test sweep; requires `npm ci` |
 | `npm run typecheck:web` / `npm run test:web` / `npm run build:web` | SPA types, Vitest unit/component tests, production build | Node 22 |
 | `npm run test:browser` | Playwright end-to-end journey and axe accessibility scans (below) | Disposable PostgreSQL, Rust, Chromium (`npx playwright install chromium`) |
-| `npm run test:demo` | Local demo issuer and runtime helper | Node, Python 3 |
+| `npm run test:demo` | Local demo issuer and runtime helper, the Spark environment script (`tests/spark-env.test.py`) and the journey suite's own tests: recorder, redaction, cleanup, order independence, loopback refusal and the feature map (`tests/journeys.test.py`, #592) | Node, Python 3.12 |
 | `npm run test:ci` | CI graph/refusal policy and synthetic Cargo/libtest discovery, exact-once sharding and execution counts (no Rust builds) | Node 22, `npm ci` |
 | `npm run test:structure` | [Structure ratchet](#structure-ratchet): production lines per gateway source file against the checked-in allowance list, the Clippy switches and marker count, and unit tests of each rule (reads files only; no Rust build) | Node 22 |
 | `npm run test:rules` | Dockerfile entrypoint rule of [AGENTS.md rules and their checks](#agentsmd-rules-and-their-checks): the final stage runs exactly `open-model-gateway serve` (reads the Dockerfiles only) | Node 22 |
@@ -553,6 +553,18 @@ GATEWAY_OIDC_CLIENT_ID=gateway-browser-smoke
 ```
 
 Do not set a client secret. Start the gateway, browse to port 18081, and use the sign-in link. Stop both fixtures and remove only their disposable database afterward.
+
+## Release candidate: Spark environment and journeys (#592)
+
+Before tagging a minor or patch release, run the candidate on the Spark test platform (never the production cluster) and run the journey suite against it. The suite signs in as the five demo personas through the real OIDC flow and exercises sign-in and sign-out, `/me`, workspaces, keys (create, rotate, disable, revoke, and that a revoked key stops authenticating), inference authentication and the documented refusals per protocol, members and invitations, platform administration, the auditor's read-only boundary, access requests and reviews, reports and usage, health and the SPA fallback, each with its refusal cases. [Journeys](journeys.md) has the feature map (every flow with the journey and checks that cover it, or why it is not covered), the guarantees and what each journey leaves behind.
+
+1. `python3 -I scripts/spark-env.py up rc --ref <tag or candidate commit>`
+2. `python3 -I scripts/spark-env.py forward rc &`, recording `$!` and its `kubectl` child (`pgrep -P`) so both can be stopped; wait for `/health/ready` on `http://127.0.0.1:3000`.
+3. `python3 -I scripts/journeys run --base http://127.0.0.1:3000 --summary rc-journeys.json`. Run it twice in a row on the same environment (re-runnability), and once with `--only <a> <b>` or `--shuffle`. Exit code 0 is the bar: any failed check, or a journey that errored, blocks the release until understood. A failure caused by the gateway is kept as a failing check and filed as an issue; do not weaken the journey.
+4. Attach `rc-journeys.json` to the release PR. It holds only check names, expected and actual HTTP statuses and timings per journey, never a body, cookie, key or token.
+5. Stop the forward (the recorded process and its child; confirm nothing listens on 3000 and 18084), then `python3 -I scripts/spark-env.py down rc` and confirm `status` lists no environment.
+
+The demo has no model server or provider, so no generation completes here: a candidate that changes inference behaviour also needs the provider-backed checks the release process already requires. The suite is not a substitute for `npm run test:browser`, which covers the UI.
 
 ## Single-host staging rehearsal
 
