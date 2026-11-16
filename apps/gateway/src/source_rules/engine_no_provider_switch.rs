@@ -430,11 +430,24 @@ pub(super) fn name_problems(names: &Names) -> Vec<String> {
     out
 }
 
-/// `use a::Provider as P;` anywhere in a file: alias -> original name.
+/// `use a::Provider as P;` and `type P = a::Provider;` anywhere in a file:
+/// alias -> original name.
 #[derive(Default)]
 struct Aliases(BTreeMap<String, String>);
 
 impl<'ast> Visit<'ast> for Aliases {
+    fn visit_item_type(&mut self, item: &'ast syn::ItemType) {
+        if let syn::Type::Path(path) = &*item.ty
+            && let Some(last) = path.path.segments.last()
+        {
+            self.0.insert(
+                item.ident.unraw().to_string(),
+                last.ident.unraw().to_string(),
+            );
+        }
+        syn::visit::visit_item_type(self, item);
+    }
+
     fn visit_use_rename(&mut self, rename: &'ast syn::UseRename) {
         self.0.insert(
             rename.rename.unraw().to_string(),
@@ -488,9 +501,19 @@ impl Finder<'_> {
     }
 
     fn segments(&mut self, segments: &[String]) {
+        // Aliases may chain (`type K = Client; type Client = UpstreamClient;`).
         let segments: Vec<String> = segments
             .iter()
-            .map(|s| self.aliases.get(s).cloned().unwrap_or_else(|| s.clone()))
+            .map(|s| {
+                let mut name = s.clone();
+                for _ in 0..4 {
+                    match self.aliases.get(&name) {
+                        Some(original) => name = original.clone(),
+                        None => break,
+                    }
+                }
+                name
+            })
             .collect();
         for pair in segments.windows(2) {
             if pair[0] == "providers" {
@@ -538,10 +561,15 @@ impl Finder<'_> {
                 let last = prefix
                     .last()
                     .map(|l| self.aliases.get(l).cloned().unwrap_or_else(|| l.clone()));
-                if let Some(last) = last
-                    && self.names.enums.contains_key(&last)
-                {
-                    self.hit(format!("glob import of the provider-kind enum {last}"));
+                if let Some(last) = last {
+                    if self.names.enums.contains_key(&last) {
+                        self.hit(format!("glob import of the provider-kind enum {last}"));
+                    } else if self.strict && last == "providers" {
+                        self.hit(
+                            "glob import of providers (the engine may take only ProviderAdapter and ProviderRegistry)"
+                                .to_owned(),
+                        );
+                    }
                 }
             }
             syn::UseTree::Group(g) => {
@@ -956,6 +984,49 @@ mod tests {
              fn g() { let _ = Color::Anthropic; }",
         );
         assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn type_aliases_resolve_and_a_providers_glob_is_refused_in_the_engine() {
+        for (code, what) in [
+            (
+                "type P = telemetry::Provider;\nfn f() { let _ = P::Anthropic; }",
+                "Provider::Anthropic",
+            ),
+            (
+                "type C = crate::providers::messages::ProviderClass;\nfn f(c: C) -> bool { matches!(c, C::Bedrock) }",
+                "ProviderClass::Bedrock",
+            ),
+            (
+                "type Client = UpstreamClient; type K = Client;\nfn f() { let _ = K::Local; }",
+                "UpstreamClient::Local",
+            ),
+            (
+                "type A = crate::providers::anthropic::AnthropicAdapter;\nfn f(a: A) {}",
+                "adapter type AnthropicAdapter",
+            ),
+            ("use crate::providers::*;", "glob import of providers"),
+            (
+                "use crate::providers::{ProviderAdapter, *};",
+                "glob import of providers",
+            ),
+        ] {
+            let found = engine(code);
+            assert!(
+                found.iter().any(|p| p.contains(what)),
+                "{what} in {found:?} for {code}"
+            );
+        }
+        // Outside the engine a glob of `providers` is not a switch by itself.
+        let names = fixture_names();
+        let other = problems(
+            &[parse_fixture("governance.rs", "use crate::providers::*;")],
+            &names,
+            &[],
+        );
+        assert!(other.is_empty(), "{other:?}");
+        // An alias of an unrelated type does not make its variants provider names.
+        assert!(engine("type Hue = Color;\nfn f() { let _ = Hue::Anthropic; }").is_empty());
     }
 
     #[test]
