@@ -12,7 +12,13 @@
 //!   for a truncated stream. A second `messageStop`, `metadata`, a block after
 //!   the stop or a second start is refused.
 //! * Usage is exactly what `metadata` reported (negative and over-range counts
-//!   are refused; cache details round-trip), never a fabricated zero.
+//!   are refused), never a fabricated zero. Only the directly reported fields
+//!   (input, output, cache read, cache write) are compared, plus
+//!   `total >= input`; the derived fields (uncached input, the TTL
+//!   allocations from `cacheDetails`) are `providers/metering.rs`'s rules
+//!   (`docs/cache-pricing.md`) and belong to its tests.
+//! * A failing generated case must be pasted into a named regression test:
+//!   failure seeds are not persisted (`failure_persistence: None`).
 //! * Content. Text deltas and tool-input fragments are delivered in order with
 //!   contiguous tool indices; a tool block's fragments concatenate to a JSON
 //!   object. Limits refuse rather than truncate: 256 blocks, 128 tools, and the
@@ -279,31 +285,37 @@ fn wire_usage(u: &UsageSpec) -> U {
     }
 }
 
+/// The directly reported fields only (see the module doc).
+fn project(u: &Usage) -> Usage {
+    Usage {
+        input_tokens: u.input_tokens,
+        output_tokens: u.output_tokens,
+        billing: u.billing.map(|b| {
+            if let Some(i) = u.input_tokens {
+                assert!(
+                    b.total_input_tokens.is_none_or(|t| t >= i),
+                    "total below input"
+                );
+            }
+            BillingUsage {
+                cache_read_input_tokens: b.cache_read_input_tokens,
+                cache_write_input_tokens: b.cache_write_input_tokens,
+                ..BillingUsage::default()
+            }
+        }),
+        ..Usage::default()
+    }
+}
+
 fn expected_usage(u: &UsageSpec) -> Usage {
     let w = wire_usage(u);
-    let (default, five, hour) = match u.details {
-        Some((a, b)) => (
-            Some(0),
-            Some(a.unwrap_or(0) as u64),
-            Some(b.unwrap_or(0) as u64),
-        ),
-        None => (None, None, None),
-    };
-    let total = match (w.read, w.write) {
-        (Some(r), Some(wr)) => Some(u.input as u64 + r as u64 + wr as u64),
-        _ => None,
-    };
     Usage {
         input_tokens: Some(u.input as u64),
         output_tokens: Some(u.output as u64),
         billing: Some(BillingUsage {
-            total_input_tokens: total,
-            uncached_input_tokens: Some(u.input as u64),
             cache_read_input_tokens: w.read.map(|n| n as u64),
             cache_write_input_tokens: w.write.map(|n| n as u64),
-            cache_write_default_input_tokens: default,
-            cache_write_5m_input_tokens: five,
-            cache_write_1h_input_tokens: hour,
+            ..BillingUsage::default()
         }),
         ..Usage::default()
     }
@@ -400,7 +412,10 @@ fn run(events: &[W], limit: Option<usize>) -> (Vec<Ev>, Outcome, usize) {
     for (i, w) in events.iter().enumerate() {
         match state.push(to_aws(w)) {
             Err(e) => return (out, Outcome::Error(e), i + 1),
-            Ok(list) => out.extend(list.into_iter().flat_map(flatten)),
+            Ok(list) => out.extend(list.into_iter().flat_map(flatten).map(|e| match e {
+                Ev::Usage(u) => Ev::Usage(project(&u)),
+                e => e,
+            })),
         }
     }
     let outcome = if state.end().is_ok() {
@@ -733,6 +748,21 @@ proptest! {
             prop_assert_eq!(&got, &built.expected);
         } else {
             prop_assert_eq!(&outcome, &Outcome::Error(InferenceError::InvalidUpstream));
+        }
+    }
+
+    /// The byte limit is exact at the boundary: a valid stream whose counted
+    /// size is `S` is accepted whole under limit `S` and refused under `S - 1`.
+    #[test]
+    fn the_limit_is_exact_at_the_boundary(spec in spec()) {
+        let built = build(&spec);
+        let (got, outcome, _) = run(&built.events, Some(built.size));
+        prop_assert_eq!(&outcome, &Outcome::Done);
+        prop_assert_eq!(&got, &built.expected);
+        if built.size > 0 {
+            let (got, outcome, _) = run(&built.events, Some(built.size - 1));
+            prop_assert_eq!(&outcome, &Outcome::Error(InferenceError::InvalidUpstream));
+            prop_assert!(!got.iter().any(|e| matches!(e, Ev::Finish(_) | Ev::Usage(_))));
         }
     }
 

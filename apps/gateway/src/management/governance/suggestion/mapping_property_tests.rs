@@ -167,6 +167,27 @@ fn reference(raw: &str, units: u64) -> Option<Reference> {
     })
 }
 
+/// `microusd` against the reference for one input (see the first property).
+fn check_microusd(raw: &str, units: u64) -> Result<(), TestCaseError> {
+    let got = microusd(raw, units);
+    match (reference(raw, units), got) {
+        (None, got) => prop_assert_eq!(got, None, "accepted {:?}", raw),
+        (Some(r), Some((amount, exact))) => {
+            prop_assert!(amount >= 0);
+            prop_assert_eq!(r.amount, Some(amount), "{:?} x {}", raw, units);
+            prop_assert_eq!(r.exact, exact, "{:?} x {}", raw, units);
+        }
+        (Some(r), None) => prop_assert!(
+            r.amount.is_none() || r.wide,
+            "refused {:?} x {} although {:?} fits",
+            raw,
+            units,
+            r.amount
+        ),
+    }
+    Ok(())
+}
+
 // ---- generators ------------------------------------------------------------
 
 fn ws() -> impl Strategy<Value = &'static str> {
@@ -247,10 +268,35 @@ fn decimal_text() -> impl Strategy<Value = String> {
 
 fn units() -> impl Strategy<Value = u64> {
     prop_oneof![
-        prop::sample::select(vec![1_u64, 60, 1_000, 3_600, 60_000, 1_000_000]),
+        prop::sample::select(vec![0_u64, 1, 60, 1_000, 3_600, 60_000, 1_000_000]),
         (1..=u64::MAX),
         (1..=10_000_000_000_u64),
     ]
+}
+
+/// A price whose amount lands within two micro-USD of `i64::MAX`, either way,
+/// exactly or with one more fraction digit (so the true amount is a half),
+/// for the three batch sizes the token meters use (units 1, 1000, 10^6).
+fn boundary_price() -> impl Strategy<Value = (String, u64)> {
+    (
+        -2..=2_i128,
+        prop::sample::select(vec![(1_u64, 6_usize), (1_000, 9), (1_000_000, 12)]),
+        prop::option::of(1..=9_u8),
+    )
+        .prop_map(|(delta, (units, shift), extra)| {
+            let amount = (i64::MAX as i128 + delta) as u128;
+            let mut digits = amount.to_string();
+            let mut shift = shift;
+            if let Some(d) = extra {
+                digits.push(char::from(b'0' + d));
+                shift += 1;
+            }
+            while digits.len() <= shift {
+                digits.insert(0, '0');
+            }
+            let (whole, frac) = digits.split_at(digits.len() - shift);
+            (format!("{whole}.{frac}"), units)
+        })
 }
 
 /// A price string as OpenRouter prints them: plain decimals, sometimes `e`.
@@ -664,6 +710,7 @@ fn check_output(
         &out["ceilings"]["output_token_limit"]
     );
     if let Some(model) = catalog {
+        check_line_amounts(out, model)?;
         let valid = |v: &Value| v.as_u64().filter(|n| (1..=i32::MAX as u64).contains(n));
         let context = valid(&model["context_length"]);
         let completion = valid(&model["top_provider"]["max_completion_tokens"]);
@@ -678,6 +725,147 @@ fn check_output(
         if let (true, Some(c)) = (output > 0, completion.or(context)) {
             prop_assert!(output <= c);
         }
+    }
+    Ok(())
+}
+
+/// The `(batch, units)` pairs `priced` tries for a meter, in order: the audio
+/// meters count milliseconds but the catalog prices per second, so a batch of
+/// 60 000, 1 000 or 3 600 000 ms is 60, 1 or 3 600 units of the rate.
+fn candidates(meter: Meter) -> Vec<(u64, u64)> {
+    match meter {
+        Meter::InputAudioSecondsMs | Meter::OutputAudioSecondsMs => {
+            vec![(60_000, 60), (1_000, 1), (3_600_000, 3_600)]
+        }
+        m => m.batches().iter().map(|b| (*b, *b)).collect(),
+    }
+}
+
+/// `(batch, amount, exact)`; see `expected_amount`.
+type Expected = Result<Option<(u64, i64, bool)>, ()>;
+
+/// What a price string must map to for `meter`: the first candidate batch in
+/// which the amount is exact, else the amount rounded up at the largest batch;
+/// `Ok(None)` when unusable; `Err(())` when the production `u128` path may
+/// legitimately refuse.
+fn expected_amount(meter: Meter, rate: &str) -> Expected {
+    let cands = candidates(meter);
+    let refs: Vec<Option<Reference>> = cands.iter().map(|(_, u)| reference(rate, *u)).collect();
+    if refs.iter().flatten().any(|r| r.wide) {
+        return Err(());
+    }
+    for ((batch, _), r) in cands.iter().zip(&refs) {
+        if let Some(r) = r
+            && let (true, Some(a)) = (r.exact, r.amount)
+        {
+            return Ok(Some((*batch, a, true)));
+        }
+    }
+    let (batch, units) = cands.iter().max_by_key(|(b, _)| *b).copied().unwrap();
+    Ok(reference(rate, units)
+        .and_then(|r| r.amount)
+        .map(|a| (batch, a, false)))
+}
+
+/// Every priced line equals the reference for its source rate, at every
+/// workload: batch selection, the request line, tiers; and every priced draft
+/// line is exactly its annotated source line.
+fn check_line_amounts(out: &Value, model: &Value) -> Result<(), TestCaseError> {
+    for l in lines(out) {
+        if l["not_applicable"] == true {
+            continue;
+        }
+        let meter = meter_of(str_of(&l["meter"])).unwrap();
+        let source = str_of(&l["source"]);
+        let amount = l["microusd_per_batch"].as_str();
+        if source == "absent pricing.request" {
+            prop_assert!(model["pricing"]["request"].is_null());
+            prop_assert_eq!((amount, l["batch"].as_u64()), (Some("0"), Some(1)), "{}", l);
+            continue;
+        }
+        let rates: Vec<&Value> = if let Some(key) = source.strip_prefix("pricing.overrides.") {
+            model["pricing"]["overrides"]
+                .as_array()
+                .map(|o| {
+                    o.iter()
+                        .filter(|e| e["min_prompt_tokens"] == l["min_prompt_tokens"])
+                        .map(|e| &e[key])
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else if let Some(key) = source.strip_prefix("pricing.") {
+            vec![&model["pricing"][key]]
+        } else {
+            continue;
+        };
+        // Several overrides may share a threshold (the last wins): the line must
+        // equal the expectation of at least one of them.
+        let wants: Vec<Expected> = rates
+            .iter()
+            .map(|r| match r.as_str() {
+                Some(s) => expected_amount(meter, s),
+                None => Ok(None),
+            })
+            .collect();
+        if wants.iter().any(Result::is_err) {
+            continue;
+        }
+        let got = amount.map(|a| (l["batch"].as_u64().unwrap(), a.parse::<i64>().unwrap()));
+        let ok = wants.iter().any(|w| match w {
+            Ok(Some((b, a, exact))) => {
+                got == Some((*b, *a))
+                    && (*exact
+                        || l["needs_review"] == true && str_of(&l["note"]).contains("rounded up"))
+            }
+            Ok(None) => got.is_none(),
+            Err(()) => true,
+        });
+        prop_assert!(
+            ok,
+            "line {} differs from the reference {:?} for {:?}",
+            l,
+            wants,
+            rates
+        );
+    }
+    // Draft lines are their annotated lines, field for field.
+    let draft = out["draft"]["price_lines"].as_array().unwrap();
+    for p in draft.iter().filter(|p| p["microusd_per_batch"].is_string()) {
+        let same: Vec<&Value> = lines(out)
+            .iter()
+            .filter(|l| {
+                l["meter"] == p["meter"]
+                    && l["variant"] == p["variant"]
+                    && l["min_prompt_tokens"] == p["min_prompt_tokens"]
+            })
+            .collect();
+        prop_assert_eq!(
+            same.len(),
+            1,
+            "draft line {} has {} source lines",
+            p,
+            same.len()
+        );
+        let l = same[0];
+        for key in ["microusd_per_batch", "batch", "unit_label", "sku_label"] {
+            prop_assert_eq!(&p[key], &l[key], "{} of {}", key, p);
+        }
+    }
+    for l in lines(out)
+        .iter()
+        .filter(|l| l["microusd_per_batch"].is_string())
+    {
+        prop_assert!(
+            draft.iter().any(|p| {
+                p["meter"] == l["meter"]
+                    && p["variant"] == l["variant"]
+                    && p["min_prompt_tokens"] == l["min_prompt_tokens"]
+                    && p["microusd_per_batch"] == l["microusd_per_batch"]
+                    && p["batch"] == l["batch"]
+            }),
+            "priced line {} is missing from the draft",
+            l
+        );
     }
     Ok(())
 }
@@ -846,22 +1034,24 @@ proptest! {
     /// an `i64` or the `u128` arithmetic could overflow. Never a negative.
     #[test]
     fn microusd_matches_the_decimal_reference(raw in decimal_text(), units in units()) {
-        let got = microusd(&raw, units);
-        match (reference(&raw, units), got) {
-            (None, got) => prop_assert_eq!(got, None, "accepted {:?}", raw),
-            (Some(r), Some((amount, exact))) => {
-                prop_assert!(amount >= 0);
-                prop_assert_eq!(r.amount, Some(amount), "{:?} x {}", raw, units);
-                prop_assert_eq!(r.exact, exact, "{:?} x {}", raw, units);
-            }
-            (Some(r), None) => prop_assert!(
-                r.amount.is_none() || r.wide,
-                "refused {:?} x {} although {:?} fits",
-                raw,
-                units,
-                r.amount
-            ),
-        }
+        check_microusd(&raw, units)?;
+    }
+
+    /// The same at the `i64` edge: amounts within two micro-USD of
+    /// `i64::MAX`, exact and half-way, at the three token batch sizes. Below
+    /// the edge the amount is returned (rounded up); above it, `None`.
+    #[test]
+    fn microusd_is_exact_at_the_i64_boundary((raw, units) in boundary_price()) {
+        check_microusd(&raw, units)?;
+        let r = reference(&raw, units).expect("well formed");
+        prop_assert!(!r.wide, "the boundary cases stay inside the u128 path");
+        prop_assert_eq!(microusd(&raw, units).map(|x| x.0), r.amount, "{} x {}", raw, units);
+    }
+
+    /// Zero units price nothing: a well-formed price gives exactly zero, exact.
+    #[test]
+    fn zero_units_cost_zero_for_a_well_formed_price(raw in valid_price()) {
+        prop_assert_eq!(microusd(&raw, 0), Some((0, true)), "{}", raw);
     }
 
     /// Exact decimal strings (no exponent) of the size OpenRouter prints give
@@ -1017,84 +1207,317 @@ proptest! {
     }
 }
 
-fn endpoint_list() -> impl Strategy<Value = Value> {
-    let endpoint = (
-        pricing_object(),
-        prop::option::of(hostile()),
-        prop::option::of(limit()),
-        any::<bool>(),
-    )
-        .prop_map(|(pricing, name, context, down)| {
-            let mut e =
-                json!({"pricing": pricing, "provider_name": name.unwrap_or(json!("Provider"))});
-            if let Some(Some(c)) = context {
-                e["context_length"] = c.clone();
-                e["max_completion_tokens"] = c;
-            }
-            if down {
-                e["status"] = json!(-5);
-            }
-            e
-        });
+// ---- endpoint selection ------------------------------------------------------
+
+/// Endpoint prices: mostly small per-token decimals (so evidence can match
+/// them), sometimes a random pricing object, a non-object or a hostile value.
+fn endpoint_pricing() -> impl Strategy<Value = Value> {
+    let small = || (0..5000_u32).prop_map(|n| format!("0.{n:07}"));
+    prop_oneof![
+        8 => (small(), prop::option::of(small()), prop::option::of(small()))
+            .prop_map(|(prompt, completion, request)| {
+                let mut p = json!({ "prompt": prompt });
+                if let Some(c) = completion {
+                    p["completion"] = json!(c);
+                }
+                if let Some(r) = request {
+                    p["request"] = json!(r);
+                }
+                p
+            }),
+        1 => pricing_object(),
+        1 => hostile(),
+    ]
+}
+
+#[derive(Clone, Debug)]
+struct Endpoint {
+    pricing: Value,
+    /// 0 an object; otherwise a non-object list element.
+    junk: Option<Value>,
+    status: Option<Value>,
+    context: Option<Value>,
+}
+
+fn endpoint() -> impl Strategy<Value = Endpoint> {
     (
-        prop::collection::vec(endpoint, 0..4),
-        any::<bool>(),
-        any::<bool>(),
+        endpoint_pricing(),
+        prop::option::weighted(0.1, hostile()),
+        prop::option::of(prop_oneof![
+            Just(json!(0)),
+            Just(json!(0)),
+            Just(json!(-5)),
+            Just(json!(1)),
+            Just(json!(2)),
+            Just(json!("x")),
+            Just(json!(1.5)),
+            Just(Value::Null),
+        ]),
+        limit(),
     )
-        .prop_map(|(list, wrapped, junk)| {
-            if junk {
-                json!({"endpoints": "not a list"})
-            } else if wrapped {
-                json!({"data": {"endpoints": list}})
-            } else {
-                json!({"endpoints": list})
-            }
+        .prop_map(|(pricing, junk, status, context)| Endpoint {
+            pricing,
+            junk,
+            status,
+            context,
         })
 }
 
-proptest! {
-    #![proptest_config(config(600))]
+/// The endpoint list as the catalog returns it, in one of several wrappers,
+/// some of which hold no usable list.
+fn wrap(list: Vec<Value>, wrapper: u8, junk: &Value) -> Value {
+    match wrapper % 6 {
+        0 => json!({"data": {"endpoints": list}}),
+        1 => json!({"endpoints": list}),
+        2 => json!({"data": {"endpoints": "not a list"}}),
+        3 => json!({"data": junk}),
+        4 => junk.clone(),
+        _ => json!({"data": {"endpoints": []}, "endpoints": list}),
+    }
+}
 
-    /// With endpoint prices and recent provider-reported costs the mapper
-    /// still never panics (the evidence comparison is checked arithmetic over
-    /// every non-negative cost the database allows), is deterministic, reports
-    /// a selection from the documented set, a bounded printable provider label,
-    /// and a match count that never exceeds the evidence supplied.
+/// `price_str`: the rate as a string, nothing for a missing one, and the
+/// "invalid" marker for any non-string.
+fn rate_text(pricing: &Value, key: &str) -> Option<String> {
+    match &pricing[key] {
+        Value::String(s) => Some(s.clone()),
+        Value::Null => None,
+        _ => Some("invalid".into()),
+    }
+}
+
+/// An amount the oracle can state, one that is unusable (the code returns
+/// `None`), or one the `u128` path may legitimately refuse.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Cost {
+    Unusable,
+    Known(i64),
+    Ambiguous,
+}
+
+fn part(pricing: &Value, key: &str, units: u64, required: bool) -> Cost {
+    match rate_text(pricing, key) {
+        None if required => Cost::Unusable,
+        None => Cost::Known(0),
+        Some(rate) => match reference(&rate, units) {
+            None => Cost::Unusable,
+            Some(r) if r.wide => Cost::Ambiguous,
+            Some(r) => r.amount.map_or(Cost::Unusable, Cost::Known),
+        },
+    }
+}
+
+fn sum(parts: [Cost; 3]) -> Cost {
+    if parts.contains(&Cost::Ambiguous) {
+        return Cost::Ambiguous;
+    }
+    let mut total: i64 = 0;
+    for p in parts {
+        match p {
+            Cost::Known(n) => match total.checked_add(n) {
+                Some(t) => total = t,
+                None => return Cost::Unusable,
+            },
+            _ => return Cost::Unusable,
+        }
+    }
+    Cost::Known(total)
+}
+
+/// The comparable list price: 10^6 input and output tokens plus one request;
+/// an unusable or missing prompt price excludes the endpoint.
+fn list_cost(pricing: &Value) -> Cost {
+    sum([
+        part(pricing, "prompt", 1_000_000, true),
+        part(pricing, "completion", 1_000_000, false),
+        part(pricing, "request", 1, false),
+    ])
+}
+
+/// The list cost of one recorded attempt.
+fn attempt_cost(pricing: &Value, input: u64, output: u64) -> Cost {
+    sum([
+        part(pricing, "prompt", input, false),
+        part(pricing, "completion", output, false),
+        part(pricing, "request", 1, false),
+    ])
+}
+
+struct Chosen {
+    index: usize,
+    selection: &'static str,
+    matched: usize,
+}
+
+/// Which endpoint the code must name: evidence first (most matching attempts,
+/// then the dearest, the last of equals), else the cheapest of those reported
+/// up (status absent, not an integer, or 0), the first of equals. `Err` when
+/// some price is one the production arithmetic may legitimately refuse.
+fn oracle(list: &[Value], evidence: &[Evidence]) -> Result<Option<Chosen>, ()> {
+    let mut priced = vec![];
+    for (i, e) in list.iter().enumerate() {
+        match list_cost(&e["pricing"]) {
+            Cost::Known(c) => priced.push((i, c)),
+            Cost::Ambiguous => return Err(()),
+            Cost::Unusable => {}
+        }
+    }
+    let mut best: Option<(usize, usize, i64)> = None;
+    for (i, c) in &priced {
+        let mut n = 0;
+        for ev in evidence {
+            match attempt_cost(&list[*i]["pricing"], ev.input, ev.output) {
+                Cost::Ambiguous => return Err(()),
+                Cost::Known(a) if (i128::from(a) - i128::from(ev.cost)).abs() <= 2 => n += 1,
+                _ => {}
+            }
+        }
+        if n > 0 && best.is_none_or(|(_, bn, bc)| (n, *c) >= (bn, bc)) {
+            best = Some((*i, n, *c));
+        }
+    }
+    if let Some((index, matched, _)) = best {
+        return Ok(Some(Chosen {
+            index,
+            selection: "evidence",
+            matched,
+        }));
+    }
+    let up = |i: usize| list[i]["status"].as_i64().is_none_or(|s| s == 0);
+    let pool: Vec<&(usize, i64)> = if priced.iter().any(|(i, _)| up(*i)) {
+        priced.iter().filter(|(i, _)| up(*i)).collect()
+    } else {
+        priced.iter().collect()
+    };
+    let mut cheapest: Option<(usize, i64)> = None;
+    for (i, c) in pool {
+        if cheapest.is_none_or(|(_, bc)| *c < bc) {
+            cheapest = Some((*i, *c));
+        }
+    }
+    Ok(cheapest.map(|(index, _)| Chosen {
+        index,
+        selection: "cheapest",
+        matched: 0,
+    }))
+}
+
+/// The catalog entry `map` priced when `endpoint` was chosen (the mapping
+/// code's own substitution, restated for the checks that need the model).
+fn effective(model: &Value, endpoint: &Value) -> Value {
+    let mut priced = model.clone();
+    let mut pricing = endpoint["pricing"].clone();
+    let same = ["prompt", "completion"]
+        .iter()
+        .all(|k| rate_text(&pricing, k) == rate_text(&model["pricing"], k));
+    if same && pricing["overrides"].is_null() {
+        pricing["overrides"] = model["pricing"]["overrides"].clone();
+    }
+    priced["pricing"] = pricing;
+    if let Some(n) = endpoint["context_length"].as_u64() {
+        priced["context_length"] = json!(n);
+    }
+    if let Some(n) = endpoint["max_completion_tokens"].as_u64() {
+        priced["top_provider"]["max_completion_tokens"] = json!(n);
+    }
+    priced
+}
+
+fn catalog_object() -> impl Strategy<Value = Value> {
+    // A catalog entry is an object (it was found by its `id`). A `top_provider`
+    // that is neither an object nor null is a known panic (#634), kept out of
+    // here and pinned by `a_malformed_top_provider_is_not_a_panic`.
+    catalog_model().prop_map(|mut m| {
+        if !m.is_object() {
+            m = json!({});
+        }
+        if !(m["top_provider"].is_object() || m["top_provider"].is_null()) {
+            m["top_provider"] = json!({});
+        }
+        m
+    })
+}
+
+proptest! {
+    #![proptest_config(config(1200))]
+
+    /// Endpoint selection against an oracle. Evidence is built FROM the
+    /// generated endpoints (a recorded attempt whose cost is an endpoint's
+    /// list cost for small token counts, off by -3..=3 micro-USD) mixed with
+    /// random attempts, so the `<= 2` matching rule is exercised on both
+    /// sides. The named provider must be the oracle's: a matching attempt wins
+    /// (`evidence`, with `matched_attempts > 0`, most matches then dearest),
+    /// else the cheapest endpoint reported up (`cheapest`), skipping endpoints
+    /// whose prompt price is missing or unusable; no usable endpoint means the
+    /// catalog's own price. The mapped draft then passes the full output check
+    /// against the model it was actually priced from.
     #[test]
-    fn endpoint_selection_is_total_deterministic_and_bounded(
-        // A catalog entry is an object (it was found by its `id`). A `top_provider`
-        // that is neither an object nor null is a known panic, kept out of here
-        // and pinned by `a_malformed_top_provider_is_not_a_panic`.
-        model in catalog_model().prop_map(|mut m| {
-            if !m.is_object() {
-                m = json!({});
-            }
-            if !(m["top_provider"].is_object() || m["top_provider"].is_null()) {
-                m["top_provider"] = json!({});
-            }
-            m
-        }),
-        endpoints in endpoint_list(),
-        evidence in prop::collection::vec((any::<u64>(), any::<u64>(), 0..=i64::MAX), 0..6),
+    fn endpoint_selection_follows_the_oracle(
+        model in catalog_object(),
+        endpoints in prop::collection::vec(endpoint(), 1..5),
+        wrapper in prop_oneof![6 => 0..2_u8, 1 => 2..6_u8],
+        junk in hostile(),
+        recipes in prop::collection::vec((any::<usize>(), 0..3000_u64, 0..3000_u64, -3..=3_i64, any::<bool>(), 0..=i64::MAX), 0..5),
+        random in prop::collection::vec((any::<u64>(), any::<u64>(), 0..=i64::MAX), 0..3),
         workload in workload(),
     ) {
-        let evidence: Vec<Evidence> = evidence
-            .into_iter()
-            .map(|(input, output, cost)| Evidence { input, output, cost })
+        let list: Vec<Value> = endpoints
+            .iter()
+            .enumerate()
+            .map(|(i, e)| match &e.junk {
+                Some(j) => j.clone(),
+                None => {
+                    let mut v = json!({"pricing": e.pricing, "provider_name": format!("P{i}")});
+                    if let Some(s) = &e.status {
+                        v["status"] = s.clone();
+                    }
+                    if let Some(c) = &e.context {
+                        v["context_length"] = c.clone();
+                        v["max_completion_tokens"] = c.clone();
+                    }
+                    v
+                }
+            })
             .collect();
-        let out = map_with_endpoints(&model, workload, None, Some(&endpoints), &evidence);
-        let again = map_with_endpoints(&model, workload, None, Some(&endpoints), &evidence);
-        prop_assert_eq!(&out, &again);
-        check_output(&out, None, true)?;
-        let endpoint = &out["endpoint"];
-        if workload != WorkloadKind::Images || endpoint.is_object() {
-            let selection = str_of(&endpoint["selection"]);
-            prop_assert!(["catalog", "cheapest", "evidence"].contains(&selection), "{endpoint}");
-            if selection != "catalog" {
-                prop_assert!(endpoint["matched_attempts"].as_u64().unwrap() <= evidence.len() as u64);
-                prop_assert_eq!(selection == "evidence", endpoint["matched_attempts"].as_u64().unwrap() > 0);
-                let label = str_of(&endpoint["provider"]);
-                prop_assert!(label.chars().count() <= 64 && !label.chars().any(char::is_control));
+        let body = wrap(list.clone(), wrapper, &junk);
+        let usable: &[Value] = body["data"]["endpoints"]
+            .as_array()
+            .or(body["endpoints"].as_array())
+            .filter(|l| !l.is_empty())
+            .map_or(&[], |v| v.as_slice());
+        let mut evidence: Vec<Evidence> = vec![];
+        for (pick, input, output, delta, from_endpoint, cost) in &recipes {
+            let cost = match (from_endpoint, usable.is_empty()) {
+                (true, false) => match attempt_cost(&usable[pick % usable.len()]["pricing"], *input, *output) {
+                    Cost::Known(c) => (i128::from(c) + i128::from(*delta)).clamp(0, i64::MAX as i128) as i64,
+                    _ => *cost,
+                },
+                _ => *cost,
+            };
+            evidence.push(Evidence { input: *input, output: *output, cost });
+        }
+        evidence.extend(random.iter().map(|(input, output, cost)| Evidence { input: *input, output: *output, cost: *cost }));
+        let out = map_with_endpoints(&model, workload, None, Some(&body), &evidence);
+        prop_assert_eq!(&out, &map_with_endpoints(&model, workload, None, Some(&body), &evidence), "not deterministic");
+        let chosen = oracle(usable, &evidence);
+        match chosen {
+            Err(()) => check_output(&out, None, true)?,
+            Ok(Some(c)) => {
+                let e = &out["endpoint"];
+                prop_assert_eq!(str_of(&e["selection"]), c.selection, "{} for {:?}", e, evidence.len());
+                prop_assert_eq!(str_of(&e["provider"]), format!("P{}", c.index));
+                prop_assert_eq!(e["matched_attempts"].as_u64(), Some(c.matched as u64));
+                prop_assert_eq!(e["endpoint_count"].as_u64(), Some(usable.len() as u64));
+                prop_assert_eq!(c.selection == "evidence", c.matched > 0);
+                check_output(&out, Some(&effective(&model, &usable[c.index])), true)?;
+            }
+            Ok(None) => {
+                if workload == WorkloadKind::Images {
+                    prop_assert!(out.get("endpoint").is_none(), "{}", out["endpoint"]);
+                } else {
+                    prop_assert_eq!(&out["endpoint"], &json!({"selection": "catalog"}));
+                }
+                check_output(&out, Some(&model), false)?;
             }
         }
     }
@@ -1235,5 +1658,29 @@ fn a_malformed_top_provider_is_not_a_panic() {
             &[],
         );
         assert!(out["draft"].is_object());
+    }
+}
+
+proptest! {
+    #![proptest_config(config(300))]
+
+    /// The strict form of #635 over any catalog entry and workload, not only
+    /// the single example: an unpriced base line is stated `unknown` in the
+    /// draft, even when a prompt-size tier of the same meter is priced.
+    /// Un-ignore with the fix.
+    #[test]
+    #[ignore = "#635: a tier-only meter gets no explicit unknown base line in the draft"]
+    fn an_unpriced_base_is_stated_unknown_for_any_catalog_entry(model in any_model(), workload in workload()) {
+        let out = map(&model, workload, None);
+        let draft = out["draft"]["price_lines"].as_array().unwrap();
+        for l in lines(&out) {
+            if l["not_applicable"] == true || !l["microusd_per_batch"].is_null() || !l["min_prompt_tokens"].is_null() {
+                continue;
+            }
+            prop_assert!(
+                draft.iter().any(|p| p["meter"] == l["meter"] && p["unknown"] == true),
+                "no unknown draft line for the unpriced base {}", l
+            );
+        }
     }
 }

@@ -17,9 +17,13 @@
 //!   temperature, token limit, `top_p` and stop sequences are present exactly
 //!   when set. Nothing is invented and nothing is dropped.
 //! * Messages options other than `top_p` and `stop_sequences` (thinking, cache
-//!   controls, context management, ...) are not forwarded; the code documents
-//!   this as deliberate for translated providers, so it is not asserted either
-//!   way here.
+//!   controls, context management, native tools, a system value, a task
+//!   budget, history thinking, beta headers, ...) are not forwarded. The code
+//!   documents this as deliberate for translated providers (#637 tracks
+//!   whether the Messages frontend should refuse them instead), so the tests
+//!   pin the documented omission as it is: adding them to a request changes
+//!   nothing in the encoded input, and the carried-whole checks still hold.
+//!   If #637 turns the omission into a refusal, change that property.
 //! * It is deterministic.
 //!
 //! `ChatRequest` has no `Debug` (prompt-bearing), so the generators produce a
@@ -780,6 +784,7 @@ enum Edit {
     Choice(u8, usize),
     Temperature(Option<f64>),
     MaxTokens(Option<u32>),
+    Extras,
 }
 
 fn edit() -> impl Strategy<Value = Edit> {
@@ -822,6 +827,7 @@ fn edit() -> impl Strategy<Value = Edit> {
             u32::MAX
         ]))
         .prop_map(Edit::MaxTokens),
+        Just(Edit::Extras),
     ];
     prop_oneof![3 => messages, 1 => options]
 }
@@ -886,6 +892,7 @@ fn edit_request(r: &mut ChatRequest, e: &Edit) {
         }
         Edit::Temperature(t) => r.temperature = *t,
         Edit::MaxTokens(m) => r.max_output_tokens = *m,
+        Edit::Extras => add_extras(r),
         _ => {}
     }
 }
@@ -944,6 +951,170 @@ proptest! {
             Ok(_) => prop_assert!(false, "{:?} was accepted", fault),
         }
     }
+}
+
+/// Messages options the Bedrock mapping does not carry (see #637): thinking,
+/// cache control, context management, a task budget, native tools and
+/// messages, a system value, deferred loading, history thinking, an output
+/// config without a format, and a valid beta header. None of them is a refused
+/// option (`validate` refuses `image`, `strict`, `top_k`, an output format,
+/// error-marked results and bad or denied beta headers).
+fn add_extras(r: &mut ChatRequest) {
+    let o = options(r);
+    o.thinking = Some(json!({"type": "enabled", "budget_tokens": 1024}));
+    o.cache_controls = vec![json!({"type": "ephemeral"})];
+    o.context_management = Some(json!({"edits": []}));
+    o.task_budget = Some(json!({"total": 1000}));
+    o.native_tools = vec![json!({"type": "custom", "name": "t"})];
+    o.native_messages = vec![json!({"role": "user", "content": "x"})];
+    o.system = Some(json!("system"));
+    o.defer_loading = vec![json!({"name": "t"})];
+    o.history_thinking = vec![json!({"type": "thinking", "thinking": "h", "signature": "s"})];
+    o.output_config = Some(json!({"effort": "high"}));
+    o.beta_headers = vec!["prompt-caching-2024-07-31".into()];
+}
+
+/// The size `encode` counts against the output limit: every message's text
+/// (system and tool results included), every tool call's arguments, and for
+/// each tool its name, description and serialised schema.
+fn counted_size(r: &ChatRequest) -> usize {
+    r.messages
+        .iter()
+        .map(|m| {
+            m.content.as_ref().map_or(0, String::len)
+                + m.tool_calls
+                    .iter()
+                    .map(|c| c.arguments.len())
+                    .sum::<usize>()
+        })
+        .sum::<usize>()
+        + r.tools
+            .iter()
+            .map(|t| {
+                t.name.len()
+                    + t.description.as_ref().map_or(0, String::len)
+                    + serde_json::to_vec(&t.parameters).unwrap().len()
+            })
+            .sum::<usize>()
+}
+
+fn rule(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+fn ident() -> impl Strategy<Value = String> {
+    prop_oneof![
+        3 => "[A-Za-z0-9_ .é-]{0,70}",
+        2 => (0..=70_usize).prop_map(|n| "a".repeat(n)),
+    ]
+}
+
+proptest! {
+    #![proptest_config(config(40))]
+
+    /// The output limit counts exactly the text of every message, every tool
+    /// call's arguments and every tool's name, description and schema: padding
+    /// a generated request to the limit is accepted and carried whole, one byte
+    /// more is refused with `InvalidRequest`.
+    #[test]
+    fn the_output_limit_counts_text_arguments_and_tool_specs_exactly(spec in spec()) {
+        let mut r = build(&spec);
+        let size = counted_size(&r);
+        prop_assert!(size <= OUTPUT_LIMIT);
+        let first_user = r.messages.iter().position(|m| m.role == Role::User).unwrap();
+        r.messages[first_user].content.as_mut().unwrap().push_str(&"x".repeat(OUTPUT_LIMIT - size));
+        match encode(&r) {
+            Ok(input) => check_carried(&r, &input)?,
+            Err(e) => prop_assert!(false, "refused at exactly the limit: {e:?}"),
+        }
+        r.messages[first_user].content.as_mut().unwrap().push('x');
+        prop_assert_eq!(encode(&r).err(), Some(InferenceError::InvalidRequest));
+    }
+}
+
+proptest! {
+    #![proptest_config(config(1500))]
+
+    /// Messages options the mapping does not carry change nothing: the encoded
+    /// input of a request with them equals the one without (#637 tracks
+    /// whether they should be refused instead).
+    #[test]
+    fn messages_options_the_mapping_omits_change_nothing(spec in spec()) {
+        let plain = build(&spec);
+        let mut with = plain.clone();
+        add_extras(&mut with);
+        let (a, b) = (encode(&plain), encode(&with));
+        prop_assert!(a.is_ok());
+        prop_assert!(same(&a, &b), "the omitted options changed the encoded input");
+        check_carried(&with, &b.unwrap())?;
+    }
+
+    /// A tool name, a call id and a call name are identifiers of 1 to 64 ASCII
+    /// letters, digits, `_` or `-`: 64 bytes pass, 65 and the empty string do
+    /// not, and each of the three is checked.
+    #[test]
+    fn identifiers_follow_the_rule_in_all_three_places(name in ident(), id in ident(), call_name in ident()) {
+        // A tool definition's name.
+        let mut r = build(&spec_min());
+        r.tools.push(a_tool(&name));
+        prop_assert_eq!(encode(&r).is_ok(), rule(&name), "tool name {:?}", name);
+        // A call's id and name, with its result.
+        let mut r = build(&spec_min());
+        let mut a = msg(Role::Assistant, None);
+        a.tool_calls = vec![ToolCall { id: id.clone(), name: call_name.clone(), arguments: "{}".into() }];
+        let mut t = msg(Role::Tool, Some("r".into()));
+        t.tool_call_id = Some(id.clone());
+        r.messages.extend([a, t]);
+        prop_assert_eq!(encode(&r).is_ok(), rule(&id) && rule(&call_name), "call {:?} {:?}", id, call_name);
+    }
+}
+
+/// One assistant message may carry `MAX_TOOLS` tool calls (with all their
+/// results), not one more.
+#[test]
+fn one_message_may_carry_exactly_max_tools_calls() {
+    for (calls, ok) in [(MAX_TOOLS, true), (MAX_TOOLS + 1, false)] {
+        let mut r = build(&spec_min());
+        let mut a = msg(Role::Assistant, None);
+        a.tool_calls = (0..calls).map(|i| a_call(&format!("c{i}"))).collect();
+        r.messages.push(a);
+        for i in 0..calls {
+            let mut t = msg(Role::Tool, Some("r".into()));
+            t.tool_call_id = Some(format!("c{i}"));
+            r.messages.push(t);
+        }
+        match (encode(&r), ok) {
+            (Ok(input), true) => {
+                check_carried(&r, &input).unwrap();
+                let last = input.messages.last().unwrap();
+                assert_eq!(last.content.len(), calls, "all results in one user message");
+            }
+            (Err(e), false) => assert_eq!(e, InferenceError::InvalidRequest),
+            (got, _) => panic!("{calls} calls: ok={ok}, got ok={}", got.is_ok()),
+        }
+    }
+}
+
+/// `validate` keeps one earlier refusal for translated providers: history
+/// thinking with no text and no tool calls anywhere is `InvalidRequest`. Such a
+/// request is refused for its empty message too, so the class is the same
+/// either way; with a message that has text it is accepted and the history is
+/// omitted.
+#[test]
+fn history_thinking_alone_is_not_a_conversation() {
+    let hist = json!({"type": "thinking", "thinking": "h", "signature": "s"});
+    let mut r = build(&spec_min());
+    r.messages = vec![msg(Role::User, None)];
+    options(&mut r).history_thinking = vec![hist.clone()];
+    assert_eq!(encode(&r).err(), Some(InferenceError::InvalidRequest));
+    let mut r = build(&spec_min());
+    options(&mut r).history_thinking = vec![hist];
+    let input = encode(&r).expect("history thinking beside real text is omitted, not refused");
+    check_carried(&r, &input).unwrap();
 }
 
 /// The documented limits refuse rather than truncate: exactly `MAX_TOOLS`

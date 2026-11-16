@@ -15,8 +15,17 @@
 //!   fabricates nothing for a truncated stream.
 //! * Usage is merged from what was reported: the start event's `output_tokens`
 //!   is preliminary and never used (absent output stays unknown, not zero), a
-//!   cumulative counter may not go down, and input and cache counters
-//!   round-trip exactly.
+//!   cumulative counter may not go down, and input, output, cache read, cache
+//!   write and reasoning round-trip exactly. Only those directly reported
+//!   fields are compared, plus `total >= input`; the derived fields (uncached
+//!   input, the write allocations) are `providers/metering.rs`'s rules
+//!   (`docs/cache-pricing.md`) and belong to its tests.
+//! * Unknown fields. Every object the parser guards with `fields(..)` (the
+//!   `message`, `content_block` and `delta` objects, and in Messages mode the
+//!   `content_block_*` frames themselves) refuses an unknown non-empty field;
+//!   the table of nodes that tolerate extras is `tolerates_unknown_field`.
+//! * A failing generated case must be pasted into a named regression test:
+//!   failure seeds are not persisted (`failure_persistence: None`).
 //! * Content. Text deltas and tool-call argument fragments are delivered in
 //!   order; a tool block's fragments concatenate to a JSON object (an empty one
 //!   is delivered as `{}`); in Messages mode every `content_block_*` frame is
@@ -26,7 +35,8 @@ use super::*;
 use crate::{
     billing::BillingUsage,
     proptest_support_tests::{
-        Ev, Outcome, apply_all, arb_json, check_terminals, config, drive, leaves, mutation,
+        Ev, Outcome, Seg, apply_all, arb_json, check_terminals, config, drive,
+        for_each_single_mutation, fuzz_event, leaves, mutation, object_paths, path_label,
         split_text,
     },
 };
@@ -235,6 +245,23 @@ fn delta_usage(d: &Delta, s: &Option<Start>) -> Value {
 }
 
 /// The merged usage the stream must report, from the reported numbers alone.
+/// The directly reported fields only (see the module doc).
+fn project(u: &Usage) -> Usage {
+    Usage {
+        input_tokens: u.input_tokens,
+        output_tokens: u.output_tokens,
+        reasoning_tokens: u.reasoning_tokens,
+        billing: u.billing.map(|b| BillingUsage {
+            cache_read_input_tokens: b.cache_read_input_tokens,
+            cache_write_input_tokens: b.cache_write_input_tokens,
+            ..BillingUsage::default()
+        }),
+        ..Usage::default()
+    }
+}
+
+/// What the spec reports, merged: input as raised by the delta, output and
+/// reasoning from the delta only, cache read and write from the start.
 fn expected_usage(spec: &Spec) -> Usage {
     if spec.start.is_none() && spec.delta.is_none() {
         return Usage::default();
@@ -245,14 +272,9 @@ fn expected_usage(spec: &Spec) -> Usage {
         (Some(i), Some(extra)) => Some(i + extra),
         (i, _) => i,
     };
-    let read = s.and_then(|s| s.read);
-    let (write, default, five, hour) = match s.map(|s| s.write.clone()) {
-        Some(CacheWrite::Total(w)) => (Some(w), None, None, None),
-        Some(CacheWrite::Alloc(a, b)) => (Some(a + b), Some(0), Some(a), Some(b)),
-        _ => (None, None, None, None),
-    };
-    let total = match (input, read, write) {
-        (Some(i), Some(r), Some(w)) => Some(i + r + w),
+    let write = match s.map(|s| s.write.clone()) {
+        Some(CacheWrite::Total(w)) => Some(w),
+        Some(CacheWrite::Alloc(a, b)) => Some(a + b),
         _ => None,
     };
     let output = d.and_then(|d| d.output);
@@ -260,13 +282,9 @@ fn expected_usage(spec: &Spec) -> Usage {
         input_tokens: input,
         output_tokens: output,
         billing: Some(BillingUsage {
-            total_input_tokens: total,
-            uncached_input_tokens: input,
-            cache_read_input_tokens: read,
+            cache_read_input_tokens: s.and_then(|s| s.read),
             cache_write_input_tokens: write,
-            cache_write_default_input_tokens: default,
-            cache_write_5m_input_tokens: five,
-            cache_write_1h_input_tokens: hour,
+            ..BillingUsage::default()
         }),
         reasoning_tokens: d
             .and_then(|d| d.thinking)
@@ -449,10 +467,15 @@ fn run(messages: bool, limit: Option<usize>, events: &[Value]) -> (Vec<Ev>, Outc
     let got = got
         .into_iter()
         .map(|e| match e {
-            Ev::Usage(u) => Ev::Usage(Usage {
-                reported_model: None,
-                ..u
-            }),
+            Ev::Usage(u) => {
+                if let (Some(b), Some(i)) = (u.billing, u.input_tokens) {
+                    assert!(
+                        b.total_input_tokens.is_none_or(|t| t >= i),
+                        "total below input"
+                    );
+                }
+                Ev::Usage(project(&u))
+            }
             e => e,
         })
         .collect();
@@ -460,6 +483,32 @@ fn run(messages: bool, limit: Option<usize>, events: &[Value]) -> (Vec<Ev>, Outc
 }
 
 // ---- checks on any stream --------------------------------------------------
+
+const FIELDS: &[&str] = &[
+    "index",
+    "message",
+    "content_block",
+    "delta",
+    "usage",
+    "id",
+    "role",
+    "model",
+    "content",
+    "stop_reason",
+    "stop_sequence",
+    "text",
+    "partial_json",
+    "thinking",
+    "signature",
+    "data",
+    "name",
+    "input",
+    "input_tokens",
+    "output_tokens",
+    "cache_creation",
+    "error",
+    "message_stop",
+];
 
 const KINDS: &[&str] = &[
     "message_start",
@@ -471,6 +520,45 @@ const KINDS: &[&str] = &[
     "ping",
     "error",
 ];
+
+/// The usage the accepted frames report, read from the JSON alone.
+fn reported_usage(seen: &[Value]) -> Usage {
+    let plausible =
+        |n: u64, output: Option<u64>| n <= i64::MAX as u64 && output.is_none_or(|o| n <= o);
+    let (mut input, mut output, mut read, mut write, mut reasoning) =
+        (None, None, None, None, None);
+    let mut object = false;
+    for e in seen {
+        let (u, is_start) = match kind_of(e) {
+            "message_start" => (&e["message"]["usage"], true),
+            "message_delta" => (&e["usage"], false),
+            _ => continue,
+        };
+        object |= u.is_object();
+        input = u["input_tokens"].as_u64().or(input);
+        read = u["cache_read_input_tokens"].as_u64().or(read);
+        write = u["cache_creation_input_tokens"].as_u64().or(write);
+        if !is_start {
+            let own = u["output_tokens"].as_u64();
+            output = own.or(output);
+            let thinking = u["output_tokens_details"]["thinking_tokens"]
+                .as_u64()
+                .filter(|n| plausible(*n, own));
+            reasoning = thinking.or(reasoning).filter(|n| plausible(*n, output));
+        }
+    }
+    Usage {
+        input_tokens: input,
+        output_tokens: output,
+        reasoning_tokens: reasoning,
+        billing: object.then(|| BillingUsage {
+            cache_read_input_tokens: read,
+            cache_write_input_tokens: write,
+            ..BillingUsage::default()
+        }),
+        ..Usage::default()
+    }
+}
 
 fn kind_of(event: &Value) -> &str {
     event["type"].as_str().unwrap_or("")
@@ -521,11 +609,6 @@ fn check_any(
     for e in seen {
         leaves(e, &mut strings, &mut numbers);
     }
-    let delta_outputs: BTreeSet<u64> = seen
-        .iter()
-        .filter(|e| kind_of(e) == "message_delta")
-        .filter_map(|e| e["usage"]["output_tokens"].as_u64())
-        .collect();
     let (mut started, mut args): (u32, Vec<String>) = (0, vec![]);
     for e in got {
         match e {
@@ -548,26 +631,18 @@ fn check_any(
                     "a preserved frame the upstream never sent"
                 );
             }
-            Ev::Usage(u) => {
-                let known = |n: Option<u64>| n.is_none_or(|n| numbers.contains(&n));
-                prop_assert!(known(u.input_tokens) && known(u.reasoning_tokens));
-                // The start event's output count is preliminary and never used.
-                prop_assert!(
-                    u.output_tokens.is_none_or(|n| delta_outputs.contains(&n)),
-                    "output {:?}",
-                    u.output_tokens
-                );
-                if let Some(b) = u.billing {
-                    prop_assert!(
-                        known(b.cache_read_input_tokens) && known(b.cache_write_input_tokens)
-                    );
-                    prop_assert!(known(b.uncached_input_tokens));
-                }
-            }
             _ => {}
         }
     }
     if *outcome == Outcome::Done {
+        // Usage is the frames' own, merged and read here independently: absent
+        // or null is unknown, never zero; the start's output count is not used.
+        let emitted: Vec<&Usage> = got
+            .iter()
+            .filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None })
+            .collect();
+        let want = reported_usage(seen);
+        prop_assert_eq!(emitted, vec![&want], "usage differs from the frames'");
         // A tool block that ended delivered a JSON object.
         for a in &args {
             prop_assert!(
@@ -645,11 +720,11 @@ proptest! {
         check_any(spec.messages, &events, &got, &outcome, consumed, &mut state)?;
     }
 
-    /// Arbitrary JSON events after a plausible start: no panic, documented
-    /// errors only.
+    /// Random events with a real `type` and the fields the parser reads, after
+    /// a plausible start: no panic, documented errors only.
     #[test]
     fn arbitrary_events_are_refused_without_panic(
-        events in prop::collection::vec(arb_json(), 0..12),
+        events in prop::collection::vec(fuzz_event(KINDS, FIELDS), 0..14),
         started in any::<bool>(),
         messages in any::<bool>(),
     ) {
@@ -660,6 +735,16 @@ proptest! {
         all.extend(events);
         let (got, outcome, consumed, mut state) = run(messages, None, &all);
         check_any(messages, &all, &got, &outcome, consumed, &mut state)?;
+    }
+
+    /// Arbitrary JSON events (mostly refused at the first type check).
+    #[test]
+    fn arbitrary_json_is_refused_without_panic(
+        events in prop::collection::vec(arb_json(), 0..8),
+        messages in any::<bool>(),
+    ) {
+        let (got, outcome, consumed, mut state) = run(messages, None, &events);
+        check_any(messages, &events, &got, &outcome, consumed, &mut state)?;
     }
 
     /// A cumulative counter that goes down, or any count past `i64::MAX`, is
@@ -830,4 +915,223 @@ fn error_events_are_classified_without_reflecting_text() {
             "{event}"
         );
     }
+}
+
+// ---- deterministic sweeps ----------------------------------------------------
+
+/// A canonical stream with every block kind, fragmented tool input, an empty
+/// tool input, thinking and redacted blocks (Messages mode), pings, usage on
+/// both frames with cache allocation and a thinking count.
+fn rich(messages: bool) -> Built {
+    build(&Spec {
+        messages,
+        blocks: vec![
+            Piece::Text {
+                initial: "a".into(),
+                pieces: vec!["b".into(), "c".into()],
+            },
+            Piece::Tool {
+                name: "t".into(),
+                args: json!({"k": [1, {"z": 2}]}),
+                cuts: vec![2, 4],
+                empty: false,
+            },
+            Piece::Tool {
+                name: "u".into(),
+                args: json!({}),
+                cuts: vec![],
+                empty: true,
+            },
+            Piece::Thinking {
+                pieces: vec!["p".into()],
+                signature: true,
+            },
+            Piece::Redacted("d".into()),
+            Piece::Text {
+                initial: String::new(),
+                pieces: vec!["x".into()],
+            },
+        ],
+        stop: 3,
+        start: Some(Start {
+            input: Some(10),
+            output: Some(3),
+            read: Some(2),
+            write: CacheWrite::Alloc(1, 2),
+        }),
+        delta: Some(Delta {
+            output: Some(9),
+            input_extra: Some(1),
+            repeat_cache: true,
+            thinking: Some(4),
+        }),
+        pings: vec![0, 5],
+    })
+}
+
+/// The nodes that tolerate an unknown field, read from the code. Everything
+/// else is guarded by `fields(..)` and refuses one.
+///
+/// * an event's top level: only named fields are read, except that in
+///   Messages mode `preserve_native` applies `fields(..)` to the three
+///   `content_block_*` frames themselves;
+/// * `message_start`'s `message.usage` and `message_delta`'s `usage`, with
+///   their sub-objects (`cache_creation`, `output_tokens_details`): only named
+///   counters are read;
+/// * refused: `message` (message_start), `content_block` and `delta` (every
+///   block delta and `message_delta`).
+fn tolerates_unknown_field(messages: bool, event: &Value, path: &[Seg]) -> bool {
+    match path.first() {
+        None => {
+            !(messages
+                && matches!(
+                    kind_of(event),
+                    "content_block_start" | "content_block_delta" | "content_block_stop"
+                ))
+        }
+        Some(Seg::Key(k)) => match k.as_str() {
+            "message" => path.len() > 1,
+            "content_block" | "delta" => false,
+            _ => true,
+        },
+        Some(_) => true,
+    }
+}
+
+/// An unknown, non-empty `zz_unknown` field injected into every object node of
+/// every event of a rich valid stream is refused (`InvalidUpstream`) except at
+/// the pinned table of tolerant nodes, where the stream is unchanged.
+#[test]
+fn an_unknown_nested_field_is_refused_except_where_the_table_allows_it() {
+    let (mut refused, mut tolerated) = (0, 0);
+    for messages in [false, true] {
+        let built = rich(messages);
+        for (i, event) in built.events.iter().enumerate() {
+            for path in object_paths(event) {
+                let mut events = built.events.clone();
+                let node = path.iter().fold(&mut events[i], |v, seg| match seg {
+                    Seg::Key(k) => &mut v[k.as_str()],
+                    Seg::Item(n) => &mut v[*n],
+                });
+                node["zz_unknown"] = json!("x");
+                let (got, outcome, _, _) = run(messages, None, &events);
+                let label = format!(
+                    "{} in event {i} ({}, messages={messages})",
+                    path_label(&path),
+                    kind_of(event)
+                );
+                if tolerates_unknown_field(messages, event, &path) {
+                    assert_eq!(outcome, Outcome::Done, "{label} should be tolerated");
+                    assert_eq!(got, built.expected, "{label}");
+                    tolerated += 1;
+                } else {
+                    assert_eq!(
+                        outcome,
+                        Outcome::Error(InferenceError::InvalidUpstream),
+                        "{label} should be refused"
+                    );
+                    refused += 1;
+                }
+            }
+        }
+    }
+    assert!(
+        refused > 30 && tolerated > 30,
+        "refused {refused}, tolerated {tolerated}"
+    );
+}
+
+/// Every single mutation of a rich valid stream, one at a time (see the
+/// OpenAI test), in both modes, through `check_any`; enough still reach `Done`
+/// for the usage read and the post-`Done` refusals to run.
+#[test]
+fn every_single_mutation_of_a_rich_stream_is_refused_or_consistent() {
+    for messages in [false, true] {
+        let built = rich(messages);
+        let mut done = 0;
+        let total = for_each_single_mutation(&built.events, |label, events| {
+            let (got, outcome, consumed, mut state) = run(messages, None, events);
+            if outcome == Outcome::Done {
+                done += 1;
+            }
+            check_any(messages, events, &got, &outcome, consumed, &mut state)
+                .map_err(|e| TestCaseError::fail(format!("{label}: {e}")))
+        })
+        .unwrap();
+        println!(
+            "anthropic sweep (messages={messages}): {total} single mutations, {done} still reach Done"
+        );
+        assert!(
+            total > 3000 && done > 100,
+            "{total} mutations, {done} reach Done"
+        );
+    }
+}
+
+fn usage_of(start_usage: Value) -> Usage {
+    let events = [
+        json!({"type": "message_start", "message": {"id": "m", "type": "message", "role": "assistant", "content": [], "stop_reason": null, "usage": start_usage}}),
+        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}}),
+        json!({"type": "message_stop"}),
+    ];
+    let mut state = State::default();
+    let mut found = None;
+    for e in events {
+        for ev in state.push(e).expect("accepted") {
+            if let ChatEvent::Usage(u) = ev {
+                found = Some(u);
+            }
+        }
+    }
+    found.expect("a Usage event")
+}
+
+/// Regression for the CI failure of PR #643 (a generated case: a start usage
+/// whose only count is `cache_creation_input_tokens: 0`). The parser reports
+/// every write allocation as a KNOWN zero there, and that is right:
+/// `metering::checked` documents that an observed zero total proves every
+/// disjoint allocation is zero. The neighbouring cases do not invent a zero:
+/// an absent total, or a positive total with no allocation detail, leave the
+/// allocations unknown (`docs/cache-pricing.md`: "If TTL allocation is
+/// missing, it remains unknown"), and a positive total with detail reports the
+/// detail. The generated properties compare only the directly reported fields
+/// for exactly this reason; the derived fields are `metering`'s.
+#[test]
+fn a_reported_zero_cache_write_total_proves_every_allocation_zero() {
+    let alloc = |u: &Usage| {
+        let b = u.billing.expect("billing");
+        (
+            b.cache_write_input_tokens,
+            b.cache_write_default_input_tokens,
+            b.cache_write_5m_input_tokens,
+            b.cache_write_1h_input_tokens,
+        )
+    };
+    // Total 0, no detail: known zeros.
+    let u = usage_of(json!({"cache_creation_input_tokens": 0}));
+    assert_eq!(alloc(&u), (Some(0), Some(0), Some(0), Some(0)));
+    assert_eq!(
+        (u.input_tokens, u.output_tokens),
+        (None, None),
+        "no other count is invented"
+    );
+    // Total absent: nothing is known.
+    let u = usage_of(json!({"input_tokens": 5}));
+    assert_eq!(alloc(&u), (None, None, None, None));
+    // Total > 0, no detail: allocation unknown, never assumed.
+    let u = usage_of(json!({"cache_creation_input_tokens": 7}));
+    assert_eq!(alloc(&u), (Some(7), None, None, None));
+    // Total > 0 with detail: the detail as reported.
+    let u = usage_of(
+        json!({"cache_creation_input_tokens": 7, "cache_creation": {"ephemeral_5m_input_tokens": 3, "ephemeral_1h_input_tokens": 4}}),
+    );
+    assert_eq!(alloc(&u), (Some(7), Some(0), Some(3), Some(4)));
+    // A detail object alone, with no total: the allocation without a total.
+    let u = usage_of(json!({"cache_creation": {"ephemeral_5m_input_tokens": 3}}));
+    assert_eq!(alloc(&u), (None, Some(0), Some(3), None));
+    // A zero total contradicted by a positive allocation is refused.
+    let mut state = State::default();
+    let r = state.push(json!({"type": "message_start", "message": {"id": "m", "type": "message", "role": "assistant", "content": [], "stop_reason": null,
+        "usage": {"cache_creation_input_tokens": 0, "cache_creation": {"ephemeral_5m_input_tokens": 1}}}}));
+    assert_eq!(r.err(), Some(InferenceError::InvalidUpstream));
 }
