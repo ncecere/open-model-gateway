@@ -79,7 +79,7 @@ export function PlatformUsers({ session }: { session: Session }) {
   const columns: DataTableColumn<DirectoryUser>[] = [
     { id: "user", header: "User", rowHeader: true, hideable: false, cell: u => u.cleaned_at ? <PersonCell name={userName(u)}><CellText primary={<ResourceLink search={{ page: "user-detail", record: u.id }}>{userName(u)}</ResourceLink>} secondary="Attribution retained" /></PersonCell> : <PersonIdentity person={u} self={u.id === session.user.id} link={{ page: "user-detail", record: u.id }} /> },
     { id: "role", header: "Platform role", cell: u => <PlatformRoleCell user={u} /> },
-    { id: "grants", header: "Grants", defaultHiddenNarrow: true, cell: u => <GrantBadges grants={u.role_grants ? activeGrants(u.role_grants) : undefined} empty={u.role_grants ? undefined : "Unknown source"} /> }, // Revoking a grant happens on the user's page, with confirmation (review #44).
+    { id: "grants", header: "Grants", defaultHiddenNarrow: true, cell: u => <GrantBadges grants={u.role_grants ? activeGrants(u.role_grants) : undefined} empty={u.role_grants ? undefined : "Unknown source"} /> }, // Revoking a grant happens on the user's page, with confirmation.
     { id: "status", header: "Status", cell: u => <UserStatusBadge user={u} /> },
     { id: "shared", header: "Teams & projects", numeric: true, defaultHiddenNarrow: true, cell: u => u.shared_workspace_count ?? <span className={s.muted}>—</span> },
     { id: "last-sign-in", header: "Last sign-in", cell: u => u.last_sign_in_at ? <DateTime value={u.last_sign_in_at} /> : <span className={s.muted}>{u.last_sign_in_at === null ? "Never" : "—"}</span> },
@@ -163,7 +163,7 @@ export function OidcMappings({ session }: { session: Session }) {
   // proposed body to the preview dialog, whose own "Continue to
   // confirmation" reuses this exact existing save path (the same ask()
   // mechanism, same POST/PATCH/DELETE, same audit) as a second, explicit step.
-  // A reopened review (onStale, #89 review item 6: a 412 from a mapping
+  // A reopened review (onStale: a 412 from a mapping
   // changed between review and apply) reuses the exact same request object,
   // so it keeps its own returnFocus/fallbackFocus and refetches fresh.
   const openReview = (build: () => Omit<MappingReviewRequest, "onStale">) => {

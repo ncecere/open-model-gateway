@@ -107,7 +107,7 @@ impl Engine {
         {
             Ok(admission) => admission,
             Err(error) => {
-                // #98 PR 2 review item 2: the timeout and the admission's
+                // The timeout and the admission's
                 // own error (e.g. a team-workspace rate or budget
                 // denial) both return here, before any
                 // `ExecutionGuard`/settlement path exists for this
@@ -326,8 +326,7 @@ pub(super) fn record_routing_span(
                 span.attribute(telemetry::Attribute::Route(route_of(protocol)));
                 telemetry.record(span);
             }
-            // #98 PR 2 review item 5: counted, never a silent,
-            // uncounted loss.
+            // Counted, never a silent, uncounted loss.
             None => telemetry.drop_invalid(),
         }
     }

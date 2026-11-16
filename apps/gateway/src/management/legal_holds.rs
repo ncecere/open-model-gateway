@@ -30,7 +30,7 @@ async fn list(
         Some(_) => return Err(invalid()),
     };
     let mut tx = crate::db::begin(&s.pool).await?;
-    // #37 PR2 review: catalog shared lock first, in canonical order, ahead
+    // Catalog shared lock first, in canonical order, ahead
     // of `platform_read`'s own possible User-scope lock for a token actor.
     resources::catalog_lock(&mut tx, false).await?;
     resources::platform_read(&mut tx, &u).await?;

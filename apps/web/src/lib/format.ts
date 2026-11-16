@@ -1,5 +1,5 @@
 /*
- * Shared display formatters (full UI review, app-wide rules 3–6). One place for
+ * Shared display formatters. One place for
  * how the dashboard writes readiness, statuses, dates, tokens and prices, so a
  * value reads the same on every page. Money stays exact (micro-USD strings,
  * lib/governance formatMicroUsd); unknown is never zero.

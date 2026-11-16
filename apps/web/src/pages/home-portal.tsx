@@ -82,7 +82,7 @@ function selectedOnHome(session: Session) { try { return rememberedWorkspace(ses
 function ModelsYouCanUse({ session, catalogs }: { session: Session; catalogs: Catalogs }) {
   const personal = personalWorkspace(session), workspaces = portalWorkspaces(session), data = catalogs.data;
   const models = data?.models ?? [], notServing = data?.not_serving ?? [], notServingCount = data?.not_serving_count ?? 0, more = (data?.usable_count ?? 0) - Math.min(models.length, 6);
-  // "All models" opens the workspace selected in the sidebar (review #42), not always Personal.
+  // "All models" opens the workspace selected in the sidebar, not always Personal.
   const selected = selectedOnHome(session) ?? personal ?? workspaces[0];
   const all = selected && { page: "grants", ws: selected.id } as const;
   const hiddenNames = notServingCount - notServing.length;

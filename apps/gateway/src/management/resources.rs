@@ -153,7 +153,7 @@ async fn role_inner(
         .ok_or_else(denied)
 }
 /// Platform-reader authorization for a real (lock-capable) transaction,
-/// with #37 PR2 item 1's transaction-level admin-token/owner revalidation
+/// with transaction-level admin-token/owner revalidation
 /// (see [`revalidate_admin_token`]'s own doc): middleware preflight alone
 /// cannot see a token revoked, or an owner demoted/suspended/cleaned up,
 /// after preflight but before this handler's own transaction. A no-op for
@@ -219,7 +219,7 @@ pub(super) fn require_platform_admin(role: &str) -> Result<(), ApiError> {
     }
     Ok(())
 }
-/// #37 PR2 item 1: transaction-level admin-token and owner revalidation.
+/// Transaction-level admin-token and owner revalidation.
 /// Middleware preflight (`authorization.rs`) is a lock-free snapshot taken
 /// before extraction; it cannot see a token revoked, or its owner
 /// demoted/suspended/cleaned up, after that snapshot but before this
@@ -461,7 +461,7 @@ async fn access_inner(
     lock: bool,
 ) -> Result<WorkspaceAccess, ApiError> {
     let (role, kind, owner_user, disabled, membership) = if lock {
-        // #37 PR2 item 1: transaction-level admin-token/owner revalidation
+        // Transaction-level admin-token/owner revalidation
         // (see `revalidate_admin_token`'s own doc), before the role and
         // workspace row checks below. No other scope lock may be taken
         // later in this call chain for a token actor: the one caller that
@@ -593,8 +593,7 @@ pub(crate) fn manage(a: &WorkspaceAccess) -> Result<(), ApiError> {
 /// Audit is inside the resource transaction; no plaintext, identity claims or arbitrary strings.
 /// Only typed safe flags/counts/provenance are retained, not untrusted metadata fields.
 /// Carries admin-token attribution (`u.token_id()`) when the acting
-/// principal is a token (#37 PR2: "Business-action audit events carry
-/// token attribution"); `NULL` for a browser session, exactly as before.
+/// principal is a token; `NULL` for a browser session.
 pub(crate) async fn audit(
     tx: &mut Transaction<'_, Postgres>,
     u: &impl Actor,

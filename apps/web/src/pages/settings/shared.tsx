@@ -1,7 +1,7 @@
 /*
  * Admin › Settings building blocks (Grounded settings pages: a page header,
  * one card per section, a sticky SaveBar while there are edits). Auditors get
- * description lists instead of disabled forms (review rule 12).
+ * description lists instead of disabled forms.
  */
 import type { ReactNode } from "react";
 import { Badge, Button, Heading, Stack } from "../../components/ui";

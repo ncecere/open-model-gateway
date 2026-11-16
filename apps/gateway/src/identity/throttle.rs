@@ -247,7 +247,7 @@ impl Limiter {
 }
 
 /// A bucket keyed by an admin-token id, or one shared overflow bucket once
-/// the table is full (#37 PR2 finding 3): bounded-memory per-token admission
+/// the table is full: bounded-memory per-token admission
 /// limiting, with the same capped/sweep/overflow design as [`Limiter`]
 /// above, reused rather than duplicated as a second map-keyed-by-address
 /// type. Checked only *after* a token has already authenticated (the key
@@ -332,7 +332,7 @@ impl TokenLimiter {
 }
 
 /// One shared token bucket for every admin-token authentication attempt on
-/// this replica, with no per-key map at all (#37 PR2 finding 3): O(1)
+/// this replica, with no per-key map at all: O(1)
 /// memory, so there is nothing here for a flood of distinct client
 /// addresses or token-shaped credentials to grow unbounded. Checked
 /// *before* the expensive, one-database-round-trip authentication lookup,

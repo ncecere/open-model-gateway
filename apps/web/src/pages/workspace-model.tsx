@@ -1,6 +1,6 @@
 /*
  * Workspace › Models › one model: a read-only page for the people who write
- * code against it (finding #8). It shows what the workspace's catalog API
+ * code against it. It shows what the workspace's catalog API
  * already serves to members (GET /workspaces/{ws}/catalog): API name, type,
  * cheapest prices, availability and how to call it. Routes, connections and
  * routing policy stay in Admin. "Back to Models" and Previous/Next follow the

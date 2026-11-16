@@ -24,7 +24,7 @@ export function workloadDisabledReason(workload: WorkloadKind, profile?: string,
   return retiredWorkloads[workload] ?? (workloadSupported(workload, profile) ? undefined : `Not available on ${providerName}`);
 }
 /**
- * The one readiness vocabulary (review rule 3): Ready / Needs setup / Needs attention / Not serving.
+ * The one readiness vocabulary: Ready / Needs setup / Needs attention / Not serving.
  * "Not serving" = an enabled model with no enabled route (requests fail); workspaces show only Ready / Not serving + a reason.
  */
 export const readinessText: Record<Readiness["state"], string> = { ready: "Ready", needs_setup: "Needs setup", needs_attention: "Needs attention", not_serving: "Not serving", retired: "Provider API retired", unknown: "Readiness unknown" };
@@ -130,7 +130,7 @@ export function toggleProtocol(selected: string[], protocol: string, checked: bo
 }
 export type SetupChoices = { connections: { id: string; name: string; provider?: string; enabled?: boolean }[]; catalogs: { id: string; name: string }[] };
 /**
- * Add model defaults that follow the connection's profile (review #23): the protocols a new text model starts with
+ * Add model defaults that follow the connection's profile: the protocols a new text model starts with
  * (Anthropic and Bedrock: Messages + Chat Completions; OpenAI: Chat Completions + Responses; others: Chat Completions),
  * or the single protocol of any other workload. Always in protocolOptions order.
  */

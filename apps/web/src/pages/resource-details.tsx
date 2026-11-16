@@ -44,7 +44,7 @@ export function workspaceSettingsTabs(session: Session, workspace: Workspace): s
 }
 export function WorkspaceSettings({ session, workspace, tab, onTabChange }: Scope & { tab?: string; onTabChange: (tab: string) => void }) {
   const personal = workspace.kind === "personal", editLimits = !personal && permissions(session, workspace).managePolicy;
-  // Icon pill tabs like Grounded's settings and the Admin detail tabs (review #32).
+  // Icon pill tabs like Grounded's settings and the Admin detail tabs.
   const content: Record<string, { label: string; icon: ReactNode; content: ReactNode }> = {
     overview: { label: "General", icon: <Settings2 aria-hidden />, content: <WorkspaceGeneral session={session} workspace={workspace} /> },
     members: { label: "Members", icon: <UsersRound aria-hidden />, content: <WorkspaceMembers session={session} workspace={workspace} /> },

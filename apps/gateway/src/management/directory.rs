@@ -905,7 +905,7 @@ async fn deactivate_unentitled(
 // reuses this exact shape and its validation so a proposal is rejected the
 // same way create/update would reject it, never a parallel relaxed check.
 // `sqlx::FromRow`: `delete_mapping` reads the stored row directly into this
-// shape to compute its digest for `If-Match` (review #89 item 6).
+// shape to compute its digest for `If-Match`.
 pub(super) struct MappingInput {
     pub(super) issuer: String,
     pub(super) group_value: String,
@@ -971,7 +971,7 @@ pub(super) async fn validate_mapping(
 }
 /// The only fields a mapping `PATCH` body may name. Shared by
 /// [`merge_mapping_patch`] and the edit preview's own up-front scan
-/// (`group_mapping_preview.rs`, review #89 round 5), so "what counts as a
+/// (`group_mapping_preview.rs`), so "what counts as a
 /// known mapping field" is one list, never two that could drift.
 pub(super) const MAPPING_PATCH_FIELDS: [&str; 7] = [
     "issuer",
@@ -982,7 +982,7 @@ pub(super) const MAPPING_PATCH_FIELDS: [&str; 7] = [
     "workspace_role",
     "enabled",
 ];
-/// `PATCH`'s merge semantics (review #89 round 5): `patch`'s fields
+/// `PATCH`'s merge semantics: `patch`'s fields
 /// overlaid onto `current` (the same jsonb shape [`MappingInput`]
 /// deserializes -- a field *absent* from `patch` keeps its current value;
 /// a field explicitly `null` in `patch` clears it, exactly the way
@@ -1017,7 +1017,7 @@ pub(super) async fn merge_mapping_patch(
     validate_mapping(tx, &b).await?;
     Ok((current, b))
 }
-/// A stable identifier for one mapping definition (#89 review item 6): the
+/// A stable identifier for one mapping definition: the
 /// preview evaluator returns this for the client to send back as an
 /// `If-Match` header on the following PATCH/DELETE, so a mapping changed
 /// between review and apply is refused with `412` instead of silently
@@ -1056,8 +1056,8 @@ const IF_MATCH_MALFORMED: &str = "Malformed If-Match header";
 /// `"<64 lowercase hex>"` value equal to [`mapping_digest`] of the row as
 /// it stands right now (under the same `FOR UPDATE` lock the caller
 /// already holds); absent is the pre-existing behavior (no precondition).
-/// Additive: an older client that never sends it is unaffected. Review #89
-/// item 5: a duplicated header, a non-text value, or anything other than
+/// Additive: an older client that never sends it is unaffected. A
+/// duplicated header, a non-text value, or anything other than
 /// one well-formed quoted digest is refused outright (`400`) rather than
 /// silently treated as absent or loosely unquoted/matched.
 fn check_if_match(headers: &HeaderMap, digest: &str) -> Result<(), ApiError> {

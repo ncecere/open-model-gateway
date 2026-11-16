@@ -148,8 +148,8 @@ impl LineRun {
                     return;
                 }
                 Err(e) => {
-                    // Busy from an ungated refusal (`LineRepository::refuse_ungated`,
-                    // #243 review finding 2) never reached a provider: only a
+                    // Busy from an ungated refusal (`LineRepository::refuse_ungated`)
+                    // never reached a provider: only a
                     // claimed attempt's Busy is upstream rate limiting, worth
                     // backing off the whole batch's dispatch for.
                     if e == InferenceError::Busy && pin.is_some() {
@@ -255,7 +255,7 @@ impl LineRun {
     ) -> Result<BatchResponse, InferenceError> {
         if let Some(deployment) = plan.map(|p| p.deployment).or(pin.map(|p| p.deployment)) {
             // `pin.is_some()` is the scheduler's own route-capacity claim
-            // for this attempt (#243 review finding 1), distinct from
+            // for this attempt, distinct from
             // merely carrying a plan: a creation-time plan alone (an
             // omitted-maximum line dispatched ungated because its pinned
             // route was briefly ineligible) must not count as gated.

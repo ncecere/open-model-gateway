@@ -123,8 +123,8 @@ impl RequestTelemetry {
             context.record(span);
         }
     }
-    /// Counts one span that could never be built at all (#98 PR 2 review
-    /// item 5), a no-op while telemetry is inactive for this request.
+    /// Counts one span that could never be built at all, a no-op while
+    /// telemetry is inactive for this request.
     pub(super) fn drop_invalid(&self) {
         if let Some(context) = self.context.as_ref() {
             context.drop_invalid();
@@ -180,15 +180,15 @@ impl RequestTelemetry {
                         span.attribute(telemetry::Attribute::Error(error_kind_of(error)));
                     }
                     // Reserved outside the ordinary per-request child-span
-                    // budget (#98 PR 2 review item 6): this is the
+                    // budget: this is the
                     // request's sole root span, recorded exactly once here
                     // (guarded by `self.finished` above), so it must never
                     // be the span a full budget of children drops.
                     context.record_root(span);
                 }
-                // #98 PR 2 review item 5: the root span could not be built
-                // at all (a malformed shape, or entropy exhaustion) -
-                // counted, never a silent, uncounted loss.
+                // The root span could not be built at all (a malformed
+                // shape, or entropy exhaustion) - counted, never a silent,
+                // uncounted loss.
                 None => context.drop_invalid(),
             }
         }
@@ -258,7 +258,7 @@ pub(super) fn end_phase_group(
         telemetry::now_unix_nanos(),
     ) {
         Some(span) => span,
-        // #98 PR 2 review item 5: counted, never a silent, uncounted loss.
+        // Counted, never a silent, uncounted loss.
         None => {
             telemetry.drop_invalid();
             return;
@@ -294,7 +294,7 @@ pub(super) fn attempt_span(
         end,
     ) {
         Some(span) => span,
-        // #98 PR 2 review item 5: counted, never a silent, uncounted loss.
+        // Counted, never a silent, uncounted loss.
         None => {
             telemetry.drop_invalid();
             return None;
