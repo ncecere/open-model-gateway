@@ -11,7 +11,7 @@
 (*   Mode "Local"       mutation: the holder checks its local term, then     *)
 (*                      writes with no database check.                      *)
 (*   Mode "RunnerFlag"  the gateway-run batch runner (jobs/runner.rs,       *)
-(*                      jobs/store.rs:420-441): async_jobs.runner_id +      *)
+(*                      jobs/store.rs claim_gateway/renew_lease): async_jobs.runner_id +      *)
 (*                      runner_lease_until, a local `lost` flag set by the  *)
 (*                      renewal task, and NO runner id or epoch on any      *)
 (*                      write.                                              *)
@@ -50,7 +50,7 @@ Init ==
   /\ crashes = 0
   /\ stale = FALSE /\ reorder = FALSE /\ lastW = 0
 
-\* omg_lease_acquire (0029:56-69): takes a free or expired lease or renews the
+\* omg_lease_acquire (0029 `omg_lease_acquire`): takes a free or expired lease or renews the
 \* caller's own; a new term always gets a larger epoch. The UPDATE waits for a
 \* FOR SHARE holder (Mode InTx).
 Acquire(r) ==
@@ -66,13 +66,13 @@ Acquire(r) ==
   /\ UNCHANGED <<pc, ck, shared, crashes, stale, reorder, lastW>>
 
 \* The renewal task of a replica that is told another term is current drops
-\* its belief (leases.rs:244-245; runner.rs:228-231 sets `lost`).
+\* its belief (Leases::renew_once `Ok(None) => *slot = None`; Runner::run's renewal task sets `lost`).
 Observe(r) ==
   /\ term[r] # Nil /\ lease.live /\ lease.holder # r
   /\ term' = [term EXCEPT ![r] = Nil]
   /\ UNCHANGED <<lease, pc, ck, shared, crashes, stale, reorder, lastW>>
 
-\* Local term runs out before the database expiry (leases.rs:240 trusted_until).
+\* Local term runs out before the database expiry (Leases::renew_once `trusted_until`, MARGIN).
 TrustLapse(r) ==
   /\ term[r] # Nil
   /\ term' = [term EXCEPT ![r] = Nil]
@@ -85,21 +85,21 @@ Expire ==
   /\ lease' = [lease EXCEPT !.live = FALSE]
   /\ UNCHANGED <<term, pc, ck, shared, crashes, stale, reorder, lastW>>
 
-\* A batch runner's renewal (store.rs:433-440) renews its own row even after
+\* A batch runner's renewal (store::renew_lease) renews its own row even after
 \* the term lapsed, as long as nobody else claimed it.
 RenewOwn(r) ==
   /\ Mode = "RunnerFlag" /\ lease.holder = r /\ ~lease.live
   /\ lease' = [lease EXCEPT !.live = TRUE]
   /\ UNCHANGED <<term, pc, ck, shared, crashes, stale, reorder, lastW>>
 
-\* Job tick: leases.held() (leases.rs:197) then work(fence).
+\* Job tick: leases.held() (Leases::held) then work(fence).
 Check(r) ==
   /\ pc[r] = "idle" /\ term[r] # Nil
   /\ pc' = [pc EXCEPT ![r] = "checked"]
   /\ ck' = [ck EXCEPT ![r] = term[r]]
   /\ UNCHANGED <<lease, term, shared, crashes, stale, reorder, lastW>>
 
-\* omg_lease_fence (0029:73-81): current holder, same epoch, unexpired.
+\* omg_lease_fence (0029 `omg_lease_fence`, `PERFORM 1 ... FOR SHARE`): current holder, same epoch, unexpired.
 Fence(r) ==
   /\ Mode \in {"InTx", "InTxNoShare"} /\ pc[r] = "checked"
   /\ IF lease.holder = r /\ lease.epoch = ck[r] /\ lease.live

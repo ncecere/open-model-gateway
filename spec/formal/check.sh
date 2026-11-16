@@ -3,11 +3,14 @@
 #
 #   spec/formal/check.sh [all|safety|wide|live|lease|diag|assumptions|mutations|witnesses]
 #
-# Needs docker and curl. The checker runs with NO network, a 3 GB memory limit and a
+# Needs docker, curl and timeout. The checker runs with NO network, a 3 GB memory limit and a
 # read-only copy of the specs. Pinned inputs (change them only together with the
 # README): the JRE image by digest and tla2tools.jar v1.7.4 by SHA-256 (cross-checked
 # with the SHA-1 published on the release page). The jar is downloaded once into
 # $TLA_WORK (default ~/.cache/omg-formal), outside the repository, and never committed.
+# The jar's SHA-256 is trust-on-first-use: the release publishes only the SHA-1, which
+# matches. The download goes through .github/scripts/fetch-verified.sh (https only,
+# checksum checked before the file is moved into place).
 set -euo pipefail
 
 IMAGE='eclipse-temurin@sha256:18bb4a91a3dea3f03ee31d3755af34dfb40f904fc77ab56cdc2f092e32fff9c2'
@@ -16,21 +19,25 @@ JAR_SHA256='936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88'
 JAR_SHA1='bee4a54f3ee3d4afc347c3240ec2d9e93b075104'
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo="$(cd "$here/../.." && pwd -P)"
 work="${TLA_WORK:-${XDG_CACHE_HOME:-$HOME/.cache}/omg-formal}"
+fail() { echo "check.sh: $*" >&2; exit 1; }
+[[ "$work" == /* ]] || fail "TLA_WORK must be an absolute path"
+[[ "$work" != *:* ]] || fail "TLA_WORK must not contain ':' (it is used in docker -v)"
+case "$work/" in "$repo"/*) fail "TLA_WORK must be outside the repository ($repo)" ;; esac
 mkdir -p "$work/tools" "$work/state"
+work="$(cd "$work" && pwd -P)"
+case "$work/" in "$repo"/*) fail "TLA_WORK must be outside the repository ($repo)" ;; esac
 # TLC looks for the .cfg next to the .tla, so generated configs go in a staging copy.
 rm -rf "$work/stage"; mkdir "$work/stage"
 cp "$here"/*.tla "$here"/*.cfg "$work/stage/"
 
-fail() { echo "check.sh: $*" >&2; exit 1; }
 command -v docker >/dev/null || fail "docker is not installed"
 
 fetch_jar() {
   local jar="$work/tools/tla2tools.jar"
   if [[ ! -f "$jar" ]]; then
-    command -v curl >/dev/null || fail "curl is not installed"
-    curl --proto '=https' --tlsv1.2 -fsSL -o "$jar.part" "$JAR_URL"
-    mv "$jar.part" "$jar"
+    bash "$repo/.github/scripts/fetch-verified.sh" "$JAR_URL" "$JAR_SHA256" "$jar"
   fi
   [[ "$(sha256sum "$jar" | cut -d' ' -f1)" == "$JAR_SHA256" ]] || fail "tla2tools.jar SHA-256 mismatch; delete $jar"
   [[ "$(sha1sum "$jar" | cut -d' ' -f1)" == "$JAR_SHA1" ]] || fail "tla2tools.jar SHA-1 mismatch; delete $jar"
@@ -49,7 +56,9 @@ run_tlc() {
   meta="$work/state/meta-$$"
   rm -rf "$meta"
   local started=$SECONDS
-  docker run --rm --network none -m 3g --user "$(id -u):$(id -g)" \
+  timeout -k 20 "${TLC_TIMEOUT:-1200}" docker run --rm --init --network none -m 3g --pids-limit 256 \
+    --read-only --tmpfs /tmp:rw,size=256m --cap-drop ALL --security-opt no-new-privileges \
+    --user "$(id -u):$(id -g)" \
     -v "$work/stage:/spec:ro" -v "$work/tools:/tools:ro" -v "$work/state:/state" \
     "$IMAGE" java -XX:MaxRAMPercentage=70 -XX:+UseParallelGC -cp /tools/tla2tools.jar tlc2.TLC \
     -metadir "/state/meta-$$" -workers 3 "$@" -config "$cfg" "/spec/$module.tla" >"$log" 2>&1 || true
@@ -89,16 +98,21 @@ failed=0
 section() { printf '\n== %s\n' "$1"; }
 
 do_safety() {
-  section "MoneyPath: the code as read (2 attempts, 2 replicas, 1 crash)"
-  run_tlc "MoneyPath" pass MoneyPath /spec/MoneyPath.cfg
+  section "MoneyPath: the code as read (2 attempts, 2 replicas, 1 crash), priced and free price"
+  run_tlc "MoneyPath (priced)" pass MoneyPath /spec/MoneyPath.cfg
+  run_tlc "MoneyPath (free price)" pass MoneyPath /spec/MoneyPathFree.cfg
 }
 do_wide() {
   section "MoneyPath wide: 3 attempts, 2 crashes"
-  run_tlc "MoneyPathWide" pass MoneyPath /spec/MoneyPathWide.cfg
+  run_tlc "MoneyPathWide (priced)" pass MoneyPath /spec/MoneyPathWide.cfg
+  run_tlc "MoneyPathWide (free price)" pass MoneyPath \
+    "$(with_cfg MoneyPathWide.cfg 's/FreePrice = FALSE/FreePrice = TRUE/' wide-free)"
 }
 do_live() {
   section "MoneyPath liveness (weak fairness on the clock, reconciler, restart)"
-  run_tlc "MoneyPathLive" pass MoneyPath /spec/MoneyPathLive.cfg
+  run_tlc "MoneyPathLive (priced)" pass MoneyPath /spec/MoneyPathLive.cfg
+  run_tlc "MoneyPathLive (free price)" pass MoneyPath \
+    "$(with_cfg MoneyPathLive.cfg 's/FreePrice = FALSE/FreePrice = TRUE/' live-free)"
   run_tlc "Live mutation: reconciler_off" violate:Resolves MoneyPath \
     "$(with_cfg MoneyPathLive.cfg 's/Mut = "none"/Mut = "reconciler_off"/' mut-live)"
 }
@@ -118,18 +132,29 @@ do_diag() {
   section "Diagnostic (expected to fail): complete usage received but the reservation ends unknown"
   run_tlc "MoneyPathDiag" violate:KnownUsageSettled MoneyPath /spec/MoneyPathDiag.cfg
 }
-mutation() { # NAME EXPECTED_PROPERTY
-  run_tlc "Mutation: $1" "violate:$2" MoneyPath "$(with_cfg MoneyPath.cfg "s/Mut = \"none\"/Mut = \"$1\"/" "mut-$1")"
+mutation() { # NAME EXPECTED  (EXPECTED: an invariant name, or "masked" = still passes)
+  local want="violate:$2"; [[ "$2" == masked ]] && want=pass
+  run_tlc "Mutation: $1" "$want" MoneyPath "$(with_cfg MoneyPath.cfg "s/Mut = \"none\"/Mut = \"$1\"/" "mut-$1")"
 }
 do_mutations() {
-  section "MoneyPath mutations: each deliberate bug must produce a counterexample"
+  section "MoneyPath mutations: each deliberate bug must produce a counterexample, unless another layer masks it"
   mutation reuse_reservation OwnReservation
   mutation release_on_cancel UnknownRetainsHold
   mutation reconcile_releases_hold UnknownRetainsHold
-  mutation reconcile_no_state_guard SettledTerminal
-  mutation settle_no_state_check SettledTerminal
   mutation unknown_as_zero SettledMatchesTruth
   mutation failover_after_stream NoFailoverAfterStream
+  # One reconcile layer removed at a time (r_pred, r_exec, r_check), then together.
+  mutation reconcile_no_pred masked
+  mutation reconcile_no_exec masked
+  mutation reconcile_no_check masked
+  mutation reconcile_no_pred_exec masked
+  mutation reconcile_no_pred_exec_check SettledTerminal
+  # One settlement layer removed at a time (s_pred, s_exec, s_uniq), then together.
+  mutation settle_no_pred masked
+  mutation settle_no_exec masked
+  mutation settle_no_uniq masked
+  mutation settle_no_pred_exec masked
+  mutation settle_no_pred_exec_uniq SettledTerminal
   # The same two bugs seen only by the action property (state invariants off).
   local m
   for m in release_on_cancel reconcile_releases_hold; do
@@ -147,9 +172,12 @@ do_assumptions() {
 do_witnesses() {
   section "Reachability witnesses: each scenario must be reachable (violation expected)"
   local w
-  for w in W_Failover W_StreamSettled W_BilledUnknown W_Evidence W_CancelUnknown W_ReconcilerWon W_TwoHolds W_RejectedFree W_CrashPending; do
+  for w in W_Failover W_StreamSettled W_BilledUnknown W_Evidence W_CancelUnknown W_ReconcilerWon W_TwoHolds \
+           W_RejectedFree W_RejectedUnknown W_BusyFailover W_AckLost W_CrashPending; do
+    # W_RejectedFree needs a free price; the others hold in the priced model.
+    price=FALSE; [[ "$w" == W_RejectedFree ]] && price=TRUE
     run_tlc "Witness $w" "violate:$w" MoneyPath \
-      "$(with_cfg MoneyPath.cfg "s/^INVARIANTS.*/INVARIANTS $w/;/^PROPERTIES/d" "wit-$w")"
+      "$(with_cfg MoneyPath.cfg "s/^INVARIANTS.*/INVARIANTS $w/;/^PROPERTIES/d;s/FreePrice = FALSE/FreePrice = $price/" "wit-$w")"
   done
 }
 

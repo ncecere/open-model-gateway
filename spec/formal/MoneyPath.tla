@@ -9,10 +9,14 @@
 (*                                                                          *)
 (* One client request (served by replica Serving) has up to |Attempts|      *)
 (* attempts. Every attempt has its own execution + reservation + ledger     *)
-(* hold, written by ONE statement (governance.rs:462-467), so Admit is a    *)
-(* single atomic step. Settlement is one transaction (settlement.rs:621-    *)
-(* 629), also one atomic step; a failed or dropped settlement leaves the    *)
-(* rows unchanged. The upstream is an environment: it may never receive the *)
+(* hold, written by ONE statement (admit_unobserved, the WITH e AS (INSERT *)
+(* inference_executions) ... INSERT monetary_ledger statement), so Admit is *)
+(* a single atomic step. Settlement is one transaction (finish_unobserved,  *)
+(* the WITH e AS (UPDATE inference_executions ...) statement), also one     *)
+(* atomic step; a settlement that fails, times out or is dropped MAY have   *)
+(* committed (commit-ack loss) and is modelled both ways. Line numbers are  *)
+(* deliberately not cited here: anchors are function names and SQL          *)
+(* fragments (see README.md). The upstream is an environment: it may never receive the *)
 (* request, or bill it and lose the answer ("the upstream may have done the *)
 (* work when the gateway does not know").                                   *)
 (*                                                                          *)
@@ -22,15 +26,16 @@
 EXTENDS Integers, FiniteSets
 
 CONSTANTS
-  Attempts,    \* attempt slots of the request, {1,2} (plan.max_attempts <= 3, inference/mod.rs:215)
+  Attempts,    \* attempt slots of the request, {1,2} (`(1..=3).contains(&plan.max_attempts)` in Engine::execute_protocol)
   Replicas,    \* gateway replicas
   Serving,     \* the replica serving the client request (an element of Replicas)
   HOLD,        \* reserved ceiling of one attempt, micro-USD abstracted to a number
   ACTUAL,      \* what the provider really bills a processed attempt (ACTUAL < HOLD)
   MaxCrashes,  \* bound on replica crashes in one behaviour
+  FreePrice,   \* the pinned price is entirely free or not applicable (all_free_or_not_applicable)
   Mut          \* mutation switch; "none" = the code as read
 
-ASSUME ACTUAL < HOLD /\ Serving \in Replicas
+ASSUME ACTUAL < HOLD /\ Serving \in Replicas /\ FreePrice \in BOOLEAN
 
 NoAmt == -1                          \* SQL NULL for amounts
 Last  == CHOOSE m \in Attempts : \A x \in Attempts : x <= m
@@ -42,10 +47,10 @@ VARIABLES
   crashes,       \* crashes so far
   streamed,      \* the request is a streaming request (fixed per behaviour)
   pc,            \* pc[a]: the attempt's request thread
-  sret,          \* sret[a]: a response stream was returned to the client (attempt.rs:466)
+  sret,          \* sret[a]: a response stream was returned to the client (`stream_returned = true` in track_stream)
   out,           \* out[a]: the thread's outcome once it settles
-  fo,            \* fo[a]: the thread settled and may fail over (attempt.rs:152)
-  cancelPending, \* cancelPending[a]: detached cancellation settlement queued (mod.rs:503)
+  fo,            \* fo[a]: the thread settled and may fail over (`failing_over` in Engine::attempt)
+  cancelPending, \* cancelPending[a]: detached cancellation settlement queued (`impl Drop for ExecutionGuard`)
   inbox,         \* inbox[a]: the upstream's answer as received by the gateway
   gotUsage,      \* gotUsage[a]: the gateway received a complete usage report
   failedOver,    \* failedOver[a]: attempt a+1 was started after a
@@ -80,21 +85,43 @@ Contrib(r) ==
 ------------------------------------------------------------------------------
 (* Settlement transaction: governance/settlement.rs finish_unobserved.       *)
 
-KnownCost(a, o)  == o = "succeeded"                      \* settlement.rs:600 (usage complete)
-FreeReject(a, o) == o = "rejected" /\ ~sret[a]           \* free_rejection, settlement.rs:431-456
+(* Layers a mutation can remove (README section 3): "r_*" are reconcile's,   *)
+(* "s_*" settlement's. Each real layer is a separate defence in the code.    *)
+DroppedLayers ==
+  CASE Mut = "reconcile_no_pred"            -> {"r_pred"}
+    [] Mut = "reconcile_no_exec"            -> {"r_exec"}
+    [] Mut = "reconcile_no_check"           -> {"r_check"}
+    [] Mut = "reconcile_no_pred_exec"       -> {"r_pred", "r_exec"}
+    [] Mut = "reconcile_no_pred_exec_check" -> {"r_pred", "r_exec", "r_check"}
+    [] Mut = "settle_no_pred"               -> {"s_pred"}
+    [] Mut = "settle_no_exec"               -> {"s_exec"}
+    [] Mut = "settle_no_uniq"               -> {"s_uniq"}
+    [] Mut = "settle_no_pred_exec"          -> {"s_pred", "s_exec"}
+    [] Mut = "settle_no_pred_exec_uniq"     -> {"s_pred", "s_exec", "s_uniq"}
+    [] OTHER                                -> {}
+Dropped(l) == l \in DroppedLayers
+
+KnownCost(a, o)  == o = "succeeded"        \* `record.outcome == Succeeded && input/output present` in finish_unobserved
+\* free_rejection: only UpstreamRejected/ContextLength (outcome "rejected"; a 429 Busy
+\* is "busy"), no stream returned, no usage, AND a pinned price that is entirely
+\* free or not applicable. For a priced model a rejection ends `unknown`.
+FreeReject(a, o) == FreePrice /\ o = "rejected" /\ ~sret[a]
 SettlesNow(a, o) ==
   \/ KnownCost(a, o)
   \/ FreeReject(a, o)
-  \/ (Mut = "unknown_as_zero" /\ o \in {"timeout", "unavail"})
+  \/ (Mut = "unknown_as_zero" /\ o \in {"timeout", "unavail", "busy"})
 KindOf(a, o) == IF SettlesNow(a, o) THEN "settlement" ELSE "unknown"
 
-(* Guards of the real transaction: the row is still `pending` (settlement.rs *)
-(* :587, FOR UPDATE), the execution is still `started` (:621), and the       *)
-(* ledger has no row of this kind yet (UNIQUE(execution_id,kind,admitted_at),*)
-(* 0030:613). A failed guard rolls back or returns Replay/Conflict: no write. *)
+(* Guards of the real transaction: the row is still `pending` (read under   *)
+(* FOR UPDATE, `if r.state != "pending"`), the execution is still `started` *)
+(* (`WHERE id=$1 ... AND state='started'` plus the (1,1,1) row-count check), *)
+(* and the ledger has no row of this kind yet (monetary_ledger_execution_    *)
+(* kind_key UNIQUE, 0030). A failed guard rolls back or returns              *)
+(* Replay/Conflict: no write.                                                *)
 Applies(a, o) ==
-  IF Mut = "settle_no_state_check" THEN TRUE
-  ELSE res[a].st = "pending" /\ exec[a] = "started" /\ KindOf(a, o) \notin led[a]
+  /\ (Dropped("s_pred") \/ res[a].st = "pending")
+  /\ (Dropped("s_exec") \/ exec[a] = "started")
+  /\ (Dropped("s_uniq") \/ KindOf(a, o) \notin led[a])
 
 SettleResult(a, o) ==
   [st      |-> IF SettlesNow(a, o) THEN "settled" ELSE "unknown",
@@ -149,7 +176,7 @@ Deliver(a) ==
 Receive(a) ==
   /\ pc[a] = "dispatched" /\ up[Serving] /\ inbox[a] # "empty"
   /\ pc'  = [pc EXCEPT ![a] = "settling"]
-  /\ out' = [out EXCEPT ![a] = IF inbox[a] = "usage" THEN "succeeded" ELSE "rejected"]
+  /\ out' \in {[out EXCEPT ![a] = o] : o \in (IF inbox[a] = "usage" THEN {"succeeded"} ELSE {"rejected", "busy"})}
   /\ gotUsage' = [gotUsage EXCEPT ![a] = (inbox[a] = "usage") \/ @]
   /\ UNCHANGED <<up, crashes, streamed, sret, fo, cancelPending, inbox, failedOver, upst, res, exec, led, nset>>
 
@@ -165,7 +192,7 @@ ConnError(a) ==
   /\ out' = [out EXCEPT ![a] = "unavail"]
   /\ UNCHANGED <<up, crashes, streamed, sret, fo, cancelPending, inbox, gotUsage, failedOver, upst, res, exec, led, nset>>
 
-\* Explicit settlement by the thread (mod.rs:292-351, 3 s deadline). The
+\* Explicit settlement by the thread (ExecutionGuard::finish, SETTLEMENT_DEADLINE 3 s). The
 \* thread sets `finished` first, so a failed settlement is not retried.
 SettleExplicit(a) ==
   /\ pc[a] = "settling" /\ up[Serving]
@@ -173,19 +200,30 @@ SettleExplicit(a) ==
   /\ pc' = [pc EXCEPT ![a] = "done"]
   /\ fo' = [fo EXCEPT ![a] = Applies(a, out[a])]
   /\ UNCHANGED <<up, crashes, streamed, sret, out, cancelPending, inbox, gotUsage, failedOver, upst>>
+\* The caller sees a failure (error or the 3 s deadline), but the write may or
+\* may not have committed (commit-ack loss); both are modelled.
 SettleExplicitFail(a) ==
   /\ pc[a] = "settling" /\ up[Serving]
   /\ pc' = [pc EXCEPT ![a] = "done"]
-  /\ UNCHANGED <<up, crashes, streamed, sret, out, fo, cancelPending, inbox, gotUsage, failedOver, upst, res, exec, led, nset>>
+  /\ \/ UNCHANGED <<res, exec, led, nset>>
+     \/ Commit(a, out[a])
+  /\ UNCHANGED <<up, crashes, streamed, sret, out, fo, cancelPending, inbox, gotUsage, failedOver, upst>>
 
-\* Client drops the future (mod.rs:503 Drop). Before `finished`: a detached
+\* Client drops the future (impl Drop for ExecutionGuard). Before `finished`: a detached
 \* cancellation settlement is queued. While the explicit settlement is in
 \* flight: it is dropped (rolled back) and Drop does nothing.
 ClientCancel(a) ==
-  /\ pc[a] \in LiveThread /\ up[Serving]
+  /\ pc[a] \in {"admitted", "dispatched"} /\ up[Serving]
   /\ pc' = [pc EXCEPT ![a] = "abandoned"]
-  /\ cancelPending' = [cancelPending EXCEPT ![a] = IF pc[a] = "settling" THEN @ ELSE TRUE]
+  /\ cancelPending' = [cancelPending EXCEPT ![a] = TRUE]
   /\ UNCHANGED <<up, crashes, streamed, sret, out, fo, inbox, gotUsage, failedOver, upst, res, exec, led, nset>>
+\* Dropped while the settlement write is in flight: it may or may not have landed.
+ClientCancelSettling(a) ==
+  /\ pc[a] = "settling" /\ up[Serving]
+  /\ pc' = [pc EXCEPT ![a] = "abandoned"]
+  /\ \/ UNCHANGED <<res, exec, led, nset>>
+     \/ Commit(a, out[a])
+  /\ UNCHANGED <<up, crashes, streamed, sret, out, fo, cancelPending, inbox, gotUsage, failedOver, upst>>
 CancelSettle(a) ==
   /\ cancelPending[a] /\ up[Serving]
   /\ Commit(a, "cancelled")
@@ -194,14 +232,19 @@ CancelSettle(a) ==
 CancelSettleFail(a) ==
   /\ cancelPending[a] /\ up[Serving]
   /\ cancelPending' = [cancelPending EXCEPT ![a] = FALSE]
-  /\ UNCHANGED <<up, crashes, streamed, pc, sret, out, fo, inbox, gotUsage, failedOver, upst, res, exec, led, nset>>
+  /\ \/ UNCHANGED <<res, exec, led, nset>>      \* commit-ack loss: it may have landed
+     \/ Commit(a, "cancelled")
+  /\ UNCHANGED <<up, crashes, streamed, pc, sret, out, fo, inbox, gotUsage, failedOver, upst>>
 
-\* Failover (attempt.rs:152-158, routing.rs:392): only after the previous
-\* attempt's settlement succeeded, only for an ambiguous/transport failure
-\* under the allow_ambiguous_failover policy, and never once a stream was
-\* returned.
+\* Failover (Engine::attempt `failing_over`, routing::may_failover): only after
+\* the previous attempt's settlement returned Ok, for Busy (a 429: "busy") or,
+\* under the allow_ambiguous_failover policy, a transport failure ("unavail");
+\* a 4xx rejection or a timeout never fails over. In the code the decision lives
+\* only in the `Err` arm, so "never after a stream" is structural; here it is
+\* this guard (NoFailoverAfterStream checks the model's own guard). The previous
+\* attempt ended `unknown` with its hold kept, so failover leaves two live holds.
 Failover(a) ==
-  /\ a < Last /\ pc[a] = "done" /\ fo[a] /\ out[a] = "unavail" /\ ~failedOver[a] /\ up[Serving]
+  /\ a < Last /\ pc[a] = "done" /\ fo[a] /\ out[a] \in {"unavail", "busy"} /\ ~failedOver[a] /\ up[Serving]
   /\ (~sret[a] \/ Mut = "failover_after_stream")
   /\ failedOver' = [failedOver EXCEPT ![a] = TRUE]
   /\ UNCHANGED <<up, crashes, streamed, pc, sret, out, fo, cancelPending, inbox, gotUsage, upst, res, exec, led, nset>>
@@ -217,23 +260,30 @@ ExpireLease(a) ==
   /\ res' = [res EXCEPT ![a].expired = TRUE]
   /\ UNCHANGED <<up, crashes, streamed, pc, sret, out, fo, cancelPending, inbox, gotUsage, failedOver, upst, exec, led, nset>>
 
-\* reconcile.rs:28-75, run by every replica (not leased; SKIP LOCKED).
-\* Four layers: SELECT ... state='pending' (:32), UPDATE ... state='pending'
-\* (:47), claimed==updated (:52), executions state='started' changed (:56-59).
+\* reconcile_batch, run by every replica (not leased; SKIP LOCKED). Layers that
+\* keep a settled row from being flipped to `unknown`:
+\*   r_pred   `WHERE state='pending'` in the SELECT and in the UPDATE
+\*   r_exec   `changed != ids.len()` after `UPDATE inference_executions ... AND state='started'`
+\*   r_check  CHECK(state='settled' AND actual IS NOT NULL OR state<>'settled' AND actual IS NULL)
+\*            (0001_enterprise.sql), because the UPDATE does not clear `actual`
+\* The ledger UNIQUE on kind 'unknown' is always on (it only matters for rows
+\* already reconciled).
 ReconcileOK(a) ==
   IF Mut = "reconciler_off" THEN FALSE            \* liveness mutation: nobody reconciles
-  ELSE IF Mut = "reconcile_no_state_guard"
-  THEN res[a].st # "none" /\ res[a].expired
-  ELSE res[a].st = "pending" /\ res[a].expired /\ exec[a] = "started" /\ "unknown" \notin led[a]
+  ELSE /\ (IF Dropped("r_pred") THEN res[a].st # "none" ELSE res[a].st = "pending")
+       /\ res[a].expired
+       /\ (Dropped("r_exec") \/ exec[a] = "started")
+       /\ (Dropped("r_check") \/ res[a].actual = NoAmt)
+       /\ "unknown" \notin led[a]
 Reconcile(a, r) ==
   /\ up[r] /\ ReconcileOK(a)
-  /\ res'  = [res EXCEPT ![a].st = "unknown", ![a].actual = NoAmt,
+  /\ res'  = [res EXCEPT ![a].st = "unknown",
                          ![a].held = IF Mut = "reconcile_releases_hold" THEN 0 ELSE @]
   /\ exec' = [exec EXCEPT ![a] = IF @ = "started" THEN "cancelled" ELSE @]
   /\ led'  = [led EXCEPT ![a] = @ \cup {"unknown"}]
   /\ UNCHANGED <<up, crashes, streamed, pc, sret, out, fo, cancelPending, inbox, gotUsage, failedOver, upst, nset>>
 
-\* resolve_usage (reconcile.rs:119-258): an operator settles an `unknown`,
+\* resolve_usage: an operator settles an `unknown`,
 \* terminal reservation with evidence of the provider's real charge.
 \* Assumption A3: evidence reflects the final bill (upstream no longer in flight).
 Evidence(a) ==
@@ -287,7 +337,7 @@ Next ==
   \/ \E a \in Attempts :
        \/ Admit(a) \/ Dispatch(a) \/ Process(a) \/ Deliver(a) \/ Receive(a)
        \/ Timeout(a) \/ ConnError(a) \/ SettleExplicit(a) \/ SettleExplicitFail(a)
-       \/ ClientCancel(a) \/ CancelSettle(a) \/ CancelSettleFail(a) \/ Failover(a)
+       \/ ClientCancel(a) \/ ClientCancelSettling(a) \/ CancelSettle(a) \/ CancelSettleFail(a) \/ Failover(a)
        \/ ExpireLease(a) \/ Evidence(a)
        \/ \E r \in Replicas : Reconcile(a, r)
   \/ \E r \in Replicas : Crash(r) \/ Restart(r)
@@ -321,25 +371,25 @@ TypeOK ==
 
 \* I1. "Every upstream attempt needs its own durable reservation."
 \* admit_unobserved commits execution+reservation+hold before call_upstream
-\* (governance.rs:462-473, attempt.rs:97-139); a failover is a new Admit with a
-\* new execution id (attempt.rs:90-94).
+\* (admit_unobserved, then call_upstream in Engine::attempt); a failover is a new
+\* Admit with a new execution id (`Uuid::now_v7()` for attempt > 0).
 OwnReservation ==
   \A a \in Attempts :
     (upst[a] # "none" \/ pc[a] \in {"dispatched", "settling", "done"}) => res[a].st # "none"
 
-\* Rows stay coherent: pending <=> execution started (reconcile.rs:56-59 relies on it).
+\* Rows stay coherent: pending <=> execution started (reconcile_batch's execution row-count check relies on it).
 ExecConsistent ==
   \A a \in Attempts :
     /\ (res[a].st = "pending") => exec[a] = "started"
     /\ (res[a].st \in {"unknown", "settled"}) => exec[a] \in {"succeeded", "failed", "cancelled"}
 
 \* I2a. "Unknown cost keeps its hold": an unknown reservation keeps the whole
-\* admitted hold (reconcile.rs:47 only flips state; settlement.rs:622 never
+\* admitted hold (reconcile_batch only flips state; the settlement UPDATE never
 \* lowers held_microusd).
 UnknownRetainsHold == \A a \in Attempts : res[a].st = "unknown" => res[a].held >= HOLD
 
 \* I4. "Treat unknown usage as zero" never: a settled amount equals what the
-\* provider really charged (settlement.rs:600-606: only complete usage, or a
+\* provider really charged (finish_unobserved `let actual = ...`: only complete usage, or (FreePrice) a
 \* free pre-processing rejection, settles; everything else is `unknown`).
 SettledMatchesTruth ==
   \A a \in Attempts : res[a].st = "settled" => (Truth(a) >= 0 /\ res[a].actual = Truth(a))
@@ -398,7 +448,10 @@ W_Evidence      == ~(nset[1] = 1 /\ "reconciliation" \in led[1])
 W_CancelUnknown == ~(exec[1] = "cancelled" /\ res[1].st = "unknown" /\ ~res[1].expired)
 W_ReconcilerWon == ~(pc[1] = "dead" /\ res[1].st = "unknown")           \* only the reconciler can have moved it
 W_TwoHolds      == ~(res[1].st = "unknown" /\ res[2].st = "pending")  \* failover: both holds live
-W_RejectedFree  == ~(res[1].st = "settled" /\ res[1].actual = 0 /\ upst[1] = "rejected")
+W_RejectedFree  == ~(res[1].st = "settled" /\ res[1].actual = 0 /\ upst[1] = "rejected")  \* needs FreePrice
+W_RejectedUnknown == ~(res[1].st = "unknown" /\ upst[1] = "rejected" /\ out[1] = "rejected")   \* priced model
+W_BusyFailover  == ~(failedOver[1] /\ out[1] = "busy")
+W_AckLost       == ~(pc[1] = "done" /\ ~fo[1] /\ res[1].st = "settled")   \* write landed, caller saw failure
 W_CrashPending  == ~(crashes = 1 /\ pc[1] = "dead" /\ res[1].st = "pending")
 
 ==============================================================================
