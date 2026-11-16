@@ -16,7 +16,7 @@
 //!    excluded, nothing else is. So a wrapper called from the Serve arm, or a
 //!    migrate inside `Config::connect` or a `Store::with_*` builder, fails;
 //! 3. the Serve arm exists and calls `serve`;
-//! 4. no string reachable from `serve` is a bare subcommand name of a sink
+//! 4. no string reachable from `serve`, `main` or `run` is a bare subcommand name of a sink
 //!    (`"migrate"`, `"--grants"`, a `const` or `concat!` that spells one),
 //!    which would be a re-exec.
 //!
@@ -34,7 +34,8 @@
 //! Sinks are the explicit list [`SINKS`] (each must still exist) plus every
 //! function found to write the schema: one that calls `.run`/`.run_direct`/
 //! `.undo` on a static initialised with `sqlx::migrate!` or `Migrator::new`,
-//! calls `Migrator::new`, invokes `migrate!`, or names `RUNTIME_GRANTS_SQL` or
+//! calls `Migrator::new` or `Migrator::run`/`run_direct`/`undo` as a path,
+//! passes such a static as a call argument (`f(&MIGRATOR)`), invokes `migrate!`, or names `RUNTIME_GRANTS_SQL` or
 //! `include_str!`s the grants file.
 //!
 //! Cannot see: calls through function pointers or closures stored in data and
@@ -44,7 +45,10 @@
 //! defines functions; ad-hoc `INSERT`s or DDL written inline in a function
 //! that is not a listed sink; SQL or a database function that migrates;
 //! another process; a re-exec whose subcommand is not a bare string in the
-//! tree. Calls made in dependencies are out of scope.
+//! tree; implicit trait calls (`.into()` reaching `From::from`, `?`, `Drop`,
+//! iterator `next`, `IntoFuture`); a migrator held in a struct field or a
+//! local binding (`let m = &MIGRATOR; m.run(..)`). Calls made in dependencies
+//! are out of scope.
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
@@ -126,7 +130,7 @@ struct Node {
 struct Index {
     macros: BTreeMap<String, Body>,
     /// Name of a `const`/`static` initialised with a string literal.
-    consts: BTreeMap<String, String>,
+    consts: BTreeMap<String, BTreeSet<String>>,
     /// Names of statics/consts initialised with `migrate!` or `Migrator::new`.
     migrators: BTreeSet<String>,
 }
@@ -196,8 +200,8 @@ fn tokens_into(tokens: TokenStream, index: &Index, body: &mut Body) {
                 if name == "RUNTIME_GRANTS_SQL" {
                     body.migrates = true;
                 }
-                if let Some(value) = index.consts.get(&name) {
-                    body.strings.insert(value.clone());
+                if let Some(values) = index.consts.get(&name) {
+                    body.strings.extend(values.iter().cloned());
                 }
                 if is_punct(next, '!') {
                     // `m!(..)`: a user macro's body belongs to the caller.
@@ -268,6 +272,24 @@ impl<'a> Reader<'a> {
     }
 }
 
+impl Reader<'_> {
+    /// A migrator static handed to a function (`f(&MIGRATOR)`) can be run there.
+    /// Receivers (`MIGRATOR.iter()`) are not arguments.
+    fn migrator_arguments<'e>(&mut self, args: impl Iterator<Item = &'e syn::Expr>) {
+        for arg in args {
+            if let syn::Expr::Path(path) = stripped(arg)
+                && path
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|s| self.index.migrators.contains(&s.ident.unraw().to_string()))
+            {
+                self.body.migrates = true;
+            }
+        }
+    }
+}
+
 impl<'ast> Visit<'ast> for Reader<'_> {
     fn visit_pat_ident(&mut self, pat: &'ast syn::PatIdent) {
         self.locals.insert(pat.ident.unraw().to_string());
@@ -284,10 +306,14 @@ impl<'ast> Visit<'ast> for Reader<'_> {
                 .collect();
             if segments.len() >= 2
                 && segments[segments.len() - 2] == "Migrator"
-                && segments[segments.len() - 1] == "new"
+                && matches!(
+                    segments[segments.len() - 1].as_str(),
+                    "new" | "run" | "run_direct" | "undo"
+                )
             {
                 self.body.migrates = true;
             }
+            self.migrator_arguments(call.args.iter());
             if let Some(last) = segments.last() {
                 let kind = if segments.len() == 1 {
                     Call::Bare
@@ -313,6 +339,7 @@ impl<'ast> Visit<'ast> for Reader<'_> {
             self.body.migrates = true;
         }
         self.body.calls.insert((Call::Method, method));
+        self.migrator_arguments(call.args.iter());
         syn::visit::visit_expr_method_call(self, call);
     }
 
@@ -328,8 +355,8 @@ impl<'ast> Visit<'ast> for Reader<'_> {
             if last == "RUNTIME_GRANTS_SQL" {
                 self.body.migrates = true;
             }
-            if let Some(value) = self.index.consts.get(last) {
-                self.body.strings.insert(value.clone());
+            if let Some(values) = self.index.consts.get(last) {
+                self.body.strings.extend(values.iter().cloned());
             }
             if segments.len() > 1 {
                 self.body.calls.insert((Call::Path, last.clone()));
@@ -546,7 +573,11 @@ fn record_value(name: String, expr: &syn::Expr, index: &mut Index) {
         ..
     }) = stripped(expr)
     {
-        index.consts.insert(name.clone(), s.value());
+        index
+            .consts
+            .entry(name.clone())
+            .or_default()
+            .insert(s.value());
     }
     let mut init = MigratorInit(false);
     init.visit_expr(expr);
@@ -640,16 +671,43 @@ fn serve_view(dispatch: &syn::ItemFn, index: &Index) -> Body {
 }
 
 fn split_dispatch(dispatch: &syn::ItemFn) -> (Vec<&syn::Stmt>, Vec<&syn::Arm>) {
+    // The command parameter: the first named parameter.
+    let parameter = dispatch.sig.inputs.iter().find_map(|arg| match arg {
+        syn::FnArg::Typed(typed) => match &*typed.pat {
+            syn::Pat::Ident(ident) => Some(ident.ident.unraw().to_string()),
+            _ => None,
+        },
+        syn::FnArg::Receiver(_) => None,
+    });
     let mut outside = Vec::new();
     let mut arms = Vec::new();
     for stmt in &dispatch.block.stmts {
-        if let syn::Stmt::Expr(syn::Expr::Match(m), _) = stmt {
-            arms.extend(m.arms.iter());
-        } else {
-            outside.push(stmt);
+        match stmt {
+            syn::Stmt::Expr(syn::Expr::Match(m), _)
+                if is_command_match(m, parameter.as_deref()) =>
+            {
+                arms.extend(m.arms.iter());
+            }
+            other => outside.push(other),
         }
     }
     (outside, arms)
+}
+
+/// The match on the command: its scrutinee is the command parameter, or an
+/// arm pattern names a `Command` path. Any other `match` is ordinary code.
+fn is_command_match(m: &syn::ExprMatch, parameter: Option<&str>) -> bool {
+    if let syn::Expr::Path(path) = stripped(&m.expr)
+        && let Some(ident) = path.path.get_ident()
+        && Some(ident.unraw().to_string().as_str()) == parameter
+    {
+        return true;
+    }
+    m.arms.iter().any(|arm| {
+        let mut idents = Idents::default();
+        idents.visit_pat(&arm.pat);
+        idents.0.iter().any(|i| i == "Command")
+    })
 }
 
 #[derive(Default)]
@@ -704,14 +762,10 @@ fn sinks_from(graph: &Graph, entry: &Key, what: &str) -> Vec<String> {
         .collect()
 }
 
-/// Rules 1 and 4: what `serve` reaches.
-pub(super) fn serve_problems(graph: &Graph, entry: &Key) -> Vec<String> {
-    let mut out = sinks_from(graph, entry, "serve");
-    if !graph.fns.contains_key(entry) {
-        return out;
-    }
-    let reach = graph.reach(entry);
-    for key in reach.keys() {
+/// Rule 4: no string reachable from `entry` is a sink's subcommand name.
+fn string_problems(graph: &Graph, entry: &Key) -> Vec<String> {
+    let mut out = Vec::new();
+    for key in graph.reach(entry).keys() {
         let Some(node) = graph.fns.get(key) else {
             continue;
         };
@@ -728,6 +782,15 @@ pub(super) fn serve_problems(graph: &Graph, entry: &Key) -> Vec<String> {
                 ));
             }
         }
+    }
+    out
+}
+
+/// Rules 1 and 4: what `serve` reaches.
+pub(super) fn serve_problems(graph: &Graph, entry: &Key) -> Vec<String> {
+    let mut out = sinks_from(graph, entry, "serve");
+    if graph.fns.contains_key(entry) {
+        out.extend(string_problems(graph, entry));
     }
     out
 }
@@ -782,6 +845,7 @@ pub(super) fn startup_problems(sources: &[Source], graph: &Graph) -> Vec<String>
             &key,
             &format!("{file}::{name} (runs before every command, serve included)"),
         ));
+        out.extend(string_problems(graph, &key));
     }
     let Some(dispatch) = find_fn(sources, DISPATCH.0, DISPATCH.1) else {
         out.push(format!("{}::{} not found", DISPATCH.0, DISPATCH.1));
@@ -801,6 +865,9 @@ pub(super) fn startup_problems(sources: &[Source], graph: &Graph) -> Vec<String>
             ));
         }
     }
+    // `main` reaches `run`: the same finding is reported once.
+    let mut seen = BTreeSet::new();
+    out.retain(|problem| seen.insert(problem.clone()));
     out
 }
 
@@ -1408,5 +1475,131 @@ mod tests {
         assert!(found.contains(
             &"discovery no longer finds the function that names RUNTIME_GRANTS_SQL".to_owned()
         ));
+    }
+
+    const SERVE_FN: (&str, &str) = ("commands/serve.rs", "pub async fn serve() {}");
+
+    #[test]
+    fn a_match_before_the_command_match_is_walked_in_full() {
+        let found = startup(&[
+            STORE,
+            ("main.rs", MAIN),
+            (
+                "commands.rs",
+                "pub async fn dispatch(c: Command, mode: Mode) -> R { \
+                 match mode { Mode::Auto => store.migrate_enterprise().await?, _ => {} } \
+                 match c { Command::Serve => { serve().await?; } } Ok(()) }",
+            ),
+            SERVE_FN,
+        ]);
+        assert!(
+            found
+                .iter()
+                .any(|p| p.contains("commands.rs::dispatch -> store.rs::migrate_enterprise")),
+            "{found:?}"
+        );
+        // The same snippet inside the Serve arm, and a second match whose arms
+        // are not commands, are walked too.
+        let found = startup(&[
+            STORE,
+            ("main.rs", MAIN),
+            (
+                "commands.rs",
+                "pub async fn dispatch(c: Command) -> R { match c { Command::Serve => { \
+                 match mode { Mode::Auto => store.migrate_enterprise().await?, _ => {} } serve().await?; } } Ok(()) }",
+            ),
+            SERVE_FN,
+        ]);
+        assert!(
+            found
+                .iter()
+                .any(|p| p.contains("store.rs::migrate_enterprise")),
+            "{found:?}"
+        );
+        // A match on the command parameter or with `Command::*` arms is still the command match.
+        for dispatch in [
+            "pub async fn dispatch(command: Command) -> R { match command { Command::Migrate => migrate().await?, Command::Serve => { serve().await?; } } Ok(()) }",
+            "pub async fn dispatch(c: Command) -> R { match c.clone() { Command::Migrate => migrate().await?, Command::Serve => { serve().await?; } } Ok(()) }",
+        ] {
+            let found = startup(&[
+                STORE,
+                ("main.rs", MAIN),
+                ("commands.rs", &format!("{dispatch} {MIGRATE_FN}")),
+                SERVE_FN,
+            ]);
+            assert!(found.is_empty(), "{dispatch}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn migrator_path_calls_and_migrators_passed_as_arguments_are_sinks() {
+        for body in [
+            "Migrator::run(&MIGRATOR, c).await;",
+            "sqlx::migrate::Migrator::run_direct(&MIGRATOR, c).await;",
+            "Migrator::undo(&MIGRATOR, c, 1).await;",
+            "apply(&MIGRATOR, c).await;",
+            "s.go(&MIGRATOR);",
+            "apply((&MIGRATOR), c);",
+        ] {
+            let found = serve_only(&[
+                STORE,
+                (
+                    "extra.rs",
+                    &format!("pub async fn upgrade(c: C) {{ {body} }}"),
+                ),
+                (
+                    "commands/serve.rs",
+                    "pub async fn serve() { upgrade(c).await; }",
+                ),
+            ]);
+            assert!(
+                found.iter().any(|p| p.contains("extra.rs::upgrade")),
+                "{body}: {found:?}"
+            );
+        }
+        // Read-only mentions: a receiver, and a reference to a method chain.
+        let found = serve_only(&[
+            STORE,
+            (
+                "extra.rs",
+                "pub fn lineage() { let n = MIGRATOR.iter().count(); check(&MIGRATOR.iter().map(|m| m.version).collect::<Vec<_>>()); \
+                 let latest = crate::store::MIGRATOR.iter().map(|m| m.version).max(); }",
+            ),
+            ("commands/serve.rs", "pub async fn serve() { lineage(); }"),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn a_same_named_const_cannot_shadow_a_subcommand_spelling() {
+        let found = serve_only(&[
+            ("a.rs", "pub const VERB: &str = \"serve\";"),
+            ("b.rs", "pub const VERB: &str = \"migrate\";"),
+            (
+                "commands/serve.rs",
+                "pub async fn serve() { cmd.arg(VERB); }",
+            ),
+        ]);
+        assert_eq!(
+            found,
+            ["commands/serve.rs::serve holds the string \"migrate\", a sink's subcommand name"]
+        );
+    }
+
+    #[test]
+    fn re_exec_strings_are_checked_from_main_and_run_too() {
+        let found = startup(&[
+            STORE,
+            (
+                "main.rs",
+                "fn main() { run(cli); } async fn run(cli: Cli) { std::process::Command::new(\"self\").arg(\"--bootstrap-demo\"); commands::dispatch(cli.command).await; }",
+            ),
+            ("commands.rs", DISPATCH_OK),
+            SERVE_FN,
+        ]);
+        assert_eq!(
+            found,
+            ["main.rs::run holds the string \"bootstrap-demo\", a sink's subcommand name"]
+        );
     }
 }
