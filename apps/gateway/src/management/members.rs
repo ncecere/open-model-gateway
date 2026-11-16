@@ -133,8 +133,8 @@ pub(super) async fn platform_add_member(
 ) -> ApiResult {
     let mut tx = resources::installation_tx(&s).await?;
     // Exception to taking every scope lock up front: deferred to
-    // `set_member`/`manual_member`'s merged lock below (this transaction takes a target User scope lock
-    // later; see `manual_member`'s own doc).
+    // `set_member`/`manual_member`'s merged lock below (this transaction
+    // takes a target User scope lock later; see `manual_member`'s own doc).
     resources::platform_write_role_only(&mut tx, u.user_id()).await?;
     platform_shared(&mut tx, ws).await?;
     set_member(&mut tx, &u, ws, &b).await?;

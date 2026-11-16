@@ -99,7 +99,7 @@ fn bearer_credential(headers: &HeaderMap) -> Option<&str> {
 /// with the admin-token prefix excluded. Checked before any database access
 /// so a well-formed inference key presented to a management route is
 /// refused outright rather than merely failing the admin-token parser by
-/// coincidence (the approved spec calls this out explicitly).
+/// coincidence.
 fn looks_like_inference_key(token: &str) -> bool {
     token.len() == 101 && token.starts_with("omg_") && !token.starts_with("omg_admin_")
 }
@@ -258,8 +258,9 @@ async fn authenticate_admin_token_request(
                 .insert(ManagementPrincipal::AdminToken(context));
             // Exempt from CSRF: the credential is a Bearer secret a
             // cross-site form or script can never already hold, unlike a
-            // cookie a browser attaches automatically. Browser-session mutations keep exact Origin and
-            // CSRF-token validation above, unchanged.
+            // cookie a browser attaches automatically. Browser-session
+            // mutations keep exact Origin and CSRF-token validation above,
+            // unchanged.
             private(next.run(request).await)
         }
         Ok(None) => pre_auth_fail("invalid_credential"),

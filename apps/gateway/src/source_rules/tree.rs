@@ -303,18 +303,20 @@ fn prune(items: &mut Vec<Item>) {
     }
 }
 
-/// Where `file` (parsed from the unpruned text) holds items [`prune`] drops, as
-/// `((start line, start column), (end line, end column))` (lines from 1,
-/// columns from 0, in characters), attributes and doc comments included. For
-/// scans that read the text itself, such as comments, which `syn` does not
-/// keep.
-pub(super) fn dropped_spans(file: &syn::File) -> Vec<((usize, usize), (usize, usize))> {
-    fn span(tokens: &impl syn::spanned::Spanned) -> ((usize, usize), (usize, usize)) {
+/// A source range: `((start line, start column), (end line, end column))`.
+pub(super) type SpanRange = ((usize, usize), (usize, usize));
+
+/// Where `file` (parsed from the unpruned text) holds items [`prune`] drops
+/// (lines from 1, columns from 0, in characters), attributes and doc comments
+/// included. For scans that read the text itself, such as comments, which
+/// `syn` does not keep.
+pub(super) fn dropped_spans(file: &syn::File) -> Vec<SpanRange> {
+    fn span(tokens: &impl syn::spanned::Spanned) -> SpanRange {
         let s = tokens.span();
         let (a, b) = (s.start(), s.end());
         ((a.line, a.column), (b.line, b.column))
     }
-    fn collect(list: &[Item], out: &mut Vec<((usize, usize), (usize, usize))>) {
+    fn collect(list: &[Item], out: &mut Vec<SpanRange>) {
         for item in list {
             if !kept(item_attrs(item)) {
                 out.push(span(item));

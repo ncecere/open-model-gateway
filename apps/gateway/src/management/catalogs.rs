@@ -922,8 +922,8 @@ pub(super) async fn change_model(
     let mut tx = resources::installation_tx(&s).await?;
     if direct {
         // Exception to taking every scope lock up front: deferred to the
-        // merged `locks::exclusive` call below (this transaction takes Workspace/Lineage scope locks
-        // later; see `resources::platform_write_role_only`'s doc).
+        // merged `locks::exclusive` call below (this transaction takes Workspace/
+        // Lineage scope locks later; see `resources::platform_write_role_only`'s doc).
         resources::platform_write_role_only(&mut tx, u.user_id()).await?;
         validate_ids(&mut tx, &[ws], "workspaces").await?;
     } else {

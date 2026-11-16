@@ -44,8 +44,8 @@ pub(super) fn routes() -> Router<Store> {
 /// Up to 200 rows per category: the bound every list in the response respects.
 const LIMIT: usize = 200;
 /// How many users a group may have before a roster lookup marks the whole
-/// preview `complete:false` instead of silently undercounting. Lowered under `cfg(test)` so the overflow path is exercised
-/// without seeding 5,000+ rows.
+/// preview `complete:false` instead of silently undercounting. Lowered under
+/// `cfg(test)` so the overflow path is exercised without seeding 5,000+ rows.
 #[cfg(not(test))]
 const ROSTER_LIMIT: i64 = 5000;
 #[cfg(test)]

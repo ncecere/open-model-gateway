@@ -90,9 +90,9 @@ pub struct IdentityState {
     trusted_proxies: throttle::TrustedProxies,
     /// Bounded per-replica rate limiting of admin-token authentication
     /// attempts (malformed credentials, unknown/expired/revoked tokens):
-    /// these are never individually audited (coordinator decision), only
-    /// aggregated and rate-limited, so a flood of garbage bearer tokens
-    /// cannot grow the audit log or the key-lookup load without bound.
+    /// these are never individually audited, only aggregated and
+    /// rate-limited, so a flood of garbage bearer tokens cannot grow the
+    /// audit log or the key-lookup load without bound.
     admin_token_limiter: Arc<throttle::Limiter>,
     /// A second, independent admission bound on top of
     /// the per-IP limiter above, checked *after* a token has successfully
