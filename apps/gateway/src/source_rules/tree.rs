@@ -94,20 +94,22 @@ impl<'ast> Visit<'ast> for Unreadable<'_> {
                 self.from.display()
             );
         }
+        // A `mod` keyword followed by a `;` before any `{` body, however the
+        // name is spelled (`mod hidden;`, `mod $name;`, `pub(crate) mod $n;`).
         let tokens = flat(mac.tokens.clone());
-        for window in tokens.windows(3) {
-            if let [
-                TokenTree::Ident(m),
-                TokenTree::Ident(_),
-                TokenTree::Punct(semi),
-            ] = window
-                && m == "mod"
-                && semi.as_char() == ';'
-            {
-                panic!(
-                    "{}: a `mod` declared inside a macro adds a file the source rules cannot follow",
-                    self.from.display()
-                );
+        for (at, token) in tokens.iter().enumerate() {
+            if !matches!(token, TokenTree::Ident(m) if m == "mod") {
+                continue;
+            }
+            for next in tokens.iter().skip(at + 1).take(4) {
+                match next {
+                    TokenTree::Punct(p) if p.as_char() == ';' => panic!(
+                        "{}: a `mod` declared inside a macro adds a file the source rules cannot follow",
+                        self.from.display()
+                    ),
+                    TokenTree::Group(g) if g.delimiter() == proc_macro2::Delimiter::Brace => break,
+                    _ => {}
+                }
             }
         }
     }
@@ -527,6 +529,30 @@ mod tests {
             &[("lib.rs", "macro_rules! m { () => { mod hidden; } }")],
             "lib.rs",
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "inside a macro")]
+    fn a_mod_named_by_a_macro_variable_fails_closed() {
+        tree(
+            &[(
+                "lib.rs",
+                "macro_rules! m { ($n:ident) => { pub(crate) mod $n; } }",
+            )],
+            "lib.rs",
+        );
+    }
+
+    #[test]
+    fn an_inline_mod_with_a_body_in_a_macro_is_fine() {
+        let found = tree(
+            &[(
+                "lib.rs",
+                "macro_rules! m { ($n:ident) => { mod $n { fn f() {} } }; () => { mod x { fn g() {} } } }",
+            )],
+            "lib.rs",
+        );
+        assert_eq!(found, ["lib.rs"]);
     }
 
     #[test]
