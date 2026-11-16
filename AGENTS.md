@@ -39,6 +39,8 @@ One GitHub issue at a time per worker, one loop per issue:
 
 ## Invariants
 
+Each rule below is enforced by a deterministic check or marked review-only, in the table at `docs/verification.md#agentsmd-rules-and-their-checks`.
+
 - One installation serves one enterprise; there are no selectable organizations. Workspaces are the resource/security boundary. Team and Project are equivalent sibling shared kinds; personal workspaces are owner-private. Enforce workspace relationships with scoped foreign keys and live authorization.
 - Inference keys belong to one workspace. Derive tenant and workspace from validated credentials, never client-selected headers or body fields.
 - Personal workspaces cannot be shared. Platform Admins/Auditors may see a personal workspace's identity (id; reports/usage also an owner label) with its usage/cost/storage totals and platform-managed configuration (workspace policy/limits, catalog overrides), never its keys, request/execution details, prompts/responses, sessions, file contents or owner-made choices; provider-cost reconciliation (#48) keeps its stricter identity-free personal subset. Shared-workspace members see their own activity; workspace admins see workspace-wide activity (files, batches and video jobs follow the workspace's object visibility: per user by default, or workspace-wide; deleting or cancelling always needs the creator, an admin or a service key). Global metadata authority does not satisfy human-key membership requirements.
