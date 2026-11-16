@@ -110,7 +110,7 @@ wide runs dominate).
 | 2 | "Never delete unknown reservations"; a hold is never released before settlement or reconciliation (request path) | `UnknownRetainsHold`, `HoldNeverReleased` (action) | `reconcile_batch` only flips state; the settlement UPDATE keeps or raises `held`; docs/governance.md "Cancellation, reconciliation and retention" |
 | 3 | Settlement exactly once; no un-settling | `SettleOnce`, `LedgerConsistent`, `SettledTerminal` (action) | row lock + the state reads/predicates in section 1; ledger UNIQUE; `finished` flag in `ExecutionGuard` |
 | 4 | "Never treat unknown usage as zero" | `SettledMatchesTruth` | `finish_unobserved` (`let actual = if Succeeded && input/output present ... else if free && !violated ...`), `free_rejection` |
-| 5 | A fenced runner never writes | `NoStaleCommit`, `NoReorder` (`LeaseFence`) | `omg_lease_fence` + `FOR SHARE` (0029 SQL, `Fence::check`); **not** present for the batch runner |
+| 5 | A fenced runner never writes | `NoStaleCommit`, `NoReorder` (`LeaseFence`) | `omg_lease_fence` + `FOR SHARE` (0029 SQL, `Fence::check`); the batch runner had none when this was written; since 0081 it has the claim epoch checked under `FOR KEY SHARE` / `FOR NO KEY UPDATE` of the job row (#638) |
 | + | "Failover ... never after a stream is returned" | `NoFailoverAfterStream` | checks the model's own guard; in the code failover exists only in the `Err` arm of `Engine::attempt` |
 | + | Rows coherent (pending <=> execution started) | `ExecConsistent` | `reconcile_batch` aborts when it is not |
 | + | A pending reservation always leaves `pending` (settled or unknown), under fairness | `Resolves` (liveness) | reconciler on every replica, restart |
@@ -211,8 +211,8 @@ money.
 1. **The batch runner's lease was not a fencing token (#638): confirmed by reading; low-to-moderate,
    no money impact. Fixed in 0081; the model was not re-run.** Since 0081 the claim bumps
    `async_jobs.runner_epoch` and every runner write checks `(runner_id, runner_epoch)` inside its own
-   transaction while holding the job row `FOR SHARE` (or `FOR NO KEY UPDATE`), with the takeover
-   claim `SKIP LOCKED`: that is the `InTx` design (check in the write transaction plus the row lock),
+   transaction while holding the job row `FOR KEY SHARE` (or `FOR NO KEY UPDATE`), with the takeover
+   claim `FOR UPDATE SKIP LOCKED`: that is the `InTx` design (check in the write transaction plus the row lock),
    not `RunnerFlag` (a local flag set by the renewal task). `RunnerFlag` keeps modelling the code as
    it was before the fix, which is why the model still reproduces the finding. The text below is the
    finding as made. Invariant 5 holds for `work_leases` (the model confirms the fence needs both
