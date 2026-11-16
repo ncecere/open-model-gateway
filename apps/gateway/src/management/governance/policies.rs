@@ -735,8 +735,7 @@ async fn get_layer(tx: &mut Transaction<'_, Postgres>, scope: &Scope) -> Result<
 /// scope hold it shared (`governance::locks`), so the change waits for them
 /// and every later admission sees it. Taken before the layer's first write.
 ///
-/// Exception to taking every scope lock up front: when `u` is an admin
-/// token, its owner's
+/// Up-front lock exception: when `u` is an admin token, its owner's
 /// user-scope lock is merged into this *same* exclusive call (ascending
 /// canonical key order, one round trip) rather than taken separately and
 /// early by `resources::platform_write` -- that would be acquired before
@@ -841,8 +840,7 @@ async fn platform_tx<'a>(
     if write {
         // Deferred to `lock_scope`/`put_layer`: every write call site below
         // takes a Type/Workspace/Lineage scope lock later in this same
-        // transaction (an exception to taking every scope lock up front;
-        // see `lock_scope`'s doc).
+        // transaction (the up-front lock exception; see `lock_scope`'s doc).
         resources::platform_write_role_only(&mut tx, u.user_id()).await?;
     } else {
         resources::platform_read(&mut tx, u).await?;
