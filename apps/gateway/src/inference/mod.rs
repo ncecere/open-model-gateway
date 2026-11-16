@@ -235,10 +235,11 @@ impl Engine {
             let deployment = match candidates.iter().find(|d| d.id == *id) {
                 Some(deployment) => deployment,
                 None => {
-                    // #98 PR 2 review item 2: an early return must still
-                    // finish telemetry explicitly, exactly like every other
-                    // terminal path of an attempt (`Engine::attempt`), so Drop never mislabels a real
-                    // denial `cancelled` with no `error.type`.
+                    // An early return must still finish telemetry
+                    // explicitly, exactly like every other terminal path of
+                    // an attempt (`Engine::attempt`), so Drop never
+                    // mislabels a real denial `cancelled` with no
+                    // `error.type`.
                     telemetry.finish(
                         telemetry::Outcome::Error,
                         Some(InferenceError::Configuration),
@@ -326,8 +327,8 @@ async fn settle_attempt(
     let timings = guard.telemetry_now();
     // Captured here, before settlement's own (possibly slow, up to its 3s
     // timeout) write: `upstream.attempt` ends at the terminal upstream
-    // outcome, never inflated by settlement's own duration (#98 PR 2 review
-    // item 1). `settlement` is recorded separately below with its own real
+    // outcome, never inflated by settlement's own duration. `settlement`
+    // is recorded separately below with its own real
     // start/end from `begin_phase_group`/`end_phase_group`.
     let attempt_end = telemetry::now_unix_nanos();
     let group = begin_phase_group(telemetry);
