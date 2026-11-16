@@ -52,7 +52,7 @@ setup_environment() {
   export HOME=/cache/home CARGO_HOME=/cache/cargo RUSTUP_HOME=/cache/rustup CARGO_TARGET_DIR=/cache/target
   export NPM_CONFIG_CACHE=/cache/npm
   export PATH="/opt/node/bin:/usr/local/cargo/bin:$PATH"
-  # No debug info (smaller cache, less memory). Not incremental, as CI: incremental sessions raise the compiler's peak memory (measured: OOM at 10 GiB).
+  # No debug info (smaller cache, less memory). Not incremental, as CI (the one compile OOM-killed at the 10 GiB limit was an incremental one; a changed gateway crate rebuilds in about 2.5 minutes without it).
   export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
   export RUST_TEST_THREADS="$OMG_TEST_THREADS" CARGO_BUILD_JOBS="$OMG_JOBS" CARGO_TERM_COLOR=never CARGO_TERM_PROGRESS_WHEN=never CARGO_NET_RETRY=5
   export CI=true GIT_TERMINAL_PROMPT=0
@@ -72,7 +72,12 @@ prepare_source() {
     echo "cannot fetch $OMG_SHA from $OMG_REPO_URL: push the branch first"
     return 1
   fi
-  git checkout -q -f --detach FETCH_HEAD && git clean -q -ffdx || return 1
+  # `checkout -f` of the commit that is already checked out still rewrites every file, and Cargo then
+  # recompiles the whole workspace crate (measured: 2 minutes); a different commit rewrites only what differs.
+  if [ "$(git rev-parse -q --verify HEAD 2>/dev/null)" != "$OMG_SHA" ] || [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+    git checkout -q -f --detach FETCH_HEAD || return 1
+  fi
+  git clean -q -ffdx || return 1
   if [ "$(git rev-parse HEAD)" != "$OMG_SHA" ]; then
     echo "HEAD is $(git rev-parse HEAD), not $OMG_SHA"
     return 1
