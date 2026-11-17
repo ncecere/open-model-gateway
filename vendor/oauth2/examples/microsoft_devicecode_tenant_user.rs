@@ -41,11 +41,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await
         .map_err(|_| std::io::Error::other("Device authorization request failed"))?;
 
-    terminal::display(format_args!(
-        "Open this URL in your browser:\n{}\nand enter the code: {}",
-        details.verification_uri(),
-        details.user_code().secret(),
-    ))
+    terminal::display(
+        details.verification_uri().as_str(),
+        Some(details.user_code().secret()),
+    )
     .expect("An interactive terminal is required for authorization");
 
     let token_result = client

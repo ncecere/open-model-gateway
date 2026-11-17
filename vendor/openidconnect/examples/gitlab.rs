@@ -110,10 +110,8 @@ fn main() {
         .add_scope(Scope::new("profile".to_string()))
         .url();
 
-    terminal::display(format_args!(
-        "Open this URL in your browser:\n{authorize_url}\n"
-    ))
-    .expect("An interactive terminal is required for authorization");
+    terminal::display(authorize_url.as_str(), None)
+        .expect("An interactive terminal is required for authorization");
 
     let (code, state) = {
         // A very naive implementation of the redirect server.

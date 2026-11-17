@@ -74,11 +74,10 @@ fn main() {
         .unwrap_or_else(|_| panic!("Failed to request codes from device auth endpoint"));
 
     // Display the URL and user-code.
-    terminal::display(format_args!(
-        "Open this URL in your browser:\n{}\nand enter the code: {}",
-        details.verification_uri(),
-        details.user_code().secret(),
-    ))
+    terminal::display(
+        details.verification_uri().as_str(),
+        Some(details.user_code().secret()),
+    )
     .expect("An interactive terminal is required for authorization");
 
     // Now poll for the token

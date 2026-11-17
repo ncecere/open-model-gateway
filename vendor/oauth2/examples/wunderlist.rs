@@ -168,10 +168,8 @@ fn main() {
     // Generate the authorization URL to which we'll redirect the user.
     let (authorize_url, csrf_state) = client.authorize_url(CsrfToken::new_random).url();
 
-    terminal::display(format_args!(
-        "Open this URL in your browser:\n{authorize_url}\n"
-    ))
-    .expect("An interactive terminal is required for authorization");
+    terminal::display(authorize_url.as_str(), None)
+        .expect("An interactive terminal is required for authorization");
 
     let (code, state) = {
         // A very naive implementation of the redirect server.

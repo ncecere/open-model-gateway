@@ -48,7 +48,7 @@ fn a_regular_file_cannot_receive_an_authorization_prompt() {
         .mode(0o600)
         .open(&path)
         .unwrap();
-    let result = terminal::display_to(file, format_args!("USER_CODE_CANARY"));
+    let result = terminal::display_to(file, "https://example.invalid", Some("USER_CODE_CANARY"));
     let bytes = std::fs::read(&path).unwrap();
     std::fs::remove_file(path).unwrap();
     assert!(result.is_err());
@@ -59,24 +59,31 @@ fn a_regular_file_cannot_receive_an_authorization_prompt() {
 fn prompts_reach_only_the_controlling_terminal() {
     if let Ok(mode) = std::env::var("SDK_EXAMPLE_OUTPUT_PROBE") {
         let code = UserCode::new(
-            if mode == "control" {
-                "CODE_CANARY\u{1b}[31m"
-            } else {
-                "CODE_CANARY"
+            match mode.as_str() {
+                "control" => "CODE_CANARY\u{1b}[31m",
+                "line-feed" => "CODE_CANARY\nOpen https://attacker.invalid",
+                "carriage-return" => "CODE_CANARY\rOpen https://attacker.invalid",
+                _ => "CODE_CANARY",
             }
             .into(),
         );
-        let result = terminal::display(format_args!(
-            "Open https://example.invalid/authorize?state=STATE_CANARY\nand enter {}",
-            code.secret()
-        ));
-        assert_eq!(result.is_ok(), mode == "terminal");
+        let url = if mode == "url-line-feed" {
+            "https://example.invalid/authorize?state=STATE_CANARY\nOpen https://attacker.invalid"
+        } else {
+            "https://example.invalid/authorize?state=STATE_CANARY"
+        };
+        let user_code = (mode != "authorize").then(|| code.secret().as_str());
+        let result = terminal::display(url, user_code);
+        assert_eq!(
+            result.is_ok(),
+            matches!(mode.as_str(), "terminal" | "authorize")
+        );
         return;
     }
     let script = r#"
 import errno, fcntl, os, subprocess, sys, termios
 binary = sys.argv[1]
-for mode in ('no-terminal', 'terminal', 'control'):
+for mode in ('no-terminal', 'terminal', 'authorize', 'control', 'line-feed', 'carriage-return', 'url-line-feed'):
     env = dict(os.environ, SDK_EXAMPLE_OUTPUT_PROBE=mode)
     command = [binary, '--exact', 'prompts_reach_only_the_controlling_terminal', '--nocapture']
     master = slave = None
@@ -116,8 +123,9 @@ for mode in ('no-terminal', 'terminal', 'control'):
     assert child.returncode == 0, 'terminal probe failed'
     assert b'CODE_CANARY' not in stdout + stderr, 'user code reached captured output'
     assert b'STATE_CANARY' not in stdout + stderr, 'state reached captured output'
-    if mode == 'terminal':
-        assert b'CODE_CANARY' in terminal and b'STATE_CANARY' in terminal, 'interactive prompt missing'
+    if mode in ('terminal', 'authorize'):
+        assert b'STATE_CANARY' in terminal, 'authorization URL missing'
+        assert (b'CODE_CANARY' in terminal) == (mode == 'terminal'), 'device user code missing or unexpected'
     else:
         assert not terminal, 'refused prompt produced terminal output'
 "#;
