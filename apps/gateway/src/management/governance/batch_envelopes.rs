@@ -233,6 +233,9 @@ async fn resolve_page(s: Store, u: ManagementPrincipal, p: Resolve) -> ApiResult
     commit(tx).await?;
     Ok(Json(result))
 }
+// Bound the transition tables consumed by the existing totals triggers. All
+// page locks are already held, and every group shares one transaction.
+const MAX_UPDATE_ROWS: usize = 512;
 async fn apply(
     tx: &mut Transaction<'_, Postgres>,
     rows: &[Candidate],
@@ -244,13 +247,18 @@ async fn apply(
     let times: Vec<_> = rows.iter().map(|r| r.admitted_at).collect();
     let jobs: Vec<_> = rows.iter().map(|r| r.job_id).collect();
     let settled: Vec<_> = rows.iter().map(|r| evidence[&r.job_id].settled).collect();
-    let changed=sqlx::query("UPDATE governance_reservations SET state='settled',actual_microusd=0,batch_envelope_resolved=true WHERE (execution_id,admitted_at) IN (SELECT * FROM unnest($1::uuid[],$2::timestamptz[])) AND state='unknown'")
-        .bind(&executions).bind(&times).execute(&mut **tx).await?;
-    if changed.rows_affected() != rows.len() as u64 {
-        return Err(ApiError(
-            StatusCode::CONFLICT,
-            "Eligible count changed; preview again",
-        ));
+    for (ids, ats) in executions
+        .chunks(MAX_UPDATE_ROWS)
+        .zip(times.chunks(MAX_UPDATE_ROWS))
+    {
+        let changed=sqlx::query("UPDATE governance_reservations SET state='settled',actual_microusd=0,batch_envelope_resolved=true WHERE (execution_id,admitted_at) IN (SELECT * FROM unnest($1::uuid[],$2::timestamptz[])) AND state='unknown'")
+            .bind(ids).bind(ats).execute(&mut **tx).await?;
+        if changed.rows_affected() != ids.len() as u64 {
+            return Err(ApiError(
+                StatusCode::CONFLICT,
+                "Eligible count changed; preview again",
+            ));
+        }
     }
     // Copy observations byte-for-byte, including NULLs; known line costs are
     // evidence only, because their reservations already charged them.

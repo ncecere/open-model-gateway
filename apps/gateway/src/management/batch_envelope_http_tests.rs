@@ -203,4 +203,21 @@ pub(super) async fn run(
         assert_eq!(body["next_offset"], next);
         seen.observe(&page);
     }
+    let applied = responses::capture_http(
+        "POST",
+        PATH,
+        send(
+            Some(admin),
+            true,
+            ORIGIN,
+            json!({"apply":true,"offset":"8976","expected_count":"1025","reason":"bounded runtime writes"}),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(applied.status, StatusCode::OK);
+    let body: Value = serde_json::from_slice(&applied.bytes).unwrap();
+    assert_eq!(body["resolved_count"], "1025");
+    assert_eq!(body["next_offset"], Value::Null);
+    seen.observe(&applied);
 }
