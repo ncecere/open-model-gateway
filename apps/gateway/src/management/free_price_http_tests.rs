@@ -37,6 +37,10 @@ async fn free_price_runtime_http_operator_flow(pool: PgPool) {
     };
     let admin = session(&pool, &principal(f.owner, "owner@test.invalid")).await;
     let member = session(&pool, &principal(f.other, "member@test.invalid")).await;
+    // Fresh test clusters need the restricted role before the allowlist can be
+    // applied; an existing role is left unchanged and checked after SET ROLE.
+    sqlx::raw_sql("DO $$ BEGIN IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='gateway_runtime') THEN CREATE ROLE gateway_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; END IF; END $$;")
+        .execute(&pool).await.unwrap();
     f.store.apply_runtime_grants().await.unwrap();
     let runtime = PgPoolOptions::new()
         .max_connections(5)
@@ -55,6 +59,12 @@ async fn free_price_runtime_http_operator_flow(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(role, "gateway_runtime");
+    let restricted: bool = sqlx::query_scalar("SELECT NOT (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls) FROM pg_roles WHERE rolname=current_user")
+        .fetch_one(&runtime).await.unwrap();
+    assert!(
+        restricted,
+        "HTTP fixture requires an unprivileged runtime role"
+    );
     let store = Store::new(runtime.clone());
     let mock = MockProvider::start(None).await;
     let identity = mock.state(runtime).await;
