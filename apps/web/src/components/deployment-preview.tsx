@@ -35,9 +35,9 @@ export function DeploymentReviewDialog({ record, name, retire = false, restoreOf
   const preview = !q.isError && !q.isFetching && !mismatch ? q.data : undefined;
   const restoreAfterRefresh = () => {
     const previousFallback = fallbackFocus?.();
-    // ActionProvider has already invalidated these queries. Join its in-flight
-    // refetches without cancelling/restarting them, then resolve the stable id
-    // after the refreshed render (headers and regrouped rows can remount).
+    // Join ActionProvider's invalidated fetches without restarting them. A frame
+    // is not a React commit barrier: the origin/fallback must keep their keyed
+    // identity through the refreshed render, even if it follows this callback.
     void client.refetchQueries({ queryKey: ["api", scope], type: "active", fetchStatus: "fetching" }, { cancelRefetch: false }).then(() => {
       requestAnimationFrame(() => {
         const active = document.activeElement;

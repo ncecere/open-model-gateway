@@ -38,6 +38,7 @@ export default defineConfig({
     // Standalone real-stack acceptance; seeds its own scopes through management APIs.
     { name: "provider-cost-upload", testMatch: /provider-cost-upload\.spec\.ts/ },
     { name: "access-refresh", testMatch: /access-refresh\.spec\.ts/ },
+    { name: "deployment-focus", testMatch: /deployment-focus\.spec\.ts/ },
     { name: "access-requests", testMatch: /access-requests\.spec\.ts/, dependencies: ["journey"] },
     { name: "workspace-templates", testMatch: /workspace-templates\.spec\.ts/, dependencies: ["journey"] },
     { name: "access-reviews", testMatch: /access-reviews\.spec\.ts/, dependencies: ["journey"] },
