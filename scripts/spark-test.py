@@ -26,7 +26,7 @@ run and says nothing about its outcome.
 Two runs can be active at once (two slots): the platform quota (4 CPU and 16 GiB requested,
 shared by all namespaces) leaves room for exactly that next to one demo environment. Each slot
 is a namespace that holds one persistent cache volume, so a run after a small change does not
-rebuild the world. A slot is leased to one run at a time (a ConfigMap created atomically), so two
+rebuild the world. A slot is leased to one run at a time (a suspended Job created atomically), so two
 runs never share a target directory. `down` removes everything of a run except the cache; `purge`
 removes the cache. The cache is trusted only as far as the refs that ran in the slot: purge after
 a ref you would not run on your own machine.
@@ -69,7 +69,10 @@ TEST_ARGS = re.compile(r"[A-Za-z0-9_:.,=/@-]+(?: [A-Za-z0-9_:.,=/@-]+)*")
 # ... and nothing that makes the test binary or Vitest print or do something other than run tests.
 REFUSED_ARGS = ("--list", "--help", "--version", "--format", "--show-output", "--report-time", "--ensure-time", "--shuffle", "--watch", "--ui", "--update", "--reporter", "--coverage", "--run=false")
 REFUSED_SHORT = ("-h", "-V", "-u")
-LEASE = "omg-test-lease"
+LEASE = "omg-test-lease"  # legacy: active pre-fencing slots must be drained with the old tool
+RUN_INFO = "omg-spark-run"
+RUN_PHASE = "omg-spark-phase"
+CLEANUP_FINALIZER = "spark-test.bitop.dev/cleanup"
 JOB = "omg-test"
 CLUSTER = "omg-test-db"
 SCRIPT_CONFIGMAP = "omg-test-script"
@@ -625,8 +628,8 @@ class SparkTest:
         if not out:
             return None
         document = json.loads(out)
-        return {"ours": (document.get("metadata", {}).get("labels") or {}).get(MANAGED_LABEL) == MANAGED_VALUE,
-                "terminating": (document.get("status") or {}).get("phase") == "Terminating"}
+        return {"uid": document["metadata"]["uid"], "ours": (document.get("metadata", {}).get("labels") or {}).get(MANAGED_LABEL) == MANAGED_VALUE,
+                "terminating": bool(document["metadata"].get("deletionTimestamp")) or (document.get("status") or {}).get("phase") == "Terminating"}
 
     def existing_slots(self, allow_terminating=False):
         """The slot namespaces that exist and are ours. An existing namespace of that name without our label is refused; one being deleted gives a retry message."""
@@ -645,8 +648,74 @@ class SparkTest:
         return found
 
     def lease(self, slot):
-        document = self.get_json(slot, ["configmap", LEASE])
-        return None if document is None else {**document.get("data", {}), "created": document["metadata"].get("creationTimestamp")}
+        document = self.get_json(slot, ["job", JOB])
+        if document:
+            meta = document["metadata"]
+            annotations = meta.get("annotations", {})
+            if RUN_INFO not in annotations:
+                raise SparkError(f"slot {slot} has a Job without fenced run metadata; drain it with the prior tool before upgrading")
+            return {**json.loads(annotations[RUN_INFO]), "uid": meta["uid"], "version": meta["resourceVersion"],
+                    "phase": annotations[RUN_PHASE], "created": meta.get("creationTimestamp")}
+        if self.get_json(slot, ["configmap", LEASE]):
+            raise SparkError(f"slot {slot} has a legacy active lease: finish/down it with the prior tool before upgrading; do not mix runner versions")
+        return None
+
+    def require_run(self, slot, expected):
+        current = self.lease(slot)
+        if not current or any(current.get(key) != expected.get(key) for key in ("uid", "namespace_uid", "nonce", "name", "sha")):
+            raise SparkError(f"the lease of slot {slot} no longer belongs to {expected.get('name')!r}; the slot was removed or reused")
+        return current
+
+    def patch_run(self, slot, expected, phase, changes):
+        # JSON Patch tests and changes are one API-server transaction. A stale writer cannot
+        # activate a deleting Job or patch another incarnation, even after its last GET.
+        patch = [{"op": "test", "path": "/metadata/uid", "value": expected["uid"]},
+                 {"op": "test", "path": f"/metadata/annotations/{RUN_PHASE}", "value": phase}, *changes]
+        self.kubectl(["patch", "job", JOB, "--type=json", "-p", json.dumps(patch)], slot=slot)
+
+    def delete_object(self, slot, resource, document, wait=True):
+        """DELETE with an API-server UID precondition, never a name-only or collection DELETE."""
+        meta = document["metadata"]
+        prefix = "/apis/batch/v1" if resource == "jobs" else "/apis/postgresql.cnpg.io/v1" if resource == "clusters" else "/api/v1"
+        if slot is None:
+            check_namespace(self.base, meta["name"])
+        path = f"{prefix}/namespaces/{slot_namespace(self.base, slot)}/{resource}/{meta['name']}" if slot else f"/api/v1/namespaces/{meta['name']}"
+        options = {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": meta["uid"]}, "propagationPolicy": "Foreground"}
+        try:
+            self.kubectl(["delete", "--raw", path, "-f", "-"], stdin=json.dumps(options))
+        except SparkError as error:
+            if "NotFound" not in str(error):
+                raise
+        if wait:
+            for _ in range(60):
+                current = self.get_json(slot, ["clusters.postgresql.cnpg.io" if resource == "clusters" else resource, meta["name"]])
+                if current is None or current["metadata"]["uid"] != meta["uid"]:
+                    return
+                self.sleep(3)
+            raise SparkError(f"{resource}/{meta['name']} still deleting after 3 minutes; retry `down`")
+
+    def run_manifest(self, info):
+        text = render_job((DEPLOY / "test-job.yaml").read_text(), info["suite"], info["sha"], info.get("test_args", ""),
+                          int(info.get("timeout_minutes", "60")), nonce=info["nonce"], fresh=info.get("fresh") == "1",
+                          cpu_limit_m=int(info.get("fast_cpu_limit_m") or DEFAULT_CPU_LIMIT_M), npm_flags=NPM_FLAGS)
+        for name in (SUPERUSER_SECRET, SCRIPT_CONFIGMAP, CLUSTER):
+            text = text.replace(name, f"{name}-{info['nonce']}")
+        metadata = {RUN_INFO: json.dumps(info), RUN_PHASE: info["phase"]}
+        text = text.replace("  name: omg-test\n", f"  name: omg-test\n  annotations: {json.dumps(metadata)}\n", 1)
+        if info["phase"] != "purging":
+            text = text.replace("spec:\n", f"  finalizers: [{CLEANUP_FINALIZER}]\nspec:\n", 1)
+        return text.replace("spec:\n", "spec:\n  suspend: true\n", 1)
+
+    def owned_manifest(self, text, handle):
+        owner = [{"apiVersion": "batch/v1", "kind": "Job", "name": JOB, "uid": handle["uid"]}]
+        if text.startswith("{"):
+            document = json.loads(text)
+            document["metadata"]["name"] += f"-{handle['nonce']}"
+            document["metadata"]["ownerReferences"] = owner
+            return json.dumps(document)
+        for name in (SUPERUSER_SECRET, CLUSTER):
+            text = text.replace(name, f"{name}-{handle['nonce']}")
+        return text.replace("metadata:\n", f"metadata:\n  ownerReferences: {json.dumps(owner)}\n", 1)
 
     def leases(self):
         return {slot: self.lease(slot) for slot in self.existing_slots()}
@@ -681,31 +750,40 @@ class SparkTest:
             raise SparkError(f"{namespace} does not carry {MANAGED_LABEL}={MANAGED_VALUE} after creation; refusing to use it")
 
     def acquire(self, name, info):
-        """Lease a free slot to this run, creating the slot namespace (one at a time) when needed."""
+        """The suspended Job is both the atomic slot reservation and the launch fence."""
         leases = self.leases()
         for slot, lease in leases.items():
             if lease and lease.get("name") == name:
                 raise SparkError(f"a run named {name!r} already exists in slot {slot}; use another name or `down {name}`")
         free = [s for s in SLOTS if s in leases and not leases[s]] + [s for s in SLOTS if s not in leases]
-        mine = {**info, "name": name, "started": str(int(self.clock())), "started_ms": str(int(self.clock() * 1000))}
-        data = [f"--from-literal={key}={value}" for key, value in mine.items()]
+        mine = {**info, "nonce": info.get("nonce") or secrets.token_hex(8), "name": name, "phase": "setup",
+                "started": str(int(self.clock())), "started_ms": str(int(self.clock() * 1000))}
         for slot in free:
             if slot not in leases:
                 self.create_slot(slot)
+            state = self.slot_state(slot)
+            if not state or not state["ours"] or state["terminating"]:
+                continue
+            mine["namespace_uid"] = state["uid"]
             try:
-                self.kubectl(["create", "configmap", LEASE, *data], slot=slot)
+                # Capture UID from CREATE's response, never rebind to a name read after creation.
+                out = self.kubectl(["create", "-f", "-", "-o", "json"], slot=slot, stdin=self.run_manifest(mine))
             except SparkError as error:
-                if "AlreadyExists" in str(error):  # someone took it between our look and our create
+                if "AlreadyExists" in str(error):
                     continue
                 raise
-            self.refuse_duplicate(name, slot, mine)
-            return slot
+            handle = {**mine, "uid": json.loads(out)["metadata"]["uid"]}
+            after = self.slot_state(slot)
+            if not after or after["uid"] != handle["namespace_uid"]:
+                self.remove(slot, handle)
+                raise SparkError("namespace incarnation changed during admission; retry")
+            self.refuse_duplicate(name, slot, handle)
+            return slot, handle
         busy = "; ".join(f"{slot}: {lease_text(lease)}" for slot, lease in leases.items() if lease) or "no run is visible, but no slot could be leased"
         raise SparkError(f"all {len(SLOTS)} test slots are in use ({busy}). At most {len(SLOTS)} runs fit the shared quota next to a demo environment: "
                          "wait for one to finish and `down` it, or `down` one you no longer need")
 
     def refuse_duplicate(self, name, slot, mine):
-        """The same name started twice at once: the later lease (then the smaller nonce) gives way."""
         for other_slot in SLOTS:
             if other_slot == slot or self.slot_state(other_slot) is None:
                 continue
@@ -714,7 +792,7 @@ class SparkTest:
                 theirs = (int(other.get("started_ms", "0") or 0), other.get("nonce", ""))
                 ours = (int(mine["started_ms"]), mine.get("nonce", ""))
                 if theirs <= ours:
-                    self.kubectl(["delete", "configmap", LEASE, "--ignore-not-found"], slot=slot)
+                    self.remove(slot, mine)
                     raise SparkError(f"a run named {name!r} was started at the same time in slot {other_slot}; this one gave way. Use another name")
 
     def find(self, name, missing_ok=False):
@@ -743,36 +821,41 @@ class SparkTest:
         if suite not in SUITES:
             raise SparkError(f"unknown suite {suite!r}")
         validate_test_args(test_args, suite)
+        if not 1 <= timeout_minutes <= MAX_TIMEOUT_MINUTES:
+            raise SparkError(f"--timeout must be 1-{MAX_TIMEOUT_MINUTES} minutes")
         resolved = spark_env.resolve_ref(ref)
         nonce = secrets.token_hex(8)
         cpu_limit = self.fast_plan() if fast else DEFAULT_CPU_LIMIT_M
-        job = render_job((DEPLOY / "test-job.yaml").read_text(), suite, resolved.sha, test_args, timeout_minutes, nonce=nonce, fresh=fresh, cpu_limit_m=cpu_limit,
-                         npm_flags=NPM_FLAGS)
-        cluster = (DEPLOY / "test-cluster.yaml").read_text()
-        cache = (DEPLOY / "test-cache.yaml").read_text()
-        script = DEPLOY / "test-run.sh"
         info = {"suite": suite, "ref": resolved.name, "sha": resolved.sha, "timeout_minutes": str(timeout_minutes), "nonce": nonce, "test_args": test_args or "",
                 "fresh": "1" if fresh else "0", "fast_cpu_limit_m": str(cpu_limit) if fast else ""}
-        slot = self.acquire(name, info)
-        try:
-            self.check_quota(slot, cpu_limit)
-        except BaseException:
-            self.kubectl(["delete", "configmap", LEASE, "--ignore-not-found"], slot=slot)
-            raise
+        slot, handle = self.acquire(name, info)
         print(f"{name}: {suite} of {resolved.name} {resolved.sha[:12]} in {slot_namespace(self.base, slot)}" + (f", CPU limit {cpu_limit}m" if fast else "")
               + (f", PARTIAL (--test-args {test_args})" if test_args else "") + (", empty target directory" if fresh else ""))
         try:
-            self.kubectl(["apply", "-f", "-"], slot=slot, stdin=cache)
-            # `create`, not `apply`: apply would copy the password into the last-applied-configuration annotation.
-            self.kubectl(["create", "-f", "-"], slot=slot, stdin=superuser_secret())
-            self.kubectl(["create", "configmap", SCRIPT_CONFIGMAP, f"--from-file=test-run.sh={script}", f"--from-file=pg-forward.mjs={DEPLOY / 'pg-forward.mjs'}", f"--from-file=test-integration.mjs={DEPLOY / 'test-integration.mjs'}"], slot=slot)
-            self.kubectl(["create", "-f", "-"], slot=slot, stdin=cluster)
-            self.kubectl(["create", "-f", "-"], slot=slot, stdin=job)
+            self.check_quota(slot, cpu_limit)
+            self.require_run(slot, handle)
+            try:
+                # Cache is shared between generations: CREATE only, never apply/patch a replacement.
+                self.kubectl(["create", "-f", "-"], slot=slot, stdin=(DEPLOY / "test-cache.yaml").read_text())
+            except SparkError as error:
+                if "AlreadyExists" not in str(error):
+                    raise
+            script = json.dumps({"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": SCRIPT_CONFIGMAP},
+                                 "data": {name: (DEPLOY / name).read_text() for name in ("test-run.sh", "pg-forward.mjs", "test-integration.mjs")}})
+            for manifest in (superuser_secret(), script, (DEPLOY / "test-cluster.yaml").read_text()):
+                self.require_run(slot, handle)
+                self.kubectl(["create", "-f", "-"], slot=slot, stdin=self.owned_manifest(manifest, handle))
+            self.patch_run(slot, handle, "setup", [
+                {"op": "replace", "path": f"/metadata/annotations/{RUN_PHASE}", "value": "running"},
+                {"op": "replace", "path": "/spec/suspend", "value": False}])
         except BaseException:
-            print(f"setup of {name} failed; removing it", file=sys.stderr)
-            self.remove(slot)
+            print(f"setup of {name} failed; removing its generation", file=sys.stderr)
+            try:
+                self.remove(slot, handle)
+            except SparkError as cleanup_error:
+                print(f"generation cleanup stopped: {cleanup_error}; inspect `status`, retry `down {name}` for a retained run", file=sys.stderr)
             raise
-        return slot, resolved
+        return slot, handle
 
     def check_quota(self, slot, cpu_limit=DEFAULT_CPU_LIMIT_M):
         needs = dict(RUN_NEEDS)
@@ -785,8 +868,9 @@ class SparkTest:
             raise SparkError("the shared Spark quota cannot take another run now (" + "; ".join(short)
                              + "). Other runs or demo environments use it: `status`, `spark-env.py status`, and `down` what you no longer need")
 
-    def pod_info(self, slot):
-        pods = self.get_json(slot, ["pods", "-l", f"job-name={JOB}"])
+    def pod_info(self, slot, handle=None):
+        selector = f"controller-uid={handle['uid']}" if handle else f"job-name={JOB}"
+        pods = self.get_json(slot, ["pods", "-l", selector])
         items = (pods or {}).get("items") or []
         if not items:
             return None, {}
@@ -798,10 +882,10 @@ class SparkTest:
         reason = pod.get("status", {}).get("reason") or terminated.get("reason")  # status.reason is "Evicted" for an evicted pod
         return pod, {"exit_code": terminated.get("exitCode"), "reason": reason}
 
-    def current_step(self, slot):
+    def current_step(self, slot, pod=None):
         """The step the pod is in, from the file the script keeps (the log tail may hold only compiler lines)."""
         try:
-            step = self.kubectl(["exec", f"job/{JOB}", "-c", "tests", "--", "cat", "/tmp/omg-step"], slot=slot, capture=True).strip()
+            step = self.kubectl(["exec", pod["metadata"]["name"] if pod else f"job/{JOB}", "-c", "tests", "--", "cat", "/tmp/omg-step"], slot=slot, capture=True).strip()
         except SparkError:
             return None
         return step if STEP_NAME.fullmatch(step) else None
@@ -810,6 +894,9 @@ class SparkTest:
         return self.kubectl(["get", f"job/{JOB}", "--ignore-not-found", "-o", "json"], slot=slot, capture=True).strip()
 
     def phase(self, slot):
+        handle = self.lease(slot)
+        if handle and handle.get("phase") in ("setup", "cleaning", "purging"):
+            return handle["phase"]
         job = self.job_json(slot)
         if not job:
             return "preparing"
@@ -819,21 +906,23 @@ class SparkTest:
     def wait(self, name, slot, lease=None, quiet=False):
         """Poll until the job finishes; prints a line when the phase changes. Ends with an error, never loops forever, never watches another run."""
         lease = lease or self.lease(slot) or {}
-        nonce = lease.get("nonce")
         seen = stuck_since = no_pod_since = None
         failures = 0
         while True:
             try:
-                current = self.lease(slot)
-                if not current or current.get("name") != name or current.get("nonce") != nonce or current.get("sha") != lease.get("sha"):
-                    raise SparkError(f"the lease of slot {slot} no longer belongs to {name!r}: it was removed (`down`) or the slot was reused; the result is not read from another run")
+                current = self.require_run(slot, lease)
+                if current["phase"] != "running":
+                    raise SparkError(f"the Job no longer belongs to a running generation of {name!r} ({current['phase']}); inspect `status` and retry `down {name}`")
                 job = self.job_json(slot)
                 if not job:
                     # start() creates the Job synchronously before wait() is called.
                     raise SparkError(f"the job of {name!r} vanished (deleted by `down` or by hand); run kept: `down {name}`")
                 else:
-                    pod, _ = self.pod_info(slot)
-                    phase = job_phase(job, pod, self.current_step(slot) if pod and pod.get("status", {}).get("phase") == "Running" else None)
+                    if json.loads(job)["metadata"]["uid"] != lease["uid"]:
+                        raise SparkError(f"the Job no longer belongs to {name!r}")
+                    pod, _ = self.pod_info(slot, lease)
+                    phase = job_phase(job, pod, self.current_step(slot, pod) if pod and pod.get("status", {}).get("phase") == "Running" else None)
+                    self.require_run(slot, lease)
                 failures = 0
             except SparkError as error:
                 if "no longer belongs" in str(error) or "vanished" in str(error):
@@ -871,21 +960,27 @@ class SparkTest:
             return "no events could be read"
         return "; ".join(sanitize(spark_env.redact(line.strip()), 200) for line in text.strip().splitlines()[-3:]) or "no warning events"
 
-    def result(self, name, summary_path=None, log_path=None):
+    def result(self, name, summary_path=None, log_path=None, expected=None):
         """Print and return (exit code, summary) of a finished run. A run that did not fully pass saves its sanitised log."""
-        slot, lease = self.find(name)
+        slot, lease = expected if expected else self.find(name)
+        self.require_run(slot, lease)
         job = self.job_json(slot)
         if not job:
             raise SparkError(f"{name} has no job yet")
+        if json.loads(job)["metadata"]["uid"] != lease["uid"]:
+            raise SparkError("the result Job generation changed")
         state = spark_env.job_state(job)
         if state == "running":
             raise SparkError(f"{name} has not finished (`status {name}`, `logs {name} -f`)")
-        pod_object, pod = self.pod_info(slot)
+        pod_object, pod = self.pod_info(slot, lease)
         if state == "failed" and not pod.get("reason"):
             reason = next((c.get("reason") for c in json.loads(job).get("status", {}).get("conditions") or [] if c.get("type") == "Failed"), None)
             if reason:
                 pod = {**pod, "reason": reason}  # DeadlineExceeded
-        log = self.kubectl(["logs", f"job/{JOB}", "--tail=-1"], slot=slot, capture=True)
+        if not pod_object:
+            raise SparkError("the run has no pod to read")
+        log = self.kubectl(["logs", pod_object["metadata"]["name"], "--tail=-1"], slot=slot, capture=True)
+        self.require_run(slot, lease)
         parsed = parse_log(log, lease.get("nonce", ""))
         wall = self.wall_seconds(json.loads(job), lease)
         fast = int(lease["fast_cpu_limit_m"]) if lease.get("fast_cpu_limit_m") else None
@@ -918,15 +1013,14 @@ class SparkTest:
         timeout_minutes = timeout_minutes or DEFAULT_TIMEOUT_MINUTES[suite]
         check_writable(summary_path)
         check_writable(log_path)
-        slot, resolved = self.start(name, suite, ref, test_args, timeout_minutes, fresh=fresh, fast=fast)
-        lease = self.lease(slot) or {}
+        slot, lease = self.start(name, suite, ref, test_args, timeout_minutes, fresh=fresh, fast=fast)
         print(f"started. `spark-test.py status {name}`, `logs {name} -f`, `result {name}`, `down {name}`")
         if detach:
             print(f"detached: nothing is known about the outcome yet (exit status {EXIT_STARTED} means started); read it with `result {name}`")
             return EXIT_STARTED
         try:
             self.wait(name, slot, lease)
-            code, summary = self.result(name, summary_path, log_path)
+            code, summary = self.result(name, summary_path, log_path, expected=(slot, lease))
         except KeyboardInterrupt:
             print(f"\nstopped waiting; the run continues on the cluster. run kept: `down {name}` (`status {name}`, `result {name}`)", file=sys.stderr)
             raise
@@ -939,37 +1033,68 @@ class SparkTest:
             print(f"run kept: `logs {name}`, `down {name}` when done")
         else:
             try:
-                self.down(name)
+                self.down(name, expected=(slot, lease))
             except SparkError as error:
                 print(f"run kept: `down {name}` ({error})", file=sys.stderr)
         return code
 
     # ---- removal ----
 
-    def remove(self, slot):
-        """Delete everything of the run in the slot except the cache volume, the lease last."""
-        namespace = slot_namespace(self.base, slot)
-        for kind, name in (("job", JOB), ("cluster.postgresql.cnpg.io", CLUSTER)):
-            self.kubectl(["delete", kind, name, "--ignore-not-found", "--wait=true", "--timeout=180s"], slot=slot)
-        self.kubectl(["delete", "secret", SUPERUSER_SECRET, "--ignore-not-found"], slot=slot)
-        self.kubectl(["delete", "secret", "-l", f"cnpg.io/cluster={CLUSTER}", "--ignore-not-found"], slot=slot)
-        self.kubectl(["delete", "configmap", SCRIPT_CONFIGMAP, "--ignore-not-found"], slot=slot)
+    def remove(self, slot, handle):
+        """Fence launch first. Keep the deleting Job as a recoverable reservation until GC finishes."""
+        current = self.require_run(slot, handle)
+        if current["phase"] == "purging":
+            raise SparkError("a purge reservation is recovered with `purge`")
+        if current["phase"] != "cleaning":
+            self.patch_run(slot, handle, current["phase"], [
+                {"op": "replace", "path": f"/metadata/annotations/{RUN_PHASE}", "value": "cleaning"},
+                {"op": "replace", "path": "/spec/suspend", "value": True}])
+        job = self.get_json(slot, ["job", JOB])
+        if job is None or job["metadata"]["uid"] != handle["uid"]:
+            raise SparkError("the cleanup Job generation changed")
+        self.delete_object(slot, "jobs", job, wait=False)
+        cluster_name = f"{CLUSTER}-{handle['nonce']}"
+        cluster = self.get_json(slot, ["clusters.postgresql.cnpg.io", cluster_name])
+        if cluster:
+            self.delete_object(slot, "clusters", cluster)
+        # Only this generation's pods/volumes/secrets. All DELETEs carry the observed UID;
+        # a timeout or a paused second cleaner cannot delete a replacement object.
         for _ in range(60):
-            left = [line for line in self.kubectl(["get", "pods,persistentvolumeclaims", "-o", "name"], slot=slot, capture=True).split() if line != f"persistentvolumeclaim/{CACHE_CLAIM}"]
+            self.require_run(slot, handle)
+            objects = self.get_json(slot, ["pods,persistentvolumeclaims,secrets,configmaps"])
+            left = []
+            for obj in (objects or {}).get("items", []):
+                meta = obj["metadata"]
+                owners = meta.get("ownerReferences", [])
+                owned = any(owner["uid"] == handle["uid"] for owner in owners)
+                database = meta.get("labels", {}).get("cnpg.io/cluster") == cluster_name
+                if not (owned or database):
+                    continue
+                resource = {"Pod": "pods", "PersistentVolumeClaim": "persistentvolumeclaims", "Secret": "secrets", "ConfigMap": "configmaps"}[obj["kind"]]
+                self.delete_object(slot, resource, obj, wait=False)
+                left.append(meta["name"])
             if not left:
                 break
             self.sleep(3)
         else:
-            raise SparkError(f"{namespace} still has {', '.join(left)} after 3 minutes; the lease is kept so the slot is not reused: retry `down`")
-        self.kubectl(["delete", "configmap", LEASE, "--ignore-not-found"], slot=slot)
+            raise SparkError(f"slot {slot} still has {', '.join(left)} after 3 minutes; the lease is kept: retry `down`")
+        # Remove only our finalizer, preserving any controller's foreground-deletion barrier.
+        current_job = self.get_json(slot, ["job", JOB])
+        if current_job is None or current_job["metadata"]["uid"] != handle["uid"]:
+            raise SparkError("the cleanup Job generation changed")
+        finalizers = current_job["metadata"].get("finalizers", [])
+        if CLEANUP_FINALIZER in finalizers:
+            patch = [{"op": "test", "path": "/metadata/resourceVersion", "value": current_job["metadata"]["resourceVersion"]},
+                     {"op": "replace", "path": "/metadata/finalizers", "value": [f for f in finalizers if f != CLEANUP_FINALIZER]}]
+            self.patch_run(slot, handle, "cleaning", patch)
 
-    def down(self, name):
-        slot, _ = self.find(name, missing_ok=True)
+    def down(self, name, expected=None):
+        slot, handle = expected if expected else self.find(name, missing_ok=True)
         if slot is None:
             print(f"no run named {name!r}: nothing to remove")
             return
-        self.remove(slot)
-        print(f"removed {name} (slot {slot} is free; its cache volume stays). Creating pods can fail briefly after a delete; wait and retry.")
+        self.remove(slot, handle)
+        print(f"removed {name} (slot {slot} is free once foreground deletion finishes; its cache volume stays).")
 
     def purge(self):
         states = {slot: self.slot_state(slot) for slot in SLOTS}
@@ -985,10 +1110,32 @@ class SparkTest:
                 print(f"{slot_namespace(self.base, slot)} is already being deleted")
                 continue
             lease = self.lease(slot)
-            if lease:
+            if not lease:
+                info = {"name": "purge", "phase": "purging", "suite": "checks", "sha": "0" * 40, "nonce": secrets.token_hex(8), "namespace_uid": state["uid"]}
+                try:
+                    out = self.kubectl(["create", "-f", "-", "-o", "json"], slot=slot, stdin=self.run_manifest(info))
+                except SparkError as error:
+                    if "AlreadyExists" not in str(error):
+                        raise
+                    print(f"slot {slot} acquired concurrently; not purged")
+                    continue
+                lease = {**info, "uid": json.loads(out)["metadata"]["uid"]}
+            if lease.get("phase") != "purging":
                 print(f"slot {slot} is in use by {lease_text(lease)}; not purged")
                 continue
-            self.kubectl(["delete", "namespace", slot_namespace(self.base, slot), "--wait=false"])
+            current_state = self.slot_state(slot)
+            if not current_state or current_state["uid"] != lease["namespace_uid"]:
+                # A delayed CREATE may have reached a recreated namespace. Remove only that
+                # obsolete sentinel, so retrying purge/admission is possible in the new namespace.
+                sentinel = self.get_json(slot, ["job", JOB])
+                if sentinel and sentinel["metadata"]["uid"] == lease["uid"]:
+                    self.delete_object(slot, "jobs", sentinel)
+                print(f"slot {slot} namespace incarnation changed; obsolete purge reservation removed; retry")
+                continue
+            if not current_state["ours"] or current_state["terminating"]:
+                raise SparkError(f"slot {slot} is no longer an active managed namespace; retry purge")
+            # The reservation stays until namespace deletion, including interrupted purge recovery.
+            self.delete_object(None, "namespaces", {"metadata": {"name": slot_namespace(self.base, slot), "uid": lease["namespace_uid"]}}, wait=False)
             print(f"deleted {slot_namespace(self.base, slot)} and its cache volume")
 
     # ---- reading ----
@@ -1016,8 +1163,12 @@ class SparkTest:
             print("no slot namespaces (the first run creates them)")
 
     def logs(self, name, follow):
-        slot, _ = self.find(name)
-        command = kubectl_command(self.config, self.base, ["logs", f"job/{JOB}", *(["-f"] if follow else ["--tail=-1"])], slot_namespace(self.base, slot))
+        slot, handle = self.find(name)
+        pod, _ = self.pod_info(slot, handle)
+        if not pod:
+            raise SparkError(f"{name} has no pod yet")
+        self.require_run(slot, handle)
+        command = kubectl_command(self.config, self.base, ["logs", pod["metadata"]["name"], *(["-f"] if follow else ["--tail=-1"])], slot_namespace(self.base, slot))
         try:
             code = self.launcher(command).returncode
         except KeyboardInterrupt:

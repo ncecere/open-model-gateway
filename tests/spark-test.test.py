@@ -1,5 +1,6 @@
 """Spark test-suite runner safety tests. No cluster, registry or network access."""
 import contextlib
+import copy
 import importlib.util
 import io
 import json
@@ -9,6 +10,7 @@ import re
 import stat
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("spark_test", ROOT / "scripts" / "spark-test.py")
@@ -24,6 +26,8 @@ for _name in [name for name in os.environ if name.startswith("GIT_")]:
 
 SHA = "0123456789abcdef" * 2 + "01234567"
 NONCE = "00112233aabbccdd"
+_token_hex = tool.secrets.token_hex
+tool.secrets.token_hex = lambda size: NONCE if size == 8 else _token_hex(size)
 # Refs resolve to a fixed commit: the tests never read this repository's history.
 spark_env.resolve_ref = lambda ref, runner=None, repo=None: spark_env.Ref(ref, SHA, False)
 
@@ -52,14 +56,20 @@ def marker(kind, nonce=NONCE, **fields):
 
 
 class Cluster:
-    """A fake `run`: models the slot namespaces (labels, terminating), their lease ConfigMaps and one job, and records every call."""
+    """A fake `run`: models namespace incarnations, Job reservations, atomic patches and conditional deletes; records every call."""
 
     def __init__(self, namespaces=(), leases=None, job="running", leftovers=0, fail_on=None, log="", pod=None, quota=None, foreign=(), terminating=()):
         self.calls = []
+        self.objects = {}
+        self.versions = {}
+        self.next_job_uid = 0
+        self.deleting = set()
+        self.namespace_uids = {s: f"ns-{s}" for s in tool.SLOTS}
         self.namespaces = set(namespaces)
         self.foreign = set(foreign)  # exist without our label
         self.terminating = set(terminating)
         self.leases = dict(leases or {})  # slot -> data
+        self.suspended = {slot: data.get("phase", "running") != "running" for slot, data in self.leases.items()}
         self.job = job
         self.leftovers = leftovers
         self.fail_on = fail_on
@@ -84,7 +94,7 @@ class Cluster:
             s = m.group(1).rsplit("-", 1)[1]
             if not self.exists(s):
                 return ""
-            return json.dumps({"metadata": {"name": m.group(1), "labels": {} if s in self.foreign else dict(LABELS)}, "status": {"phase": "Terminating" if s in self.terminating else "Active"}})
+            return json.dumps({"metadata": {"name": m.group(1), "uid": self.namespace_uids[s], "labels": {} if s in self.foreign else dict(LABELS)}, "status": {"phase": "Terminating" if s in self.terminating else "Active"}})
         if "create -f -" in joined and stdin and '"kind": "Namespace"' in stdin:
             document = json.loads(stdin)
             self.namespaces.add(document["metadata"]["name"].rsplit("-", 1)[1])
@@ -92,30 +102,103 @@ class Cluster:
             return ""
         if "get networkpolicy" in joined:
             return "networkpolicy/a\nnetworkpolicy/b\n"
-        if "create configmap omg-test-lease" in joined:
-            if slot in self.leases:
-                raise tool.SparkError("kubectl create failed (exit 1): configmaps \"omg-test-lease\" already exists (AlreadyExists)")
-            self.leases[slot] = dict(arg.removeprefix("--from-literal=").split("=", 1) for arg in command if arg.startswith("--from-literal="))
-            return ""
+        if "create -f -" in joined and stdin:
+            if stdin.startswith("{"):
+                obj = json.loads(stdin)
+            else:
+                obj = {"apiVersion": "batch/v1" if "kind: Job" in stdin else "v1",
+                       "kind": re.search(r"^kind: (.+)$", stdin, re.M)[1],
+                       "metadata": {"name": re.search(r"^  name: (.+)$", stdin, re.M)[1]}}
+                for field in ("annotations", "ownerReferences"):
+                    match = re.search(rf"^  {field}: (.+)$", stdin, re.M)
+                    if match:
+                        obj["metadata"][field] = json.loads(match[1])
+            if obj["kind"] == "Job":
+                if slot in self.leases:
+                    raise tool.SparkError("AlreadyExists")
+                data = json.loads(obj["metadata"]["annotations"][tool.RUN_INFO])
+                self.next_job_uid += 1
+                data["uid"] = "job-" + data["nonce"] + f"-{self.next_job_uid}"
+                self.deleting.discard(slot)
+                self.leases[slot] = data
+                self.suspended[slot] = "  suspend: true" in stdin
+                self.versions[slot] = 1
+                return json.dumps(self.job_document(slot))
+            key = (slot, obj["metadata"]["name"])
+            if key in self.objects:
+                raise tool.SparkError("AlreadyExists")
+            obj["metadata"]["uid"] = f"object-{len(self.objects)}-{key[1]}"
+            self.objects[key] = obj
+            return json.dumps(obj)
         if "get configmap omg-test-lease" in joined:
-            return json.dumps({"metadata": {"creationTimestamp": "t"}, "data": self.leases[slot]}) if slot in self.leases else ""
-        if "delete configmap omg-test-lease" in joined:
-            self.leases.pop(slot, None)
             return ""
-        if "get job/omg-test" in joined:
-            if self.job is None:
-                return ""
-            conditions = {"complete": [{"type": "Complete", "status": "True"}], "failed": [{"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded"}], "deadline": [{"type": "Failed", "status": "True", "reason": "DeadlineExceeded"}], "running": []}[self.job]
-            return json.dumps({"status": {"conditions": conditions, "startTime": "2026-11-16T10:00:00Z", "completionTime": "2026-11-16T10:10:05Z"}})
-        if "get pods -l job-name=omg-test" in joined:
+        if "get job omg-test" in joined or "get job/omg-test" in joined:
+            return json.dumps(self.job_document(slot)) if slot in self.leases else ""
+        if "patch job omg-test" in joined:
+            patch = json.loads(command[command.index("-p") + 1])
+            obj = self.job_document(slot) if slot in self.leases else None
+            if obj is None:
+                raise tool.SparkError("NotFound")
+            # Evaluate the whole JSON Patch before committing it, as the API server does.
+            obj = copy.deepcopy(obj)
+            for operation in patch:
+                keys = operation["path"].lstrip("/").split("/")
+                target = obj
+                for key in keys[:-1]:
+                    target = target[key]
+                if operation["op"] == "test":
+                    if target.get(keys[-1]) != operation["value"]:
+                        raise tool.SparkError("Conflict: JSON patch test failed")
+                else:
+                    target[keys[-1]] = operation["value"]
+            self.suspended[slot] = obj["spec"]["suspend"]
+            self.leases[slot]["phase"] = obj["metadata"]["annotations"][tool.RUN_PHASE]
+            self.versions[slot] = self.versions.get(slot, 1) + 1
+            if slot in self.deleting and tool.CLEANUP_FINALIZER not in obj["metadata"]["finalizers"]:
+                self.leases.pop(slot)
+            return json.dumps(obj)
+        if "delete --raw" in joined:
+            path = command[command.index("--raw") + 1]
+            parts = path.split("/")
+            resource, name = parts[-2:]
+            target_slot = parts[-3].rsplit("-", 1)[1] if resource != "namespaces" else name.rsplit("-", 1)[1]
+            options = json.loads(stdin)
+            if resource == "namespaces":
+                uid = self.namespace_uids[target_slot]
+            elif resource == "jobs":
+                uid = self.job_document(target_slot)["metadata"]["uid"] if target_slot in self.leases else None
+            else:
+                uid = self.objects.get((target_slot, name), {}).get("metadata", {}).get("uid")
+            if uid is None:
+                raise tool.SparkError("NotFound")
+            if options["preconditions"] != {"uid": uid}:
+                raise tool.SparkError("Conflict: UID precondition")
+            if resource == "namespaces":
+                self.terminating.add(target_slot)
+            elif resource == "jobs":
+                self.deleting.add(target_slot)
+                if self.leases[target_slot].get("phase") == "purging":
+                    self.leases.pop(target_slot)
+            else:
+                self.objects.pop((target_slot, name))
+            return ""
+        if "get pods,persistentvolumeclaims,secrets,configmaps" in joined:
+            objects = [obj for (s, _), obj in self.objects.items() if s == slot and obj["kind"] in ("Pod", "PersistentVolumeClaim", "Secret", "ConfigMap")]
+            objects += [{"kind": "PersistentVolumeClaim", "metadata": {"name": f"omg-test-db-{i}", "uid": f"left-{i}", "labels": {"cnpg.io/cluster": f"{tool.CLUSTER}-{self.leases[slot]['nonce']}"}}} for i in range(self.leftovers)]
+            return json.dumps({"items": objects})
+        if " get " in joined and slot:
+            for (s, name), obj in self.objects.items():
+                if s == slot and name in command:
+                    return json.dumps(obj)
+        if "get pods -l " in joined:
             if self.pod == "none":
                 return ""
             status = {"phase": "Running", "containerStatuses": [{"name": "tests", "state": {"terminated": {"exitCode": 137, "reason": "OOMKilled"}}}]}
             status.update(self.pod or {})
-            return json.dumps({"items": [{"status": status}]})
-        if "exec job/omg-test" in joined:
+            return json.dumps({"items": [{"metadata": {"name": "omg-test-pod", "uid": "pod-uid"}, "status": status}]})
+        if "exec " in joined:
             return "lib/lib\n"
-        if "logs job/omg-test" in joined:
+        if "logs " in joined:
             return self.log
         if "get events" in joined:
             return "FailedScheduling   0/1 nodes: Insufficient cpu\n"
@@ -127,22 +210,24 @@ class Cluster:
             return "persistentvolumeclaim/omg-test-cache\n" + "".join(f"persistentvolumeclaim/omg-test-db-{i}\n" for i in range(self.leftovers))
         return ""
 
+    def job_document(self, slot):
+        data = self.leases[slot]
+        phase = data.get("phase", "running")
+        meta = {"name": tool.JOB, "uid": data.get("uid", "job-" + data["nonce"]),
+                "resourceVersion": str(self.versions.get(slot, 1)), "creationTimestamp": "t",
+                "annotations": {tool.RUN_INFO: json.dumps(data), tool.RUN_PHASE: phase},
+                "finalizers": [tool.CLEANUP_FINALIZER] if phase != "purging" else []}
+        if slot in self.deleting:
+            meta["deletionTimestamp"] = "now"
+        conditions = {"complete": [{"type": "Complete", "status": "True"}], "failed": [{"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded"}], "deadline": [{"type": "Failed", "status": "True", "reason": "DeadlineExceeded"}]}.get(self.job, [])
+        return {"metadata": meta, "spec": {"suspend": self.suspended.get(slot, phase != "running")}, "status": {"conditions": conditions, "startTime": "2026-11-16T10:00:00Z", "completionTime": "2026-11-16T10:10:05Z"}}
+
     def commands(self):
         return [" ".join(command) for command, _ in self.calls]
 
 
-class Primed(Cluster):
-    """A cluster whose leases carry the nonce the test log was written with (the real nonce is random per run)."""
-
-    def __call__(self, command, stdin=None, capture=False):
-        result = super().__call__(command, stdin, capture)
-        if "create configmap omg-test-lease" in " ".join(command):
-            self.leases["s1"]["nonce"] = NONCE
-        return result
-
-
 def lease(name="probe", suite="lib", nonce=NONCE, **extra):
-    return {"name": name, "suite": suite, "ref": "main", "sha": SHA, "nonce": nonce, "started": "10000", "started_ms": "10000000", **extra}
+    return {"name": name, "suite": suite, "ref": "main", "sha": SHA, "nonce": nonce, "started": "10000", "started_ms": "10000000", "namespace_uid": "ns-s1", "uid": "job-" + nonce, **extra}
 
 
 def make(cluster, clock=None, sleep=None):
@@ -242,7 +327,7 @@ class Safety(unittest.TestCase):
                 tool.spark_env.kubeconfig_path({"SPARK_KUBECONFIG": str(Path(folder) / "absent.yaml")})
 
     def test_every_command_is_kubectl_with_the_spark_kubeconfig_and_an_owned_namespace(self):
-        cluster = Primed(job="complete", log=log_for("web", passed=1903))
+        cluster = Cluster(job="complete", log=log_for("web", passed=1903))
         with contextlib.redirect_stdout(io.StringIO()):
             make(cluster).run("probe", "web", "HEAD", "", 60, keep=False, detach=False, summary_path=None)
         for command, _ in cluster.calls:
@@ -253,7 +338,7 @@ class Safety(unittest.TestCase):
             elif "config" not in command:
                 # cluster-wide only: the base namespace's quota, and getting or creating one of the two slot namespaces by name
                 named = [w for w in command if re.fullmatch(rf"{BASE}-omg-test-s[12]", w)]
-                self.assertTrue("resourcequota" in command or named or ("create" in command and "-f" in command), command)
+                self.assertTrue("resourcequota" in command or named or ("create" in command and "-f" in command) or ("--raw" in command and re.fullmatch(rf"/(apis/(batch/v1|postgresql.cnpg.io/v1)|api/v1)/namespaces/{BASE}-omg-test-s[12]/[a-z]+/[a-z0-9-]+", command[command.index("--raw") + 1])), command)
         self.assertFalse([c for c, _ in cluster.calls if "delete" in c and "namespace" in c], "down never deletes a namespace")
 
     def test_a_namespace_without_our_label_is_never_used_stopped_or_deleted(self):
@@ -268,7 +353,7 @@ class Safety(unittest.TestCase):
 
     def test_slot_namespaces_are_created_with_the_label(self):
         cluster = Cluster()
-        make(cluster).acquire("probe", {"suite": "lib"})
+        make(cluster).acquire("probe", {"suite": "lib", "sha": SHA})
         create = [(c, d) for c, d in cluster.calls if d and '"Namespace"' in d]
         self.assertEqual(len(create), 1)
         self.assertEqual(json.loads(create[0][1])["metadata"]["labels"], LABELS)
@@ -276,7 +361,7 @@ class Safety(unittest.TestCase):
     def test_a_namespace_being_deleted_gives_a_retry_message(self):
         cluster = Cluster(terminating={"s1"})
         with self.assertRaises(tool.SparkError) as caught:
-            make(cluster).acquire("probe", {"suite": "lib"})
+            make(cluster).acquire("probe", {"suite": "lib", "sha": SHA})
         self.assertIn("being deleted", str(caught.exception))
         self.assertIn("retry", str(caught.exception))
 
@@ -326,7 +411,8 @@ class Rendering(unittest.TestCase):
                 continue
             with self.assertRaises(tool.SparkError, msg=bad):
                 tool.render_job(self.JOB, "lib", SHA, "", 90, nonce=bad)
-        self.assertNotEqual(tool.render_job(self.JOB, "lib", SHA, "", 90), tool.render_job(self.JOB, "lib", SHA, "", 90), "a random nonce per rendering")
+        with mock.patch.object(tool.secrets, "token_hex", _token_hex):
+            self.assertNotEqual(tool.render_job(self.JOB, "lib", SHA, "", 90), tool.render_job(self.JOB, "lib", SHA, "", 90), "a random nonce per rendering")
 
     def test_test_args_are_checked_and_limited_to_lib_and_web(self):
         self.assertIn('"--exact management::tests::x"', tool.render_job(self.JOB, "lib", SHA, "--exact management::tests::x", 60))
@@ -385,7 +471,8 @@ class Slots(unittest.TestCase):
 
     def acquire(self, cluster, name="new", info=None):
         spark = make(cluster)
-        return spark, spark.acquire(name, dict(info or self.INFO))
+        slot, handle = spark.acquire(name, dict(info or self.INFO))
+        return spark, slot
 
     def test_the_first_run_creates_one_slot_namespace_and_waits_for_its_policies(self):
         cluster = Cluster()
@@ -395,7 +482,7 @@ class Slots(unittest.TestCase):
         created = [i for i, (c, d) in enumerate(cluster.calls) if d and '"Namespace"' in d]
         self.assertEqual(len(created), 1)
         self.assertLess(created[0], next(i for i, c in enumerate(commands) if "get networkpolicy" in c))
-        self.assertLess(next(i for i, c in enumerate(commands) if "get networkpolicy" in c), next(i for i, c in enumerate(commands) if "create configmap omg-test-lease" in c))
+        self.assertLess(next(i for i, c in enumerate(commands) if "get networkpolicy" in c), next(i for i, c in enumerate(commands) if "create -f - -o json" in c))
         self.assertEqual(cluster.leases["s1"]["name"], "new")
         self.assertEqual(cluster.leases["s1"]["sha"], SHA)
 
@@ -425,7 +512,7 @@ class Slots(unittest.TestCase):
         class Racing(Cluster):
             def __call__(self, command, stdin=None, capture=False):
                 joined = " ".join(command)
-                if "create configmap omg-test-lease" in joined and "omg-test-s1" in joined and "s1" not in self.leases:
+                if "create -f - -o json" in joined and "omg-test-s1" in joined and "s1" not in self.leases:
                     self.leases["s1"] = lease("winner", nonce="ffffffffffffffff")
                 return super().__call__(command, stdin, capture)
 
@@ -445,7 +532,7 @@ class Slots(unittest.TestCase):
         class Simultaneous(Cluster):
             def __call__(self, command, stdin=None, capture=False):
                 result = super().__call__(command, stdin, capture)
-                if "create configmap omg-test-lease" in " ".join(command) and "omg-test-s1" in " ".join(command):
+                if "create -f - -o json" in " ".join(command) and "omg-test-s1" in " ".join(command):
                     self.leases["s2"] = earlier  # the other process leased slot s2 just before
                 return result
 
@@ -561,7 +648,7 @@ class Quota(unittest.TestCase):
         self.assertEqual(tool.quota_free(two, ["requests.cpu"]), {"requests.cpu": 500})
         self.assertEqual(tool.quota_free(json.dumps({"items": list(reversed(json.loads(two)["items"]))}), ["requests.cpu"]), {"requests.cpu": 500})
 
-    def test_a_run_that_does_not_fit_is_refused_before_anything_is_created(self):
+    def test_quota_refusal_releases_suspended_reservation_without_creating_workloads(self):
         cluster = Cluster(quota=quota_json(**{"requests.memory": "4Gi"}))
         out, err = quiet()
         with out, err, self.assertRaises(tool.SparkError) as caught:
@@ -569,7 +656,8 @@ class Quota(unittest.TestCase):
         self.assertIn("requests.memory", str(caught.exception))
         self.assertIn("shared Spark quota", str(caught.exception))
         self.assertEqual(cluster.leases, {})
-        self.assertFalse([c for c in cluster.commands() if "apply" in c or "create configmap omg-test-script" in c])
+        workloads = [data for _, data in cluster.calls if data and ('"kind": "Secret"' in data or "kind: Cluster" in data or "kind: PersistentVolumeClaim" in data)]
+        self.assertEqual(workloads, [])
 
     def test_fast_uses_the_free_limit_quota_and_refuses_when_it_does_not_fit(self):
         self.assertEqual(tool.fast_cpu_limit(8000), 6000)
@@ -591,23 +679,30 @@ class Quota(unittest.TestCase):
 
 
 class Lifecycle(unittest.TestCase):
-    def test_start_applies_the_cache_then_secrets_script_database_and_job_in_that_order(self):
+    def test_start_reserves_suspended_job_then_creates_owned_resources_before_activation(self):
         cluster = Cluster()
         with contextlib.redirect_stdout(io.StringIO()):
-            slot, resolved = make(cluster).start("probe", "lib", "HEAD", "", 90)
+            slot, handle = make(cluster).start("probe", "lib", "HEAD", "", 90)
         self.assertEqual(slot, "s1")
-        commands = cluster.commands()
-        order = [next(i for i, c in enumerate(commands) if needle in c) for needle in ("create configmap omg-test-lease", "apply -f -", "create configmap omg-test-script")]
-        self.assertEqual(order, sorted(order))
-        stdins = [data for _, data in cluster.calls if data and '"Namespace"' not in data]
-        self.assertEqual(len(stdins), 4)
-        self.assertIn("PersistentVolumeClaim", stdins[0])
-        self.assertIn('"Secret"', stdins[1])
-        self.assertIn("kind: Cluster", stdins[2])
-        self.assertIn("kind: Job", stdins[3])
-        self.assertIn(resolved.sha, stdins[3])
-        self.assertRegex(cluster.leases["s1"]["nonce"], r"^[0-9a-f]{16}$")
-        self.assertIn(f'value: "{cluster.leases["s1"]["nonce"]}"', stdins[3])
+        manifests = [data for _, data in cluster.calls if data and ('kind: Job' in data or 'kind: PersistentVolumeClaim' in data or 'kind: Cluster' in data or data.startswith('{"apiVersion"')) and 'Namespace' not in data and 'DeleteOptions' not in data]
+        self.assertEqual(len(manifests), 5)
+        self.assertIn("kind: Job", manifests[0])
+        self.assertIn("suspend: true", manifests[0])
+        self.assertIn(SHA, manifests[0])
+        self.assertIn("kind: PersistentVolumeClaim", manifests[1])
+        for manifest in manifests[2:]:
+            self.assertIn(handle["uid"], manifest)
+            self.assertIn(handle["nonce"], manifest)
+        self.assertEqual(cluster.leases[slot]["phase"], "running")
+        self.assertFalse(cluster.job_document(slot)["spec"]["suspend"])
+        self.assertIn('"value": false', cluster.commands()[-1])
+
+    def test_invalid_timeout_is_refused_before_slot_mutations(self):
+        for timeout in (0, -1, tool.MAX_TIMEOUT_MINUTES + 1):
+            cluster = Cluster()
+            with self.assertRaisesRegex(tool.SparkError, "--timeout"):
+                make(cluster).start("probe", "lib", "HEAD", "", timeout)
+            self.assertEqual(cluster.calls, [])
 
     def test_the_lease_records_the_narrowing_and_the_print_says_partial(self):
         cluster = Cluster()
@@ -631,7 +726,7 @@ class Lifecycle(unittest.TestCase):
     def test_a_failed_setup_removes_the_run_and_frees_the_slot(self):
         class Failing(Cluster):
             def __call__(self, command, stdin=None, capture=False):
-                if stdin and "kind: Job" in stdin:
+                if stdin and "kind: Cluster" in stdin:
                     raise tool.SparkError("kubectl create failed (exit 1): exceeded quota")
                 return super().__call__(command, stdin, capture)
 
@@ -640,16 +735,18 @@ class Lifecycle(unittest.TestCase):
         with out, err, self.assertRaises(tool.SparkError):
             make(cluster).start("probe", "lib", "HEAD", "", 90)
         self.assertEqual(cluster.leases, {}, "the lease is released")
-        self.assertTrue([c for c in cluster.commands() if "delete job omg-test" in c])
+        self.assertTrue([c for c in cluster.commands() if "delete --raw /apis/batch/v1/" in c])
 
     def test_down_removes_the_run_but_never_a_namespace_and_the_lease_goes_last(self):
         cluster = Cluster(namespaces={"s1"}, leases={"s1": lease()})
         with contextlib.redirect_stdout(io.StringIO()):
             make(cluster).down("probe")
-        deleted = [c for c in cluster.commands() if " delete " in c]
-        self.assertTrue(deleted[-1].endswith("delete configmap omg-test-lease --ignore-not-found"), deleted)
-        self.assertTrue(any("delete cluster.postgresql.cnpg.io omg-test-db" in c for c in deleted))
-        self.assertFalse([c for c in deleted if "namespace" in c or "persistentvolumeclaim" in c or "pvc" in c], "the cache volume is not deleted")
+        commands = cluster.commands()
+        deleted = [c for c in commands if " delete " in c]
+        self.assertTrue(any("/jobs/omg-test" in c for c in deleted))
+        self.assertTrue(all("--raw" in c for c in deleted))
+        self.assertIn('"value": []', commands[-1], "reservation finalizer is released last")
+        self.assertFalse(any("/persistentvolumeclaims/omg-test-cache" in c for c in deleted))
         self.assertEqual(cluster.leases, {})
 
     def test_down_keeps_the_lease_when_something_is_left_behind(self):
@@ -672,8 +769,8 @@ class Lifecycle(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             make(cluster).purge()
-        deleted = [c for c in cluster.commands() if "delete namespace" in c]
-        self.assertEqual(deleted, [f"kubectl --kubeconfig {CONFIG} delete namespace {BASE}-omg-test-s2 --wait=false"])
+        deleted = [c for c in cluster.commands() if f"delete --raw /api/v1/namespaces/{BASE}-omg-test-" in c]
+        self.assertEqual(deleted, [f"kubectl --kubeconfig {CONFIG} delete --raw /api/v1/namespaces/{BASE}-omg-test-s2 -f -"])
         self.assertIn("in use", out.getvalue())
 
     def test_purge_skips_a_namespace_that_is_already_being_deleted(self):
@@ -681,7 +778,7 @@ class Lifecycle(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             make(cluster).purge()
-        self.assertFalse([c for c in cluster.commands() if "delete namespace" in c])
+        self.assertFalse([c for c in cluster.commands() if f"delete --raw /api/v1/namespaces/{BASE}-omg-test-" in c])
         self.assertIn("already being deleted", out.getvalue())
 
     def test_status_lists_slots(self):
@@ -694,7 +791,7 @@ class Lifecycle(unittest.TestCase):
         self.assertIn("s2: free", out.getvalue())
 
     def test_run_waits_prints_the_result_and_downs(self):
-        cluster = Primed(job="complete", log=log_for("web", passed=1903))
+        cluster = Cluster(job="complete", log=log_for("web", passed=1903))
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             code = make(cluster).run("probe", "web", "HEAD", "", 60, keep=False, detach=False, summary_path=None)
@@ -704,7 +801,7 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(cluster.leases, {})
 
     def _run_with_log(self, log, suite="lib", job="complete", test_args="", pod=None, keep=False, log_path=None):
-        cluster = Primed(job=job, log=log, pod=pod)
+        cluster = Cluster(job=job, log=log, pod=pod)
         out = io.StringIO()
         with tempfile.TemporaryDirectory() as folder, contextlib.redirect_stdout(out):
             summary = Path(folder) / "summary.json"
@@ -797,7 +894,7 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(logs, [])
 
     def test_keep_and_detach_leave_the_run_in_place_and_detach_is_not_a_pass(self):
-        cluster = Primed(job="complete", log=log_for("web", passed=1903))
+        cluster = Cluster(job="complete", log=log_for("web", passed=1903))
         with contextlib.redirect_stdout(io.StringIO()):
             code = make(cluster).run("probe", "web", "HEAD", "", 60, keep=True, detach=False, summary_path=None)
         self.assertIn("s1", cluster.leases)
@@ -844,6 +941,272 @@ class Lifecycle(unittest.TestCase):
         self.assertIn("s1", cluster.leases)
 
 
+class Interleavings(unittest.TestCase):
+    def test_purge_reserves_idle_slot_before_namespace_delete(self):
+        class Racing(Cluster):
+            def __call__(self, command, stdin=None, capture=False):
+                if "delete --raw /api/v1/namespaces/" in " ".join(command) and "/jobs/" not in " ".join(command):
+                    # An admission runs after purge's idle read, before its DELETE.
+                    try:
+                        make(self).acquire("winner", Slots.INFO)
+                    except tool.SparkError:
+                        pass
+                    self.admitted = any(x.get("name") == "winner" for x in self.leases.values())
+                return super().__call__(command, stdin, capture)
+
+        cluster = Racing(namespaces={"s1", "s2"}, leases={"s2": lease("busy")})
+        with contextlib.redirect_stdout(io.StringIO()):
+            make(cluster).purge()
+        self.assertFalse(cluster.admitted, "purge must exclude admission atomically before deleting")
+
+    def test_stale_down_cannot_delete_replacement_lease(self):
+        for name in ("probe", "other"):
+            class Racing(Cluster):
+                replaced = False
+
+                def __call__(self, command, stdin=None, capture=False):
+                    if "delete --raw /apis/batch/v1/" in " ".join(command) and not self.replaced:
+                        self.replaced = True
+                        self.leases["s1"] = lease(name, nonce="ffffffffffffffff")
+                    return super().__call__(command, stdin, capture)
+
+            cluster = Racing(namespaces={"s1"}, leases={"s1": lease()})
+            with contextlib.redirect_stdout(io.StringIO()):
+                try:
+                    make(cluster).down("probe")
+                except tool.SparkError:
+                    pass
+            self.assertEqual(cluster.leases.get("s1", {}).get("nonce"), "ffffffffffffffff")
+
+    def test_auto_down_keeps_the_generation_returned_by_start(self):
+        cluster = Cluster(job="complete", log=log_for("web", passed=1903))
+        spark = make(cluster)
+        original = spark.result
+
+        def result(*args, **kwargs):
+            answer = original(*args, **kwargs)
+            # The original run is removed and the same name admitted before auto-down.
+            cluster.leases["s1"] = lease("probe", "web", nonce="ffffffffffffffff")
+            return answer
+
+        spark.result = result
+        with contextlib.redirect_stdout(io.StringIO()):
+            spark.run("probe", "web", "HEAD", "", 60, keep=False, detach=False, summary_path=None)
+        self.assertEqual(cluster.leases.get("s1", {}).get("nonce"), "ffffffffffffffff")
+
+
+    def test_purge_loses_to_admission_between_idle_read_and_reservation(self):
+        class Racing(Cluster):
+            def __call__(self, command, stdin=None, capture=False):
+                if stdin and 'kind: Job' in stdin and 'purging' in stdin:
+                    self.leases["s1"] = lease("winner")
+                return super().__call__(command, stdin, capture)
+        cluster = Racing(namespaces={"s1"})
+        with contextlib.redirect_stdout(io.StringIO()):
+            make(cluster).purge()
+        self.assertFalse(cluster.terminating)
+        self.assertEqual(cluster.leases["s1"]["name"], "winner")
+
+    def test_interrupted_purge_is_resumable_without_releasing_its_reservation(self):
+        cluster = Cluster(namespaces={"s1"}, fail_on="delete --raw")
+        spark = make(cluster)
+        with self.assertRaises(tool.SparkError):
+            spark.purge()
+        self.assertEqual(cluster.leases["s1"]["phase"], "purging")
+        self.assertEqual(cluster.job_document("s1")["metadata"]["finalizers"], [])
+        cluster.fail_on = None
+        with contextlib.redirect_stdout(io.StringIO()):
+            make(cluster).purge()
+        self.assertEqual(cluster.terminating, {"s1"})
+
+    def test_namespace_delete_is_fenced_against_a_new_incarnation(self):
+        class Racing(Cluster):
+            def __call__(self, command, stdin=None, capture=False):
+                if "delete --raw /api/v1/namespaces/" in " ".join(command):
+                    self.namespace_uids["s1"] = "replacement-namespace"
+                    self.leases["s1"] = lease("winner", nonce="ffffffffffffffff", namespace_uid="replacement-namespace")
+                return super().__call__(command, stdin, capture)
+        cluster = Racing(namespaces={"s1"})
+        with self.assertRaisesRegex(tool.SparkError, "precondition"):
+            make(cluster).purge()
+        self.assertFalse(cluster.terminating)
+        self.assertEqual(cluster.leases["s1"]["name"], "winner")
+
+    def test_delayed_purge_reservation_in_new_namespace_is_recoverable(self):
+        class Racing(Cluster):
+            def __call__(inner, command, stdin=None, capture=False):
+                if stdin and "kind: Job" in stdin and "purging" in stdin:
+                    inner.namespace_uids["s1"] = "new-namespace"
+                return super().__call__(command, stdin, capture)
+        cluster = Racing(namespaces={"s1"})
+        with contextlib.redirect_stdout(io.StringIO()):
+            make(cluster).purge()
+        self.assertFalse(cluster.terminating, "the replacement namespace must survive")
+        self.assertFalse(cluster.leases, "obsolete sentinel must not wedge the new namespace")
+        slot, _ = make(cluster).acquire("next", Slots.INFO)
+        self.assertEqual(slot, "s1")
+
+    def test_stale_setup_cannot_launch_after_down_and_same_or_other_name_reuse(self):
+        for replacement_name in ("probe", "other"):
+            for boundary in ("resource-create", "activation"):
+                class Racing(Cluster):
+                    replaced = False
+                    def __call__(inner, command, stdin=None, capture=False):
+                        joined = " ".join(command)
+                        late_create = stdin and "kind: Cluster" in stdin
+                        activation = "patch job" in joined and '\"value\": false' in joined
+                        if not inner.replaced and ((boundary == "resource-create" and late_create) or (boundary == "activation" and activation)):
+                            inner.replaced = True
+                            # Complete real cleanup, then admit/activate a replacement while the old request is paused.
+                            make(inner).down("probe")
+                            with mock.patch.object(tool.secrets, "token_hex", lambda size: "f" * (size * 2)):
+                                make(inner).start(replacement_name, "web", "HEAD", "", 60)
+                        return super().__call__(command, stdin, capture)
+                cluster = Racing()
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(tool.SparkError):
+                    make(cluster).start("probe", "web", "HEAD", "", 60)
+                self.assertEqual(cluster.leases["s1"]["name"], replacement_name)
+                self.assertEqual(cluster.leases["s1"]["nonce"], "ffffffffffffffff")
+                self.assertEqual(cluster.leases["s1"]["phase"], "running")
+                # A late CREATE has an extinct owner and a distinct name: GC can collect it;
+                # it can never launch a test Job or refer to the replacement's database.
+                for (slot, name), obj in cluster.objects.items():
+                    if NONCE in name:
+                        self.assertEqual(obj["metadata"]["ownerReferences"][0]["uid"], "job-" + NONCE + "-1")
+                self.assertFalse(any("apply" in c for c in cluster.commands()))
+
+    def test_quota_failure_cleanup_cannot_release_replacement(self):
+        cluster = Cluster()
+        spark = make(cluster)
+        def fail_quota(slot, cpu_limit):
+            cluster.leases[slot] = lease("other", nonce="ffffffffffffffff")
+            raise tool.SparkError("quota failure from a stale setup")
+        spark.check_quota = fail_quota
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(tool.SparkError):
+            spark.start("probe", "lib", "HEAD", "", 60)
+        self.assertEqual(cluster.leases["s1"]["nonce"], "ffffffffffffffff")
+
+    def test_duplicate_loser_cannot_release_a_replacement(self):
+        cluster = Cluster(namespaces={"s1", "s2"}, leases={"s1": lease("same"), "s2": lease("same", nonce="aaaaaaaaaaaaaaaa", started_ms="1")})
+        spark = make(cluster)
+        mine = spark.lease("s1")
+        remove = spark.remove
+        def paused_remove(slot, expected):
+            cluster.leases[slot] = lease("other", nonce="ffffffffffffffff")
+            remove(slot, expected)
+        spark.remove = paused_remove
+        with self.assertRaises(tool.SparkError):
+            spark.refuse_duplicate("same", "s1", mine)
+        self.assertEqual(cluster.leases["s1"]["name"], "other")
+
+    def test_interrupted_cleanup_fences_activation_and_is_resumed_by_down(self):
+        for boundary in ("delete --raw", "get pods,persistentvolumeclaims,secrets,configmaps"):
+            cluster = Cluster(namespaces={"s1"}, leases={"s1": lease(phase="setup")}, fail_on=boundary)
+            spark = make(cluster)
+            handle = spark.lease("s1")
+            with self.assertRaises(tool.SparkError):
+                spark.down("probe")
+            self.assertEqual(cluster.leases["s1"]["phase"], "cleaning")
+            with self.assertRaisesRegex(tool.SparkError, "patch test"):
+                spark.patch_run("s1", handle, "setup", [{"op": "replace", "path": "/spec/suspend", "value": False}])
+            cluster.fail_on = None
+            with contextlib.redirect_stdout(io.StringIO()):
+                make(cluster).down("probe")
+            self.assertNotIn("s1", cluster.leases)
+            slot, _ = spark.acquire("next", Slots.INFO)
+            self.assertEqual(slot, "s1")
+
+    def test_wait_stops_on_retained_cleanup_instead_of_waiting_on_a_suspended_job(self):
+        cluster = Cluster(namespaces={"s1"}, leases={"s1": lease(phase="cleaning")})
+        def no_sleep(seconds):
+            self.fail("waiting on retained cleanup must terminate immediately")
+        with self.assertRaisesRegex(tool.SparkError, "cleaning"):
+            make(cluster, sleep=no_sleep).wait("probe", "s1", lease())
+
+    def test_timeout_retains_reservation_and_retry_can_finish(self):
+        cluster = Cluster(namespaces={"s1"}, leases={"s1": lease()}, leftovers=1)
+        spark = make(cluster)
+        with self.assertRaisesRegex(tool.SparkError, "retry `down`"):
+            spark.down("probe")
+        self.assertEqual(cluster.leases["s1"]["phase"], "cleaning")
+        cluster.leftovers = 0
+        with contextlib.redirect_stdout(io.StringIO()):
+            make(cluster).down("probe")
+        self.assertEqual(cluster.leases, {})
+
+    def test_stale_finalizer_release_cannot_modify_replacement(self):
+        class Racing(Cluster):
+            def __call__(inner, command, stdin=None, capture=False):
+                if "patch job" in " ".join(command) and "/metadata/finalizers" in " ".join(command):
+                    inner.leases["s1"] = lease("other", nonce="ffffffffffffffff")
+                return super().__call__(command, stdin, capture)
+        cluster = Racing(namespaces={"s1"}, leases={"s1": lease()})
+        with self.assertRaisesRegex(tool.SparkError, "patch test"):
+            make(cluster).down("probe")
+        self.assertEqual(cluster.leases["s1"]["name"], "other")
+
+    def test_finalizer_version_conflict_retains_reservation_and_retry_finishes(self):
+        class Racing(Cluster):
+            conflicted = False
+            def __call__(inner, command, stdin=None, capture=False):
+                if not inner.conflicted and "patch job" in " ".join(command) and "/metadata/finalizers" in " ".join(command):
+                    inner.conflicted = True
+                    inner.versions["s1"] = inner.versions.get("s1", 1) + 1
+                return super().__call__(command, stdin, capture)
+        cluster = Racing(namespaces={"s1"}, leases={"s1": lease()})
+        with self.assertRaisesRegex(tool.SparkError, "patch test"):
+            make(cluster).down("probe")
+        self.assertEqual(cluster.leases["s1"]["phase"], "cleaning")
+        self.assertIn(tool.CLEANUP_FINALIZER, cluster.job_document("s1")["metadata"]["finalizers"])
+        with contextlib.redirect_stdout(io.StringIO()):
+            make(cluster).down("probe")
+        self.assertNotIn("s1", cluster.leases)
+
+    def test_stale_resource_delete_uses_uid_even_after_its_last_read(self):
+        class Racing(Cluster):
+            def __call__(inner, command, stdin=None, capture=False):
+                if "delete --raw" in " ".join(command):
+                    inner.objects[("s1", "object")]["metadata"]["uid"] = "replacement"
+                return super().__call__(command, stdin, capture)
+        obj = {"kind": "Secret", "metadata": {"name": "object", "uid": "original"}}
+        cluster = Racing(namespaces={"s1"})
+        cluster.objects[("s1", "object")] = copy.deepcopy(obj)
+        with self.assertRaisesRegex(tool.SparkError, "UID precondition"):
+            make(cluster).delete_object("s1", "secrets", obj)
+        self.assertEqual(cluster.objects[("s1", "object")]["metadata"]["uid"], "replacement")
+
+    def test_run_does_not_rebind_between_start_and_wait_or_wait_and_result(self):
+        for boundary in ("start", "wait"):
+            cluster = Cluster(job="complete", log=log_for("web", passed=1903))
+            spark = make(cluster)
+            original = getattr(spark, boundary)
+            def replaced(*args, **kwargs):
+                answer = original(*args, **kwargs)
+                cluster.leases["s1"] = lease("probe", "web", nonce="ffffffffffffffff")
+                return answer
+            setattr(spark, boundary, replaced)
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(tool.SparkError):
+                spark.run("probe", "web", "HEAD", "", 60, keep=False, detach=False, summary_path=None)
+            self.assertEqual(cluster.leases["s1"]["nonce"], "ffffffffffffffff")
+
+    def test_legacy_active_slot_refused_but_prior_idle_cache_is_reused(self):
+        class Legacy(Cluster):
+            def __call__(self, command, stdin=None, capture=False):
+                if "get configmap omg-test-lease" in " ".join(command):
+                    return json.dumps({"data": lease()})
+                return super().__call__(command, stdin, capture)
+        for action in (lambda spark: spark.down("probe"), lambda spark: spark.purge(), lambda spark: spark.acquire("next", Slots.INFO)):
+            cluster = Legacy(namespaces={"s1"})
+            with self.assertRaisesRegex(tool.SparkError, "legacy active lease"):
+                action(make(cluster))
+            self.assertFalse(any("delete" in c for c in cluster.commands()))
+        cluster = Cluster(namespaces={"s1"})
+        cluster.objects[("s1", tool.CACHE_CLAIM)] = {"kind": "PersistentVolumeClaim", "metadata": {"name": tool.CACHE_CLAIM, "uid": "prior-cache"}}
+        with contextlib.redirect_stdout(io.StringIO()):
+            make(cluster).start("next", "web", "HEAD", "", 60)
+        self.assertEqual(cluster.objects[("s1", tool.CACHE_CLAIM)]["metadata"]["uid"], "prior-cache")
+
+
 class Waiting(unittest.TestCase):
     def clock(self):
         now = [10_000]
@@ -881,7 +1244,7 @@ class Waiting(unittest.TestCase):
 
         class Slowly(Cluster):
             def __call__(inner, command, stdin=None, capture=False):
-                if "get pods -l job-name=omg-test" in " ".join(command):
+                if "get pods -l " in " ".join(command):
                     calls["n"] += 1
                     inner.job = "complete" if calls["n"] > 5 else "running"
                 return super().__call__(command, stdin, capture)
@@ -897,7 +1260,8 @@ class Waiting(unittest.TestCase):
             def __call__(inner, command, stdin=None, capture=False):
                 if "get job/omg-test" in " ".join(command):
                     Vanishing.polls += 1
-                    inner.job = "running" if Vanishing.polls < 3 else None
+                    if Vanishing.polls >= 3:
+                        inner.leases.pop("s1", None)
                 return super().__call__(command, stdin, capture)
 
         cluster = Vanishing(namespaces={"s1"}, leases={"s1": lease()}, job="running")
@@ -906,13 +1270,13 @@ class Waiting(unittest.TestCase):
         self.assertIn("vanished", str(caught.exception))
 
     def test_a_job_missing_on_the_first_poll_ends_the_wait(self):
-        cluster = Cluster(namespaces={"s1"}, leases={"s1": lease()}, job=None)
+        cluster = Cluster(namespaces={"s1"}, leases={}, job=None)
         now = [10_000]
         def bounded_sleep(seconds):
             now[0] += seconds
             self.assertLess(now[0], 10_120, "missing Job kept waiting")
         waiter = tool.SparkTest(CONFIG, runner=cluster, clock=lambda: now[0], sleep=bounded_sleep)
-        with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(tool.SparkError, "vanished"):
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(tool.SparkError, "no longer belongs|vanished"):
             waiter.wait("probe", "s1", lease())
 
     def test_a_lease_that_is_gone_or_belongs_to_another_run_ends_the_wait(self):

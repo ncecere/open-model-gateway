@@ -4,6 +4,7 @@
 // the script installs and downloads nothing of its own, and two runs fit the shared quota next to
 // one demo environment.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -150,4 +151,46 @@ test("fixtures: every rule is enforced", () => {
     mutate(doc);
     assert.notDeepEqual(violations(doc), [], label);
   }
+});
+
+
+test("the executable renderer keeps hardened Jobs suspended and binds resources to one generation", () => {
+  const rendered = JSON.parse(execFileSync("python3", ["-c", `
+import importlib.util, json
+spec = importlib.util.spec_from_file_location("spark_test", "scripts/spark-test.py")
+tool = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(tool)
+spark = tool.SparkTest("/unused-fixture-config")
+info = {"name": "fixture", "phase": "setup", "suite": "web", "sha": "a" * 40, "nonce": "0123456789abcdef", "namespace_uid": "fixture-namespace"}
+handle = {**info, "uid": "fixture-job"}
+print(json.dumps({
+    "job": spark.run_manifest(info),
+    "purge": spark.run_manifest({**info, "phase": "purging"}),
+    "cluster": spark.owned_manifest((tool.DEPLOY / "test-cluster.yaml").read_text(), handle),
+    "secret": spark.owned_manifest(tool.superuser_secret(), handle),
+    "script": spark.owned_manifest(json.dumps({"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": tool.SCRIPT_CONFIGMAP}, "data": {"test-run.sh": "omg-test-script"}}), handle)
+}))
+`], { cwd: root, encoding: "utf8", timeout: 10_000 }));
+  const docs = Object.fromEntries(Object.entries(rendered).map(([name, text]) => [name, toData(parseStrict(text, `rendered-${name}`))]));
+  const { job: run, purge, cluster, secret, script } = docs;
+  for (const fence of [run, purge]) {
+    assert.equal(fence.spec.suspend, true);
+    assert.equal(fence.metadata.name, "omg-test");
+    assert.equal(JSON.parse(fence.metadata.annotations["omg-spark-run"]).namespace_uid, "fixture-namespace");
+    assert.deepEqual(violations(fence), []);
+  }
+  assert.deepEqual(run.metadata.finalizers, ["spark-test.bitop.dev/cleanup"]);
+  assert.equal(purge.metadata.finalizers, undefined, "namespace GC must never wait for a purge client finalizer");
+  assert.equal(purge.metadata.annotations["omg-spark-phase"], "purging");
+  for (const resource of [cluster, secret, script]) {
+    assert.ok(resource.metadata.name.endsWith("-0123456789abcdef"));
+    assert.deepEqual(resource.metadata.ownerReferences, [{ apiVersion: "batch/v1", kind: "Job", name: "omg-test", uid: "fixture-job" }]);
+  }
+  const pod = podOf(run);
+  assert.equal(pod.volumes.find(v => v.name === "cache").persistentVolumeClaim.claimName, "omg-test-cache");
+  assert.equal(pod.volumes.find(v => v.name === "pg").secret.secretName, secret.metadata.name);
+  assert.equal(pod.volumes.find(v => v.name === "scripts").configMap.name, script.metadata.name);
+  assert.equal(cluster.spec.superuserSecret.name, secret.metadata.name);
+  assert.equal(pod.containers[0].env.find(v => v.name === "OMG_DB_HOST").value, `${cluster.metadata.name}-rw`);
+  assert.equal(script.data["test-run.sh"], "omg-test-script", "script content is never rewritten to substitute metadata names");
 });
