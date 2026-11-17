@@ -6,6 +6,8 @@ mod stream_decode_tests;
 #[cfg(feature = "integration-tests")]
 #[path = "stream_error_tests.rs"]
 mod stream_error_tests;
+#[path = "stream_transport_tests.rs"]
+mod stream_transport_tests;
 use axum::{
     Router,
     body::{Body, Bytes},

@@ -3,14 +3,20 @@
 //! The contract these tests state, read from the code and from `execute`'s
 //! loop (the only caller):
 //!
-//! * `push` never panics. Its only error is `InvalidUpstream`: the parser has
-//!   no other class, and an upstream `error` object is never reflected.
+//! * `push` never panics. Its errors are the documented classes only: a frame
+//!   that is not an upstream failure event is `InvalidUpstream`; an `error` or
+//!   `response.failed` event is classified like the same error as an HTTP
+//!   response (`stream_error::classify` over `framing::status_error`:
+//!   `Busy`, `Timeout`, `Configuration`, `UpstreamRejected`,
+//!   `UpstreamUnavailable`, or `InvalidUpstream` for a numeric code that is no
+//!   error status). The class never depends on the message text, which is
+//!   never reflected.
 //! * Termination. A stream ends only at `response.completed` /
 //!   `response.incomplete`, and then `push` returns exactly `Finish`, `Usage`,
 //!   `Done` in that order. `execute` returns at the first `Done`, so a driver
 //!   sees at most one terminal and nothing after it. Frames running out before
-//!   a terminal is `framing::frames`' final `Err(InvalidUpstream)`, never a
-//!   success; the parser fabricates nothing for a truncated stream.
+//!   a terminal is `framing::frames`' final `Err(TRUNCATED)` (a transport
+//!   failure, `UpstreamUnavailable`), never a success; the parser fabricates nothing for a truncated stream.
 //!   `State` itself has no "terminated" flag: a second terminal pushed after
 //!   the first would re-emit (pinned by an ignored finding below; unreachable
 //!   through `execute`).
@@ -443,7 +449,24 @@ fn check_any(
     prop_assert_eq!(finish, count(|e| matches!(e, Ev::Done)));
     prop_assert!(!got.iter().any(|e| matches!(e, Ev::Block(_))));
     match outcome {
-        Outcome::Error(e) => prop_assert_eq!(*e, InferenceError::InvalidUpstream),
+        Outcome::Error(e) => {
+            if matches!(kind_of(&events[consumed - 1]), "error" | "response.failed") {
+                prop_assert!(
+                    matches!(
+                        e,
+                        InferenceError::Busy
+                            | InferenceError::Timeout
+                            | InferenceError::Configuration
+                            | InferenceError::UpstreamRejected
+                            | InferenceError::UpstreamUnavailable
+                            | InferenceError::InvalidUpstream
+                    ),
+                    "{e:?}"
+                );
+            } else {
+                prop_assert_eq!(*e, InferenceError::InvalidUpstream);
+            }
+        }
         Outcome::Eof => prop_assert_eq!(finish, 0, "a terminal without Done"),
         Outcome::Done => prop_assert_eq!(finish, 1),
     }
@@ -773,25 +796,60 @@ fn streamed_bytes_are_bounded_and_refused_not_truncated() {
     assert!(!got.iter().any(|e| matches!(e, Ev::Done | Ev::Finish(_))));
 }
 
-/// The stream state is reusable only up to the first terminal: it carries the
-/// error class unchanged for the upstream's own failure events.
+/// The upstream's failure events are classified like the same error as an
+/// HTTP response, by the documented code alone; the message text is never
+/// consulted or reflected. `response.cancelled` and `response.queued` are not
+/// failures this adapter accepts.
 #[test]
-fn upstream_failure_events_are_refused_with_the_one_class() {
-    for kind in [
-        "response.failed",
-        "error",
-        "response.cancelled",
-        "response.queued",
+fn upstream_failure_events_are_classified_by_their_code() {
+    use InferenceError as E;
+    let created = json!({"type": "response.created", "response": {"status": "in_progress"}});
+    for (code, class) in [
+        ("server_error", E::UpstreamUnavailable),
+        ("rate_limit_exceeded", E::Busy),
+        ("insufficient_quota", E::Busy),
+        ("invalid_prompt", E::UpstreamRejected),
+        ("invalid_image_url", E::UpstreamRejected),
+        ("invalid_api_key", E::Configuration),
+        ("model_not_found", E::UpstreamRejected),
+        // Not a documented name: unavailable, never a client fault.
+        ("vector_store_timeout", E::UpstreamUnavailable),
+        ("something_new", E::UpstreamUnavailable),
     ] {
+        for started in [true, false] {
+            let stream = if started {
+                vec![created.clone()]
+            } else {
+                vec![]
+            };
+            let failed = json!({"type": "response.failed", "response": {"status": "failed", "error": {"code": code, "message": "rate_limit_exceeded secret text"}}});
+            let error = json!({"type": "error", "code": code, "message": "invalid_prompt secret text", "param": null});
+            for event in [failed, error] {
+                let mut events = stream.clone();
+                events.push(event.clone());
+                let (got, outcome, _) = run(&events);
+                assert_eq!(outcome, Outcome::Error(class), "{event}");
+                assert!(!got.iter().any(|e| matches!(e, Ev::Done | Ev::Finish(_))));
+            }
+        }
+    }
+    // A failure with no readable code is an unavailable provider, not a success.
+    for event in [
+        json!({"type": "response.failed", "response": {"status": "failed", "error": null}}),
+        json!({"type": "response.failed", "response": {"status": "failed"}}),
+        json!({"type": "response.failed"}),
+        json!({"type": "error", "message": "secret text"}),
+        json!({"type": "error", "code": {"nested": true}}),
+    ] {
+        let (_, outcome, _) = run(std::slice::from_ref(&event));
+        assert_eq!(outcome, Outcome::Error(E::UpstreamUnavailable), "{event}");
+    }
+    for kind in ["response.cancelled", "response.queued"] {
         let (_, outcome, _) = run(&[
-            json!({"type": "response.created", "response": {"status": "in_progress"}}),
-            json!({"type": kind, "response": {"status": "failed", "error": {"message": "secret text"}}}),
+            created.clone(),
+            json!({"type": kind, "response": {"status": "failed", "error": {"code": "server_error"}}}),
         ]);
-        assert_eq!(
-            outcome,
-            Outcome::Error(InferenceError::InvalidUpstream),
-            "{kind}"
-        );
+        assert_eq!(outcome, Outcome::Error(E::InvalidUpstream), "{kind}");
     }
 }
 

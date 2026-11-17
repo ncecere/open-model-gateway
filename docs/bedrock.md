@@ -162,7 +162,7 @@ is not a rejection "before processing", so it never settles as a known zero
 | `modelStreamErrorException` | 424 | `upstream_unavailable` | `overloaded_error` | counts as a failure |
 | `modelTimeoutException` (not in the ConverseStream event list; named only by the header) | 408 | `timeout_error` | `api_error` | counts as a failure |
 | any other name, in any casing or form (including the HTTP-path names such as `ThrottlingException` or `AccessDeniedException`), and an empty name | | `upstream_unavailable` | `overloaded_error` | counts as a failure |
-| no `:exception-type` header, or a last one that is not a string (with several, the last decides, as in the SDK); a `:message-type` `error` frame; a corrupt frame; a modeled exception whose JSON payload has the wrong shape (`null`, an array, `{"message":5}`) | | `invalid_upstream_response` | `api_error` | no effect |
+| no `:exception-type` header, or a last one that is not a string (with several, the last decides, as in the SDK); a `:message-type` `error` frame; a modeled exception whose JSON payload has the wrong shape (`null`, an array, `{"message":5}`) | | `invalid_upstream_response` | `api_error` | no effect |
 
 An unknown failure is not evidence of a client fault or a configuration fault
 (those classes do not count against routing health, and a rejection could
@@ -184,6 +184,20 @@ never reads the payload. Unlike the stream after its first byte, a pre-stream
 HTTP failure may still fail over under the route's policy (`rate_limit_error`
 always; `upstream_unavailable` and overload only with
 `allow_ambiguous_failover`); an exception frame never does.
+
+### Transport failures inside a stream
+
+A stream that was already returned can also end without an exception frame (#622). Where the failure arises decides the class, for chat completions and Messages alike:
+
+| Failure | Class | Messages | Routing health |
+| --- | --- | --- | --- |
+| the connection resets or the body fails mid-stream | `upstream_unavailable` | `overloaded_error` | counts as a failure |
+| the body ends inside a frame, or at a frame boundary before `messageStop` and `metadata` (a truncated stream) | `upstream_unavailable` | `overloaded_error` | counts as a failure |
+| a frame the event-stream decoder cannot decode: a length no frame can have, a failed prelude or message CRC, malformed headers | `upstream_unavailable` | `overloaded_error` | counts as a failure |
+| the transport's own read (60 s) or total (300 s) timeout inside the body, or 60 s with no event | `timeout_error` | `api_error` | counts as a failure |
+| a frame that arrived whole and decodes but is wrong: the usage envelope guard (a `metadata` without a count), duplicate `:event-type` headers, an event whose JSON does not match its model, an unknown or out-of-order event, a frame over the 8 MiB wire limit | `invalid_upstream_response` | `api_error` | no effect |
+
+These are the same classes the same failure has before the stream (a connection failure is `upstream_unavailable`). What was delivered stays delivered, usage the stream did not report stays unknown, the reservation stays `unknown` with its hold, and nothing fails over. A client that disconnects is not a transport failure of the provider: the request is cancelled and routing health is untouched.
 
 A small reqwest-backed AWS HTTP connector enforces an **8 MiB cumulative wire-body
 limit before SDK deserialization**, including error bodies and streams. Normalized

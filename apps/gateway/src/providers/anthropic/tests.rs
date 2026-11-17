@@ -68,19 +68,53 @@ async fn messages_frontend_safe_errors_through_mock_upstream() {
     }
 }
 
+/// #614: an `error` event inside a stream is classified like the same error as
+/// an HTTP response, for every client protocol. The cross-adapter parity
+/// against real HTTP responses is `stream_class_tests`.
 #[test]
-fn non_messages_stream_errors_keep_legacy_adapter_behavior() {
-    let value =
-        json!({"type":"error","error":{"type":"overloaded_error","message":"provider diagnostic"}});
-    assert!(matches!(
-        State::default().push(value.clone()),
-        Err(InferenceError::InvalidUpstream)
-    ));
-    let mut state = State {
+fn in_stream_errors_are_classified_like_the_same_http_error() {
+    use InferenceError as E;
+    // (error type, chat or Responses client, Messages client)
+    for (kind, chat, messages) in [
+        ("overloaded_error", E::UpstreamUnavailable, E::Overloaded),
+        ("rate_limit_error", E::Busy, E::Busy),
+        ("api_error", E::UpstreamUnavailable, E::UpstreamUnavailable),
+        (
+            "invalid_request_error",
+            E::UpstreamRejected,
+            E::UpstreamRejected,
+        ),
+        ("authentication_error", E::Configuration, E::Configuration),
+        ("not_found_error", E::UpstreamRejected, E::UpstreamRejected),
+        (
+            "unheard_of_error",
+            E::UpstreamUnavailable,
+            E::UpstreamUnavailable,
+        ),
+    ] {
+        let value = json!({"type":"error","error":{"type":kind,"message":"provider diagnostic"}});
+        for (is_messages, expected) in [(false, chat), (true, messages)] {
+            let mut state = State {
+                messages: is_messages,
+                ..State::default()
+            };
+            assert_eq!(state.push(value.clone()).err(), Some(expected), "{kind}");
+        }
+    }
+    let too_long = json!({"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 9"}});
+    let mut messages = State {
         messages: true,
         ..State::default()
     };
-    assert!(matches!(state.push(value), Err(InferenceError::Overloaded)));
+    assert_eq!(
+        messages.push(too_long.clone()).err(),
+        Some(InferenceError::ContextLength)
+    );
+    // The refinement is the Messages response path's own; a chat client's is a rejection.
+    assert_eq!(
+        State::default().push(too_long).err(),
+        Some(InferenceError::UpstreamRejected)
+    );
 }
 
 #[test]

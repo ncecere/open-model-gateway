@@ -158,37 +158,91 @@ async fn messages_parallel_calls_and_results_preserve_openrouter_turns() {
     assert_eq!(mock.count(), 1);
 }
 
+/// #614: a named (string) code is classified like its numeric status, for every
+/// client protocol, in a body and in a stream frame: through this adapter's own
+/// status table.
 #[tokio::test]
-async fn non_messages_named_errors_keep_legacy_adapter_behavior() {
-    let value = json!({"error":{"code":"rate_limit_exceeded","message":"prompt is too long"}});
-    for messages in [false, true] {
-        let mock = Mock::json(value.clone()).await;
-        let mut request = chat(false);
-        if messages {
-            request.messages_options = Some(Box::default());
+async fn named_errors_are_classified_like_the_same_http_error() {
+    // (error object, chat client, Messages client)
+    let cases = [
+        (
+            json!({"code":"rate_limit_exceeded","message":"prompt is too long"}),
+            InferenceError::Busy,
+            InferenceError::Busy,
+        ),
+        (
+            json!({"code":"server_error"}),
+            InferenceError::UpstreamUnavailable,
+            InferenceError::UpstreamUnavailable,
+        ),
+        (
+            json!({"code":"invalid_prompt"}),
+            InferenceError::UpstreamRejected,
+            InferenceError::UpstreamRejected,
+        ),
+        (
+            json!({"code":"context_length_exceeded"}),
+            InferenceError::UpstreamRejected,
+            InferenceError::ContextLength,
+        ),
+        (
+            json!({"code":"invalid_api_key"}),
+            InferenceError::Configuration,
+            InferenceError::Configuration,
+        ),
+        // Numeric codes keep this provider's own meanings.
+        (
+            json!({"code":402}),
+            InferenceError::Configuration,
+            InferenceError::Configuration,
+        ),
+        (
+            json!({"code":403}),
+            InferenceError::UpstreamRejected,
+            InferenceError::UpstreamRejected,
+        ),
+        (
+            json!({"code":524}),
+            InferenceError::Timeout,
+            InferenceError::Timeout,
+        ),
+        // Unrecognised: an unavailable provider.
+        (
+            json!({"code":"brand_new"}),
+            InferenceError::UpstreamUnavailable,
+            InferenceError::UpstreamUnavailable,
+        ),
+    ];
+    for (error, chat_class, messages_class) in cases {
+        let value = json!({"error": error});
+        for (messages, expected) in [(false, chat_class), (true, messages_class)] {
+            let mock = Mock::json(value.clone()).await;
+            let mut request = chat(false);
+            if messages {
+                request.messages_options = Some(Box::default());
+            }
+            assert!(
+                matches!(mock.adapter().execute(&target("private"), request).await, Err(error) if error == expected),
+                "{value} messages={messages}"
+            );
+            let mock = Mock::sse(format!("data: {value}\n\n"), 1).await;
+            let mut request = chat(true);
+            if messages {
+                request.messages_options = Some(Box::default());
+            }
+            let ProviderOutput::Stream(mut stream) = mock
+                .adapter()
+                .execute(&target("private"), request)
+                .await
+                .unwrap()
+            else {
+                panic!("stream expected");
+            };
+            assert!(
+                matches!(stream.next().await, Some(Err(error)) if error == expected),
+                "{value} messages={messages}"
+            );
         }
-        let expected = if messages {
-            InferenceError::Busy
-        } else {
-            InferenceError::UpstreamUnavailable
-        };
-        assert!(
-            matches!(mock.adapter().execute(&target("private"), request).await, Err(error) if error == expected)
-        );
-        let mock = Mock::sse(format!("data: {value}\n\n"), 1).await;
-        let mut request = chat(true);
-        if messages {
-            request.messages_options = Some(Box::default());
-        }
-        let ProviderOutput::Stream(mut stream) = mock
-            .adapter()
-            .execute(&target("private"), request)
-            .await
-            .unwrap()
-        else {
-            panic!("stream expected");
-        };
-        assert!(matches!(stream.next().await, Some(Err(error)) if error == expected));
     }
 }
 
@@ -475,7 +529,7 @@ async fn stream_errors_eof_and_unknown_content_fail_without_success() {
     let finish_error = chunk(json!({"content":""}), Some("error"), None);
     for (body, expected) in [
         (error_frame, InferenceError::UpstreamUnavailable),
-        (truncated, InferenceError::InvalidUpstream),
+        (truncated, InferenceError::UpstreamUnavailable),
         (images, InferenceError::InvalidUpstream),
         (finish_error, InferenceError::InvalidUpstream),
     ] {

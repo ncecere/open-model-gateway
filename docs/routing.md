@@ -39,7 +39,9 @@ Ambiguous failover may duplicate upstream work or charges. It is not idempotent 
 
 ## Passive observations
 
-Validated completion resets failures and clears cooldown. Provider Busy, UpstreamUnavailable and provider-operation Timeout increment the deployment's failures; reaching its threshold opens/extends its configured cooldown. Invalid requests/output, unsupported options and local configuration/storage/accounting errors leave observations unchanged. Opening a stream is not success; terminal validated completion is required. Local cancellation/deadline inactivity is not a provider failure.
+Validated completion resets failures and clears cooldown. Provider Busy, Overloaded, UpstreamUnavailable and provider-operation Timeout increment the deployment's failures; reaching its threshold opens/extends its configured cooldown. Invalid requests/output, unsupported options and local configuration/storage/accounting errors leave observations unchanged. Opening a stream is not success; terminal validated completion is required. Local cancellation/deadline inactivity is not a provider failure.
+
+Failures inside a returned stream are observed too, by the class they have ([provider adapters](provider-adapters.md#failures-inside-a-returned-stream)): an error the provider reports inside the stream is classified like the same error as an HTTP response (an overload, rate limit or server error counts; a client-fault or configuration error does not), and a transport failure (a reset, a truncated stream, a corrupt frame) is `upstream_unavailable` and counts. A frame that arrived whole but is malformed is `invalid_upstream_response` and does not. A client that disconnects mid-stream is a cancellation, never a provider failure. No failover follows any of these: the response was already returned.
 
 PostgreSQL upsert/row locking prevents lost failure increments; counts saturate at signed-32 maximum. Concurrent completions are observed in database order, so an in-flight success can reset other recorded failures. Deployment thresholds are read at recording time.
 

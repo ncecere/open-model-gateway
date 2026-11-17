@@ -5,6 +5,17 @@ use serde_json::Value;
 pub(super) type Result<T> = std::result::Result<T, InferenceError>;
 pub(super) const BODY_LIMIT: usize = 4 * 1024 * 1024;
 const SSE_LIMIT: usize = 1024 * 1024;
+/// The class of a returned stream that ends before its protocol's terminal
+/// event (a clean EOF, with or without a partial frame behind it). That is a
+/// transport failure, like a reset or a body error (`transport`), and counts
+/// against routing health. A frame that arrived whole but does not parse or
+/// violates the protocol is `InvalidUpstream` instead (docs/provider-adapters.md,
+/// "Failures inside a returned stream").
+pub(super) const TRUNCATED: InferenceError = InferenceError::UpstreamUnavailable;
+/// The class of SSE bytes that are not valid UTF-8: the line cannot be decoded,
+/// which is corruption of the stream (a transport failure), not a
+/// well-formed frame with the wrong content.
+pub(super) const UNDECODABLE: InferenceError = InferenceError::UpstreamUnavailable;
 pub(crate) fn transport(error: reqwest::Error) -> InferenceError {
     if error.is_timeout() {
         InferenceError::Timeout
@@ -27,14 +38,20 @@ pub(super) fn status(status: reqwest::StatusCode) -> Result<()> {
     if status.is_success() {
         return Ok(());
     }
-    Err(match status.as_u16() {
+    Err(status_error(status.as_u16()))
+}
+/// The class of an HTTP error status. The one table behind [`status`] and
+/// behind the in-stream path ([`super::stream_error`]), so a provider error
+/// has the same class whether it arrives as a response or inside a stream.
+pub(super) fn status_error(code: u16) -> InferenceError {
+    match code {
         401 | 403 | 300..=399 => InferenceError::Configuration,
         429 => InferenceError::Busy,
         408 => InferenceError::Timeout,
         400..=499 => InferenceError::UpstreamRejected,
         500..=599 => InferenceError::UpstreamUnavailable,
         _ => InferenceError::InvalidUpstream,
-    })
+    }
 }
 pub(super) async fn body(response: reqwest::Response) -> Result<Value> {
     body_limit(response, BODY_LIMIT).await
@@ -64,7 +81,7 @@ pub(super) async fn anthropic_generation_status(
 ) -> Result<reqwest::Response> {
     generation_status_with(response, anthropic_error).await
 }
-type ErrorClassifier = fn(&Value) -> Option<InferenceError>;
+pub(super) type ErrorClassifier = fn(&Value) -> Option<InferenceError>;
 async fn generation_status_with(
     response: reqwest::Response,
     classify: ErrorClassifier,
@@ -73,19 +90,30 @@ async fn generation_status_with(
         return Ok(response);
     }
     let code = response.status().as_u16();
-    if code == 529 || code == 503 {
-        return Err(InferenceError::Overloaded);
+    let body = if matches!(code, 400 | 413 | 422) {
+        body_limit(response, 16 * 1024).await.ok()
+    } else {
+        None
+    };
+    Err(generation_error(code, body.as_ref(), classify))
+}
+/// The class of an HTTP error status for a Messages client's generation
+/// request: 503 and 529 are an overload, a validation status is refined by its
+/// error envelope (`classify`; a body that could not be read refines nothing),
+/// and every other status is [`status_error`]'s. Shared with the in-stream
+/// path, which supplies the status the error's name stands for.
+pub(super) fn generation_error(
+    code: u16,
+    body: Option<&Value>,
+    classify: ErrorClassifier,
+) -> InferenceError {
+    match code {
+        529 | 503 => InferenceError::Overloaded,
+        400 | 413 | 422 => body
+            .and_then(classify)
+            .unwrap_or(InferenceError::UpstreamRejected),
+        _ => status_error(code),
     }
-    if matches!(code, 400 | 413 | 422) {
-        if let Ok(value) = body_limit(response, 16 * 1024).await
-            && let Some(error) = classify(&value)
-        {
-            return Err(error);
-        }
-        return Err(InferenceError::UpstreamRejected);
-    }
-    status(response.status())?;
-    Err(InferenceError::InvalidUpstream)
 }
 /// Classify known error semantics, discarding all diagnostic text immediately.
 pub(super) fn classified_error(value: &Value) -> Option<InferenceError> {
@@ -162,7 +190,7 @@ impl Decoder {
             return Ok(None);
         }
         self.skip_lf = byte == b'\r';
-        let line = std::str::from_utf8(&self.line).map_err(|_| InferenceError::InvalidUpstream)?;
+        let line = std::str::from_utf8(&self.line).map_err(|_| UNDECODABLE)?;
         let line = if !self.started {
             line.strip_prefix('\u{feff}').unwrap_or(line)
         } else {
@@ -199,7 +227,7 @@ pub(super) fn frames(response: reqwest::Response) -> impl Stream<Item = Result<V
             }
         }
         // A protocol's explicit terminal event must cause the consumer to return first.
-        Err(InferenceError::InvalidUpstream)?;
+        Err(TRUNCATED)?;
     }
 }
 pub(super) fn string(value: &Value) -> Result<&str> {

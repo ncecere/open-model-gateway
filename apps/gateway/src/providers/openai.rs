@@ -348,19 +348,7 @@ fn transport_error(error: reqwest::Error) -> InferenceError {
 }
 
 fn check_status(status: StatusCode) -> Result<()> {
-    if status.is_success() {
-        return Ok(());
-    }
-    Err(match status.as_u16() {
-        401 | 403 => InferenceError::Configuration,
-        429 => InferenceError::Busy,
-        408 => InferenceError::Timeout,
-        400 | 422 => InferenceError::UpstreamRejected,
-        500..=599 => InferenceError::UpstreamUnavailable,
-        300..=399 => InferenceError::Configuration,
-        400..=499 => InferenceError::UpstreamRejected,
-        _ => InferenceError::InvalidUpstream,
-    })
+    super::framing::status(status)
 }
 
 pub(super) fn encode(model: &str, request: &ChatRequest) -> Value {
@@ -579,12 +567,19 @@ pub(super) fn decode_complete_protocol(
         })
     })
 }
+/// A provider `error` in a response body or a stream frame is classified as
+/// the same error is as an HTTP response (`super::stream_error`): the status
+/// its documented `code` or `type` stands for, then the response path's own
+/// table (`check_status`, which is `framing::status`), and for a Messages
+/// client `generation_error` as `generation_status` applies it.
 fn wire_error(value: &Value, messages: bool) -> InferenceError {
-    if messages {
-        super::framing::classified_error(value).unwrap_or(InferenceError::InvalidUpstream)
-    } else {
-        InferenceError::InvalidUpstream
-    }
+    super::stream_error::classify(&value["error"], |code| {
+        if messages {
+            super::framing::generation_error(code, Some(value), super::framing::classified_error)
+        } else {
+            super::framing::status_error(code)
+        }
+    })
 }
 fn decode_shape(value: &Value, profile: Option<&str>, messages: bool) -> Result<ChatResponse> {
     object(value)?;
@@ -801,7 +796,7 @@ impl SseDecoder {
             return Ok(None);
         }
         self.skip_lf = byte == b'\r';
-        let line = std::str::from_utf8(&self.line).map_err(|_| InferenceError::InvalidUpstream)?;
+        let line = std::str::from_utf8(&self.line).map_err(|_| super::framing::UNDECODABLE)?;
         let line = if self.first_line {
             line.strip_prefix('\u{feff}').unwrap_or(line)
         } else {
@@ -858,7 +853,7 @@ pub(super) fn decode_stream_profile(
             }
         }
         // A valid finish chunk is insufficient; only [DONE] proves completion.
-        Err(InferenceError::InvalidUpstream)?;
+        Err(super::framing::TRUNCATED)?;
     })
 }
 

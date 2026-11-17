@@ -76,12 +76,14 @@ impl HttpConnector for Connector {
                 let mut guard = super::wire::StreamGuard::default();
                 let mut complete = Vec::new();
                 while let Some(chunk) = stream.next().await {
-                    let chunk = chunk.map_err(|_| std::io::Error::other("Provider body failed"))?;
-                    if chunk.len() > WIRE_LIMIT - size { Err(std::io::Error::other("Provider body limit"))?; }
+                    let chunk = chunk.map_err(|e| super::wire::Failure::read(&e))?;
+                    if chunk.len() > WIRE_LIMIT - size { Err(super::wire::Failure::Invalid)?; }
                     size += chunk.len();
                     if !successful { yield http_body::Frame::data(chunk); }
                     else if event_stream {
-                        for frame in guard.push(&chunk)? { yield http_body::Frame::data(axum::body::Bytes::from(frame)); }
+                        let (frames, failure) = guard.push(&chunk);
+                        for frame in frames { yield http_body::Frame::data(axum::body::Bytes::from(frame)); }
+                        if let Some(failure) = failure { Err(failure)?; }
                     } else { complete.extend_from_slice(&chunk); }
                 }
                 if successful {
@@ -91,7 +93,7 @@ impl HttpConnector for Connector {
             };
             let body: std::pin::Pin<
                 Box<
-                    dyn futures_util::Stream<Item = std::result::Result<_, std::io::Error>>
+                    dyn futures_util::Stream<Item = std::result::Result<_, super::wire::Failure>>
                         + Send
                         + Sync,
                 >,
