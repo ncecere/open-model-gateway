@@ -13,7 +13,8 @@ postgres-tests = ["sqlx", "dep:tokio"]
 
 [dependencies]
 serde = { version = "=1.0.229", default-features = false, features = ["std"] }
-time = { version = "=0.3.55", default-features = false, features = ["std", "large-dates", "serde", "formatting", "parsing"] }
+# Browser SDK clocks need JavaScript Date; SystemTime is unavailable there.
+time = { version = "=0.3.55", default-features = false, features = ["std", "large-dates", "serde", "formatting", "parsing", "wasm-bindgen"] }
 
 sqlx = { version = "=0.8.6", optional = true, default-features = false, features = ["postgres", "time", "runtime-tokio"] }
 tokio = { version = "1", optional = true, features = ["macros", "rt"] }
