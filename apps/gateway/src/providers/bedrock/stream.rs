@@ -220,11 +220,12 @@ impl State {
     }
     pub(super) fn end(&self) -> Result<()> {
         // Bedrock has no SSE [DONE] frame. Its terminal sequence is messageStop,
-        // metadata, then clean HTTP/event-stream EOF. Never turn truncated EOF into success.
+        // metadata, then clean HTTP/event-stream EOF. Never turn truncated EOF into success:
+        // a body that ends before the terminal sequence is a transport failure.
         if self.started && self.stopped && self.metadata {
             Ok(())
         } else {
-            Err(InferenceError::InvalidUpstream)
+            Err(crate::providers::framing::TRANSPORT)
         }
     }
 }
@@ -236,20 +237,29 @@ impl State {
 /// `{"message": ...}` with no code, and neither it nor the message text is
 /// ever read for the class.
 ///
-/// A frame without a string `:exception-type` header is rejected by the SDK's
-/// header parsing before any exception exists, so it arrives as a response
-/// error, not a service error, like any transport, corrupt or
-/// `:message-type: error` frame: `InvalidUpstream`, failing closed.
+/// Everything else is not an exception frame, and the class follows where the
+/// failure arose:
+///
+/// - the transport: a body that failed (reset, read error), ended inside a
+///   frame, or carried a frame the event-stream decoder cannot decode (length,
+///   CRC, headers) is `UpstreamUnavailable`, like a connection failure before
+///   the stream; a transport timeout is `Timeout`. These are told apart by the
+///   body's own `wire::Failure`, which the SDK wraps in a dispatch failure, and
+///   by the raw message of a response error (`Invalid`: the SDK's decoder
+///   rejected the bytes);
+/// - the provider's protocol: a frame that decoded but means nothing to the
+///   SDK (no string `:exception-type`, a `:message-type` `error` frame, a
+///   modeled exception whose payload has the wrong shape, an event whose JSON
+///   does not match its model), or a frame whose content the gateway rejects
+///   (usage envelope, duplicate headers, the wire limit), is
+///   `InvalidUpstream`, failing closed.
 fn receive_error(
     error: &SdkError<aws::error::ConverseStreamOutputError, RawMessage>,
     messages: bool,
 ) -> InferenceError {
-    if super::transport::is_read_timeout(error) {
-        return InferenceError::Timeout;
-    }
     use aws::error::ConverseStreamOutputError as Exception;
     let name = match error.as_service_error() {
-        None => return InferenceError::InvalidUpstream,
+        None => return transport_class(error),
         Some(Exception::InternalServerException(_)) => "internalServerException",
         Some(Exception::ModelStreamErrorException(_)) => "modelStreamErrorException",
         Some(Exception::ValidationException(_)) => "validationException",
@@ -272,6 +282,32 @@ fn receive_error(
         },
     };
     exception_class(name, messages)
+}
+
+/// The class of a receive failure that is not an exception frame.
+fn transport_class(
+    error: &SdkError<aws::error::ConverseStreamOutputError, RawMessage>,
+) -> InferenceError {
+    match error {
+        SdkError::TimeoutError(_) => InferenceError::Timeout,
+        SdkError::DispatchFailure(_) => {
+            let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+            while let Some(cause) = source {
+                if let Some(failure) = cause.downcast_ref::<super::wire::Failure>() {
+                    return failure.class();
+                }
+                source = cause.source();
+            }
+            InferenceError::InvalidUpstream
+        }
+        // The SDK's decoder could not decode the bytes (`Invalid`), or the
+        // frame decoded and its content is wrong (`Decoded`).
+        SdkError::ResponseError(response) => match response.raw() {
+            RawMessage::Invalid(_) => InferenceError::UpstreamUnavailable,
+            _ => InferenceError::InvalidUpstream,
+        },
+        _ => InferenceError::InvalidUpstream,
+    }
 }
 
 /// The class of a ConverseStream exception name. Only the documented
@@ -323,3 +359,19 @@ pub(super) fn decode(
 #[cfg(test)]
 #[path = "stream_property_tests.rs"]
 mod property_tests;
+
+#[cfg(test)]
+mod receive_tests {
+    use super::*;
+    #[test]
+    fn sdk_timeout_and_invalid_raw_message_keep_transport_classes() {
+        let timeout = SdkError::timeout_error(std::io::Error::other("timeout"));
+        assert_eq!(transport_class(&timeout), InferenceError::Timeout);
+        let invalid =
+            SdkError::response_error(std::io::Error::other("decode"), RawMessage::invalid(None));
+        assert_eq!(
+            transport_class(&invalid),
+            InferenceError::UpstreamUnavailable
+        );
+    }
+}

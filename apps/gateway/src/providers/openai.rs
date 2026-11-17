@@ -348,19 +348,7 @@ fn transport_error(error: reqwest::Error) -> InferenceError {
 }
 
 fn check_status(status: StatusCode) -> Result<()> {
-    if status.is_success() {
-        return Ok(());
-    }
-    Err(match status.as_u16() {
-        401 | 403 => InferenceError::Configuration,
-        429 => InferenceError::Busy,
-        408 => InferenceError::Timeout,
-        400 | 422 => InferenceError::UpstreamRejected,
-        500..=599 => InferenceError::UpstreamUnavailable,
-        300..=399 => InferenceError::Configuration,
-        400..=499 => InferenceError::UpstreamRejected,
-        _ => InferenceError::InvalidUpstream,
-    })
+    super::framing::status(status)
 }
 
 pub(super) fn encode(model: &str, request: &ChatRequest) -> Value {
@@ -677,7 +665,7 @@ impl StreamState {
             serde_json::from_slice(data).map_err(|_| InferenceError::InvalidUpstream)?;
         object(&value)?;
         if !empty(&value["error"]) {
-            return Err(wire_error(&value, self.messages));
+            return Err(super::stream_error::openai_chat(&value, self.messages));
         }
         if self.model.is_none() {
             self.model = ReportedModel::from_json(&value["model"]);
@@ -858,7 +846,7 @@ pub(super) fn decode_stream_profile(
             }
         }
         // A valid finish chunk is insufficient; only [DONE] proves completion.
-        Err(InferenceError::InvalidUpstream)?;
+        Err(super::framing::TRANSPORT)?;
     })
 }
 

@@ -29,34 +29,6 @@ fn failure() -> ConnectorError {
         None,
     )
 }
-// This marker is created only when an active HTTP-body read expires. Provider
-// payloads and unrelated SDK/decoding errors cannot manufacture its class.
-#[derive(Debug)]
-struct ReadTimeout;
-impl std::fmt::Display for ReadTimeout {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Provider body timeout")
-    }
-}
-impl std::error::Error for ReadTimeout {}
-
-pub(super) fn is_read_timeout(mut error: &(dyn std::error::Error + 'static)) -> bool {
-    loop {
-        if error.is::<ReadTimeout>()
-            || error
-                .downcast_ref::<std::io::Error>()
-                .and_then(std::io::Error::get_ref)
-                .is_some_and(|inner| inner.is::<ReadTimeout>())
-        {
-            return true;
-        }
-        let Some(source) = error.source() else {
-            return false;
-        };
-        error = source;
-    }
-}
-
 impl HttpConnector for Connector {
     fn call(&self, request: HttpRequest) -> HttpConnectorFuture {
         let client = self.client.clone();
@@ -124,15 +96,17 @@ impl HttpConnector for Connector {
                     // including partial AWS frames buffered by the wire guard.
                     let next = if let Some(read) = streaming_read {
                         tokio::time::timeout(read, stream.next()).await
-                            .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, ReadTimeout))?
+                            .map_err(|_| super::wire::Failure::Timeout)?
                     } else { stream.next().await };
                     let Some(chunk) = next else { break; };
-                    let chunk = chunk.map_err(|_| std::io::Error::other("Provider body failed"))?;
-                    if chunk.len() > WIRE_LIMIT - size { Err(std::io::Error::other("Provider body limit"))?; }
+                    let chunk = chunk.map_err(|e| super::wire::Failure::read(&e))?;
+                    if chunk.len() > WIRE_LIMIT - size { Err(super::wire::Failure::Invalid)?; }
                     size += chunk.len();
                     if !successful { yield http_body::Frame::data(chunk); }
                     else if event_stream {
-                        for frame in guard.push(&chunk)? { yield http_body::Frame::data(axum::body::Bytes::from(frame)); }
+                        let (frames, failure) = guard.push(&chunk);
+                        for frame in frames { yield http_body::Frame::data(axum::body::Bytes::from(frame)); }
+                        if let Some(failure) = failure { Err(failure)?; }
                     } else { complete.extend_from_slice(&chunk); }
                 }
                 if successful {
@@ -142,7 +116,7 @@ impl HttpConnector for Connector {
             };
             let body: std::pin::Pin<
                 Box<
-                    dyn futures_util::Stream<Item = std::result::Result<_, std::io::Error>>
+                    dyn futures_util::Stream<Item = std::result::Result<_, super::wire::Failure>>
                         + Send
                         + Sync,
                 >,
@@ -203,4 +177,13 @@ pub(super) fn client(timeouts: Timeouts, streaming: bool) -> anyhow::Result<Shar
         streaming_read: streaming.then_some(timeouts.read),
     });
     Ok(http_client_fn(move |_, _| connector.clone()))
+}
+
+#[cfg(test)]
+pub(super) fn for_test(client: crate::egress::HttpClient) -> SharedHttpClient {
+    let connector = SharedHttpConnector::new(Connector {
+        client,
+        streaming_read: None,
+    });
+    http_client_fn(move |_, _| connector.clone())
 }

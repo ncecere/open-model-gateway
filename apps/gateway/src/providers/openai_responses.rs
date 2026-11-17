@@ -238,6 +238,14 @@ struct State {
     parts: std::collections::BTreeSet<u64>,
     closed_parts: std::collections::BTreeSet<u64>,
 }
+/// A provider error event is classified as the same error is as an HTTP
+/// response (`super::stream_error`): the status its documented code stands
+/// for, in `framing::status_error`, the table `status` applies to this
+/// adapter's responses. `response.incomplete` is not an error: it is a
+/// terminal event that finishes with `max_output_tokens` or `content_filter`.
+fn stream_error(error: &Value) -> InferenceError {
+    super::stream_error::classify(error, status_error)
+}
 impl State {
     fn push(&mut self, value: Value) -> Result<Vec<ChatEvent>> {
         let kind = string(&value["type"])?;
@@ -262,6 +270,11 @@ impl State {
             "response.completed" | "response.incomplete" if self.started => {
                 self.terminal(kind, &value)
             }
+            // `error` carries the code at the top level; `response.failed`
+            // carries it in the response's `error`. Neither needs a started
+            // response: a provider failure is reported whenever it happens.
+            "error" => Err(stream_error(&value)),
+            "response.failed" => Err(stream_error(&value["response"]["error"])),
             _ => Err(InferenceError::InvalidUpstream),
         }
     }

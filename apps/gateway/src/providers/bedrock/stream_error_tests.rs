@@ -553,3 +553,413 @@ async fn any_adapters_in_stream_rejection_on_a_free_price_stays_unknown(pool: Pg
     }
     assert!(problems.is_empty(), "{problems:#?}");
 }
+
+// ---- #622: failures of the transport inside a returned stream -----------------
+
+use crate::providers::stream_class_tests::{
+    Server as MockServer, Step, response, serve as serve_mock,
+};
+
+/// A gateway over one Bedrock deployment whose mock plays the current script.
+struct Scripted {
+    f: Fixture,
+    deployment: Uuid,
+    token: String,
+    base: String,
+    script: Arc<Mutex<Vec<Step>>>,
+    _servers: Vec<crate::inference::admission_validation_tests::Server>,
+    _mock: MockServer,
+}
+async fn scripted(pool: PgPool) -> Scripted {
+    let mut f = fixture(pool).await;
+    let token = issue_key(&mut f).await;
+    sqlx::query("UPDATE models SET supported_protocols=ARRAY['chat_completions','messages']")
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    let deployment = add_deployment(
+        &f,
+        "bedrock",
+        "aws:default",
+        Some("us-east-1"),
+        "anthropic.claude-test",
+        0,
+    )
+    .await;
+    let script = Arc::new(Mutex::new(Vec::<Step>::new()));
+    let shared = script.clone();
+    let app = Router::new().fallback(move || {
+        let steps = shared.lock().unwrap().clone();
+        async move { response(200, "application/vnd.amazon.eventstream", steps) }
+    });
+    let (upstream, mock) = serve_mock(app).await;
+    let mut registry = ProviderRegistry::default();
+    registry
+        .register(Arc::new(BedrockAdapter::for_test(&upstream)))
+        .unwrap();
+    let (base, server) = start_gateway(&f, registry).await;
+    Scripted {
+        f,
+        deployment,
+        token,
+        base,
+        script,
+        _servers: vec![server],
+        _mock: mock,
+    }
+}
+fn bedrock_frames() -> Vec<Vec<u8>> {
+    events(false)
+        .into_iter()
+        .map(|(kind, value)| frame(kind, "event", value))
+        .collect()
+}
+
+/// A reset, a body that ends inside a frame or before the terminal sequence,
+/// and a frame the event-stream decoder cannot decode end the 200 as
+/// `upstream_unavailable` (Messages: `overloaded_error`) and count against
+/// routing health; a frame that arrived whole with wrong content ends it as
+/// `invalid_upstream_response` (Messages: `api_error`) and does not. Content
+/// already delivered stays delivered, usage the stream did not report stays
+/// unknown, and the reservation stays `unknown` with its hold.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn transport_failures_end_the_stream_as_unavailable_and_count(pool: PgPool) {
+    let g = scripted(pool).await;
+    let f = bedrock_frames();
+    let mut corrupt = f.clone();
+    let last = corrupt[2].len() - 1;
+    corrupt[2][last] ^= 1;
+    let mut bad_usage = f.clone();
+    bad_usage[4] = frame(
+        "metadata",
+        "event",
+        json!({"usage":{"inputTokens":3,"outputTokens":5}}),
+    );
+    let half = f[2][..f[2].len() / 2].to_vec();
+    // (place, steps, chat code, Messages type, counts against health)
+    let cases: Vec<(&str, Vec<Step>, &str, &str, bool)> = vec![
+        (
+            "reset after content",
+            vec![Step::Bytes(f[..2].concat()), Step::Reset],
+            "upstream_unavailable",
+            "overloaded_error",
+            true,
+        ),
+        (
+            "reset inside a frame",
+            vec![
+                Step::Bytes([f[..2].concat(), half.clone()].concat()),
+                Step::Reset,
+            ],
+            "upstream_unavailable",
+            "overloaded_error",
+            true,
+        ),
+        (
+            "end inside a frame",
+            vec![Step::Bytes([f[..2].concat(), half].concat())],
+            "upstream_unavailable",
+            "overloaded_error",
+            true,
+        ),
+        (
+            "end before messageStop",
+            vec![Step::Bytes(f[..3].concat())],
+            "upstream_unavailable",
+            "overloaded_error",
+            true,
+        ),
+        (
+            "end before metadata",
+            vec![Step::Bytes(f[..4].concat())],
+            "upstream_unavailable",
+            "overloaded_error",
+            true,
+        ),
+        (
+            "a failed CRC",
+            vec![Step::Bytes(corrupt.concat())],
+            "upstream_unavailable",
+            "overloaded_error",
+            true,
+        ),
+        (
+            "a usage envelope with a missing count",
+            vec![Step::Bytes(bad_usage.concat())],
+            "invalid_upstream_response",
+            "api_error",
+            false,
+        ),
+    ];
+    let mut problems = Vec::new();
+    for (place, steps, chat_code, messages_type, health) in cases {
+        for messages in [false, true] {
+            sqlx::query("DELETE FROM deployment_health")
+                .execute(&g.f.store.pool)
+                .await
+                .unwrap();
+            *g.script.lock().unwrap() = steps.clone();
+            let (status, request, body) = stream(&g.base, &g.token, messages).await;
+            let error = last_event(&body);
+            let (told, want_told) = if messages {
+                (
+                    error["error"]["type"].as_str().unwrap().to_owned(),
+                    messages_type,
+                )
+            } else {
+                (
+                    error["error"]["code"].as_str().unwrap().to_owned(),
+                    chat_code,
+                )
+            };
+            let got = recorded(&g.f.store.pool, g.deployment, request).await;
+            let at = format!("{place} messages={messages}");
+            let want = Recorded {
+                state: "failed".into(),
+                error_code: Some(chat_code.into()),
+                input: None,
+                output: None,
+                reservation: "unknown".into(),
+                actual: None,
+                ledger: vec!["hold".into(), "unknown".into()],
+                health_failures: i64::from(health),
+            };
+            if status != 200 {
+                problems.push(format!("{at}: status {status}"));
+            }
+            if told != want_told {
+                problems.push(format!("{at}: client {told}, want {want_told}"));
+            }
+            if body.contains("[DONE]") || body.contains("message_stop") {
+                problems.push(format!("{at}: a finish was sent"));
+            }
+            if got != want {
+                problems.push(format!("{at}: recorded {got:?}, want {want:?}"));
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
+/// Three resets open the breaker (the next request is refused as cooling
+/// down); three whole frames with wrong content do not.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn the_breaker_opens_on_resets_and_not_on_invalid_frames(pool: PgPool) {
+    let g = scripted(pool).await;
+    let f = bedrock_frames();
+    let mut bad_usage = f.clone();
+    bad_usage[4] = frame(
+        "metadata",
+        "event",
+        json!({"usage":{"inputTokens":3,"outputTokens":5}}),
+    );
+    for (label, steps, opens) in [
+        (
+            "a reset",
+            vec![Step::Bytes(f[..2].concat()), Step::Reset],
+            true,
+        ),
+        (
+            "a truncated stream",
+            vec![Step::Bytes(f[..3].concat())],
+            true,
+        ),
+        (
+            "an invalid frame",
+            vec![Step::Bytes(bad_usage.concat())],
+            false,
+        ),
+    ] {
+        sqlx::query("DELETE FROM deployment_health")
+            .execute(&g.f.store.pool)
+            .await
+            .unwrap();
+        *g.script.lock().unwrap() = steps;
+        for _ in 0..3 {
+            let (status, _, body) = stream(&g.base, &g.token, false).await;
+            assert_eq!(status, 200, "{label}: {body}");
+        }
+        let (failures, open): (i32, bool) = sqlx::query_as(
+            "SELECT COALESCE(consecutive_failures,0), COALESCE(open_until>clock_timestamp(),false) FROM (SELECT 1) one LEFT JOIN deployment_health ON deployment_id=$1",
+        )
+        .bind(g.deployment)
+        .fetch_one(&g.f.store.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            (failures, open),
+            (if opens { 3 } else { 0 }, opens),
+            "{label}"
+        );
+        if opens {
+            let (status, _, body) = stream(&g.base, &g.token, false).await;
+            assert_ne!(status, 200, "{label}: {body}");
+            assert!(
+                body.contains("model_temporarily_unavailable"),
+                "{label}: {body}"
+            );
+        }
+    }
+}
+
+/// A client that goes away mid-stream cancels the attempt: no failure and no
+/// success is recorded against the route, whatever the provider was doing.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_client_that_goes_away_mid_stream_is_not_a_provider_failure(pool: PgPool) {
+    let g = scripted(pool).await;
+    let f = bedrock_frames();
+    *g.script.lock().unwrap() = vec![Step::Bytes(f[..2].concat()), Step::Hang];
+    for messages in [false, true] {
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let request = if messages {
+            client.post(format!("{}/v1/messages", g.base)).json(&json!({
+                "model":"company/smart","max_tokens":16,"stream":true,
+                "messages":[{"role":"user","content":"hi"}]
+            }))
+        } else {
+            client.post(format!("{}/v1/chat/completions", g.base)).json(&json!({
+                "model":"company/smart","stream":true,"messages":[{"role":"user","content":"hi"}]
+            }))
+        };
+        let mut response = request
+            .bearer_auth(&g.token)
+            .header("anthropic-version", "2023-06-01")
+            .send()
+            .await
+            .unwrap();
+        let id: Uuid = response.headers()["x-request-id"]
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), response.chunk()).await;
+        drop(response);
+        let mut state = String::new();
+        for _ in 0..100 {
+            state = sqlx::query_scalar(
+                "SELECT state FROM inference_executions WHERE root_request_id=$1",
+            )
+            .bind(id)
+            .fetch_one(&g.f.store.pool)
+            .await
+            .unwrap();
+            if state != "started" {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert_eq!(state, "cancelled", "messages={messages}");
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let rows: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM deployment_health WHERE deployment_id=$1")
+                .bind(g.deployment)
+                .fetch_one(&g.f.store.pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            rows, 0,
+            "messages={messages}: a cancelled attempt left a health observation"
+        );
+    }
+}
+
+/// A reset or truncation is never failed over either, however permissive the
+/// route's policy.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_stream_that_breaks_in_transport_is_never_failed_over(pool: PgPool) {
+    let mut f = fixture(pool).await;
+    let token = issue_key(&mut f).await;
+    sqlx::query("UPDATE models SET supported_protocols=ARRAY['chat_completions','messages']")
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    let mut deployments = Vec::new();
+    for (order, model) in [(0, "anthropic.first"), (1, "anthropic.second")] {
+        deployments.push(
+            add_deployment(
+                &f,
+                "bedrock",
+                "aws:default",
+                Some("us-east-1"),
+                model,
+                order,
+            )
+            .await,
+        );
+    }
+    sqlx::query("INSERT INTO routing_policies(model_id,max_attempts,allow_ambiguous_failover) VALUES($1,2,true)")
+        .bind(f.model)
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    for (d, priority) in deployments.iter().zip([0, 1]) {
+        sqlx::query(
+            "INSERT INTO deployment_routing(deployment_id,priority,residency) VALUES($1,$2,'us')",
+        )
+        .bind(d)
+        .bind(priority)
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    }
+    let frames = bedrock_frames();
+    for (label, broken) in [
+        (
+            "a reset",
+            vec![Step::Bytes(frames[..2].concat()), Step::Reset],
+        ),
+        (
+            "a truncated stream",
+            vec![Step::Bytes(frames[..3].concat())],
+        ),
+    ] {
+        for messages in [false, true] {
+            sqlx::query("DELETE FROM deployment_health")
+                .execute(&f.store.pool)
+                .await
+                .unwrap();
+            let paths = Arc::new(Mutex::new(Vec::<String>::new()));
+            let (seen, broken, good) = (paths.clone(), broken.clone(), frames.concat());
+            let app = Router::new().fallback(move |uri: Uri| {
+                let (seen, broken, good) = (seen.clone(), broken.clone(), good.clone());
+                async move {
+                    seen.lock().unwrap().push(uri.path().to_owned());
+                    if uri.path().contains("anthropic.first") {
+                        response(200, "application/vnd.amazon.eventstream", broken)
+                    } else {
+                        response(
+                            200,
+                            "application/vnd.amazon.eventstream",
+                            vec![Step::Bytes(good)],
+                        )
+                    }
+                }
+            });
+            let (upstream, _upstream) = serve(app).await;
+            let mut registry = ProviderRegistry::default();
+            registry
+                .register(Arc::new(BedrockAdapter::for_test(&upstream)))
+                .unwrap();
+            let (base, _gateway) = start_gateway(&f, registry).await;
+            let before: i64 = sqlx::query_scalar("SELECT count(*) FROM inference_executions")
+                .fetch_one(&f.store.pool)
+                .await
+                .unwrap();
+            let (status, _, body) = stream(&base, &token, messages).await;
+            let attempts: i64 = sqlx::query_scalar("SELECT count(*) FROM inference_executions")
+                .fetch_one(&f.store.pool)
+                .await
+                .unwrap();
+            let paths = paths.lock().unwrap().clone();
+            let at = format!("{label} messages={messages}");
+            assert_eq!(status, 200, "{at}: {body}");
+            assert_eq!(paths.len(), 1, "{at}: {paths:?}");
+            assert!(paths[0].contains("anthropic.first"), "{at}: {paths:?}");
+            assert_eq!(attempts - before, 1, "{at}");
+            assert!(
+                !body.contains("[DONE]") && !body.contains("message_stop"),
+                "{at}: {body}"
+            );
+        }
+    }
+}
