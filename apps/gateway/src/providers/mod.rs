@@ -32,6 +32,11 @@ pub mod openai;
 pub mod openai_responses;
 pub mod openrouter;
 pub mod secrets;
+#[cfg(all(test, feature = "integration-tests"))]
+mod stream_class_e2e_tests;
+#[cfg(test)]
+pub(crate) mod stream_class_tests;
+mod stream_error;
 pub(crate) mod text_workloads;
 
 #[async_trait]

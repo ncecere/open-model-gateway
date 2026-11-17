@@ -156,7 +156,56 @@ A served model is 1–256 bytes of printable, non-space ASCII. Anything else (ab
 
 Generation uses text/tool typed contracts, not arbitrary provider JSON. Unknown request fields/options fail rather than disappear. Upstream refusal/reasoning/audio content outside the subset is rejected. Adapter support never guarantees every upstream model accepts the request.
 
-Streams contain deltas, one Finish, optional cumulative Usage and one terminal Done; EOF/duplicates/malformed frames fail. Usage observations are snapshots, not additive. Chat emits `[DONE]` only on success; midstream sanitized errors close without success. A Bedrock exception frame is classified by its `:exception-type` ([Bedrock](bedrock.md#exception-frames)). Responses/Messages frontend streaming behavior is documented in the matrix. Dropping execution/stream owns cancellation: no detached network producer or hidden adapter retry.
+Streams contain deltas, one Finish, optional cumulative Usage and one terminal Done; EOF/duplicates/malformed frames fail. Usage observations are snapshots, not additive. Chat emits `[DONE]` only on success; midstream sanitized errors close without success. How a failure inside a returned stream is classified is [below](#failures-inside-a-returned-stream). Responses/Messages frontend streaming behavior is documented in the matrix. Dropping execution/stream owns cancellation: no detached network producer or hidden adapter retry.
+
+### Failures inside a returned stream
+
+Once a stream is returned the response is a `200` whatever happens next (#486, #614, #622). It ends in one terminal error event, never a success marker; usage the provider did not report stays unknown and the reservation keeps its hold (on a free price too: a rejection inside a returned stream is not a rejection before processing, so it never settles as a known zero); nothing is retried and nothing fails over. What the failure decides is its **class**, which sets the terminal error each client protocol shows ([matrix](protocol-matrix.md#errors-inside-a-stream)), the recorded execution error code, and the routing-health observation: `rate_limit_error`, `overloaded_error`, `upstream_unavailable` and `timeout_error` count against [routing health](routing.md#passive-observations); `upstream_rejected`, `context_length_exceeded`, `provider_configuration_error` and `invalid_upstream_response` do not.
+
+**A provider error event is classified like the same error as an HTTP response**, for every client protocol. The one rule lives in `providers/stream_error.rs`, and the stream path and the response path share their status tables so they cannot drift (`stream_class_tests` compares them, for every name, against real HTTP responses):
+
+1. The error's documented name (`code`, else `type`; null, empty or unrecognised string codes fall back to a documented `type`) stands for an HTTP status; a numeric `code` or three-ASCII-digit string is that status (vLLM, llama.cpp and OpenRouter send it so).
+2. The adapter's own HTTP table classifies that status: `framing::status_error` (also behind `framing::status`) for Anthropic, OpenAI chat and Responses and the local profiles, OpenRouter's `status_error` for OpenRouter. For a Messages client the adapter's Messages response path applies its refinements too (`framing::generation_error`): 503 and 529 are `Overloaded`; for 400, 413 and 422 the error envelope refines (`context_length_exceeded`, `prompt_too_long` and `too_many_tokens`, and for Anthropic `invalid_request_error` with the documented `prompt is too long` prefix, are `ContextLength`), otherwise `UpstreamRejected`. OpenRouter's Messages path applies the refinement for those three statuses only, so its 529 stays `UpstreamUnavailable`.
+3. The message text is never read, except for that one Anthropic prefix. A name that is not documented, a name in another casing, or an error with no readable name is **`UpstreamUnavailable`**: an unknown failure is evidence neither of a client fault or a configuration fault (those classes do not count against routing health) nor of a safe capacity condition. It is never a success. A representable nonnegative integer `code` that is not an error status is `InvalidUpstream`. A negative, fractional, over-65535 or non-null non-number/non-string code is `UpstreamUnavailable`, without falling back to `type`. Unrecognised strings fall back to a documented `type`, then `UpstreamUnavailable`.
+
+| Name (`code` or `type`) | HTTP status | Chat and Responses clients | Messages clients | Routing health |
+| --- | --- | --- | --- | --- |
+| `rate_limit_error`, `rate_limit_exceeded`, `insufficient_quota` | 429 | `Busy` | `Busy` | counts |
+| `api_error`, `server_error` | 500 | `UpstreamUnavailable` | `UpstreamUnavailable` | counts |
+| `timeout_error` | 504 | `UpstreamUnavailable` | `UpstreamUnavailable` | counts |
+| `overloaded_error`, `overloaded` | 529 | `UpstreamUnavailable` | `Overloaded` (OpenRouter: `UpstreamUnavailable`) | counts |
+| `invalid_request_error`, `invalid_prompt`, the `invalid_image*` and other image codes | 400 | `UpstreamRejected` | `UpstreamRejected` | no effect |
+| `context_length_exceeded`, `prompt_too_long`, `too_many_tokens` | 400 | `UpstreamRejected` | `ContextLength` | no effect |
+| `request_too_large` | 413 | `UpstreamRejected` | `UpstreamRejected` | no effect |
+| `not_found_error`, `model_not_found` | 404 | `UpstreamRejected` | `UpstreamRejected` | no effect |
+| `billing_error` | 402 | `UpstreamRejected` (OpenRouter: `Configuration`) | same | no effect |
+| `authentication_error`, `invalid_api_key` | 401 | `Configuration` | `Configuration` | no effect |
+| `permission_error` | 403 | `Configuration` (OpenRouter: `UpstreamRejected`) | same | no effect |
+| a numeric `code` | itself | the adapter's status table | with the Messages refinements | per class |
+| any other name, or none | none | `UpstreamUnavailable` | `UpstreamUnavailable` | counts |
+
+Where each wire shape is read and where its HTTP equivalent is defined:
+
+| Adapter | In-stream error | Read from | HTTP equivalent (defined in) |
+| --- | --- | --- | --- |
+| Anthropic | `event: error`, `{"type":"error","error":{"type",...}}` | `error.type` | chat and Responses clients: `framing::status`; Messages clients: `anthropic_generation_status` (`framing::generation_error` with `anthropic_error`) |
+| OpenAI chat, local profiles | an SSE frame `{"error":{...}}` | `error.code` (string or number), else `error.type` | `check_status` (= `framing::status`); Messages clients: `framing::generation_status` |
+| OpenAI Responses | the `error` event (top-level `code`) and `response.failed` (`response.error.code`) | `code` | `framing::status` (the only HTTP table this transport has). `response.incomplete` is not an error: it is a terminal event that finishes as `length` or `content_filter`, unchanged. A `response.completed` that carries an `error` stays `invalid_upstream_response` |
+| OpenRouter | an SSE frame `{"error":{"code":...}}` | numeric `code`, else the name | OpenRouter's `status_error`; Messages clients: `generation_status` for 400, 413 and 422 only |
+| Bedrock | an exception frame | the `:exception-type` header ([Bedrock](bedrock.md#exception-frames)) | `service_error` / `sdk_messages_error` |
+
+**A transport failure inside a returned stream is `upstream_unavailable`** and counts against routing health, as a connection failure before the stream does. A frame that arrived whole and decodes at the transport layer but has the wrong shape or violates the protocol stays `invalid_upstream_response`. EOF before a terminal frame is truncation; complete malformed SSE lines (including invalid UTF-8) remain invalid responses. Bedrock event-stream decoding failures have the framing effects listed below.
+
+| Adapter | Transport failure: `upstream_unavailable` | Protocol violation: `invalid_upstream_response` |
+| --- | --- | --- |
+| Anthropic, OpenAI chat, Responses, OpenRouter, local profiles (SSE) | a body error (reset, bad chunked or length framing, cut TLS: `framing::transport`); the body ending before the protocol's terminal frame, with or without a partial frame behind it (`framing::TRANSPORT`: Anthropic `message_stop`, chat `[DONE]`, Responses `response.completed`/`response.incomplete`) | a complete SSE line that is not valid UTF-8; a frame whose data is not JSON; JSON of the wrong shape; an event not allowed in that state; a second terminal; `[DONE]` before a finish; a frame over the 1 MiB bound |
+| Bedrock (event stream) | a body error (`wire::Failure::Body`); the body ending inside a frame (`Truncated`) or before `messageStop` and `metadata` (`stream::State::end`); a prelude length no frame can have, a failed CRC or malformed headers (`Corrupt`); the SDK decoder rejecting the bytes (`RawMessage::Invalid`) | a frame that decodes but means nothing to the SDK (no string `:exception-type`, a `:message-type` `error` frame, a payload that does not match its model), the gateway's usage-envelope guard, duplicate `:event-type` headers, an unknown or out-of-order event, a frame over the 8 MiB wire limit |
+
+SSE body resets were already `upstream_unavailable`; the new SSE transport behavior is EOF before the terminal event. OpenAI-compatible local servers that omit `[DONE]` already failed validation but now count against health: three consecutive failures open the default breaker. Bedrock body resets, truncation and corrupt event framing now count against health too. Provider-reported in-stream 500 errors count even if a local server produced them because of model output (for example a malformed tool call). Gateway-side network blips that reset streams also count; this is passive observation, not attribution of fault.
+
+Scope limit for the SSE adapters: an HTTP 200 `application/json` error body returned to a **streamed** request is refused as `invalid_upstream_response` before a stream is returned; this classifier requires the provider's streaming media type and an error event. Non-stream error-body handling is unchanged and remains provider/endpoint dependent; proposed consistency work is tracked in [#665](https://github.com/ncecere/open-model-gateway/issues/665).
+
+Bedrock's 60 s active HTTP-body read timeout and SDK `TimeoutError` are `timeout_error`. Ready bytes win when a reader resumes, and each chunk resets the read budget before AWS frame assembly. There is no whole-event receive timer or fixed total HTTP-body cap for ConverseStream; its lifetime belongs to the engine watchdog. The engine request deadline and client disconnect cancel the underlying attempt without a provider-health observation. Non-stream Converse retains its read and total limits. See [Bedrock transport bounds](bedrock.md#transport-failures-inside-a-stream).
 
 Inbound HTTP bodies are 2 MiB. Provider complete bodies are 4 MiB; SSE frames 1 MiB; Chat supports at most 128 tool-call indices. Embeddings allow 128 strings, 1 MiB aggregate input content, dimensions at most 16384, finite uniform vectors and a 4 MiB response. OpenAI-wire vectors require complete unique indices; native Ollama arrays preserve batch order.
 

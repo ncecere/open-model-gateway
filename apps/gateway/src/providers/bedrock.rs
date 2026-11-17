@@ -74,35 +74,21 @@ impl BedrockAdapter {
     }
 
     #[cfg(test)]
+    fn for_test_transport(
+        base: &str,
+        http: aws_smithy_runtime_api::client::http::SharedHttpClient,
+    ) -> Self {
+        Self::for_test_clients(base, transport::Timeouts::default(), http.clone(), http)
+    }
+
+    #[cfg(test)]
     fn for_test_with_timeouts(base: &str, timeouts: transport::Timeouts) -> Self {
-        let mut adapter = Self::new().unwrap();
-        adapter.timeouts = timeouts;
-        adapter.http = transport::client(timeouts, false).unwrap();
-        adapter.streaming_http = transport::client(timeouts, true).unwrap();
-        let config = aws_sdk_bedrockruntime::Config::builder()
-            .behavior_version(BehaviorVersion::v2026_01_12())
-            .region(Region::new("us-east-1"))
-            .credentials_provider(aws_sdk_bedrockruntime::config::Credentials::new(
-                "AKIDLOCALTEST",
-                "local-not-a-secret",
-                Some("local-session-token".into()),
-                None,
-                "local-test",
-            ))
-            .endpoint_url(base)
-            .http_client(adapter.http.clone())
-            .timeout_config(adapter.operation_timeouts())
-            .stalled_stream_protection(
-                aws_sdk_bedrockruntime::config::StalledStreamProtectionConfig::enabled()
-                    .grace_period(timeouts.read.min(Duration::from_secs(5)))
-                    .build(),
-            )
-            .retry_config(RetryConfig::standard().with_max_attempts(1))
-            .build();
-        Self {
-            test_client: Some(Client::from_conf(config)),
-            ..adapter
-        }
+        Self::for_test_clients(
+            base,
+            timeouts,
+            transport::client(timeouts, false).unwrap(),
+            transport::client(timeouts, true).unwrap(),
+        )
     }
 
     async fn client(&self, plan: &auth::Plan) -> Client {
