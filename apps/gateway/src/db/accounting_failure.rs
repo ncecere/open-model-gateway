@@ -29,7 +29,8 @@ pub(crate) enum Stage {
     /// The reads before admission: the eligible deployments and the routing
     /// plan (connection, `BEGIN` and statements alike).
     RouteLookup,
-    /// The three-second deadline of a settlement the request waited for.
+    /// The three-second deadline of a settlement write that has started,
+    /// whether or not the request is still waiting for it.
     ExplicitSettlement,
     /// The three-second deadline of the detached settlement of a cancelled
     /// request (its client is gone; no response carries the failure).
