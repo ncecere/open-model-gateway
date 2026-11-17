@@ -149,9 +149,9 @@ version = "0.1"
 version = "1.0"
 
 [dependencies.serde_with]
-version = "3"
+version = "=3.24.0"
 default-features = false
-features = ["std", "macros"]
+features = ["macros"]
 
 [dependencies.sha2]
 version = "0.10.6"
@@ -171,10 +171,10 @@ features = ["serde"]
 version = "1.0"
 
 [dev-dependencies.color-backtrace]
-version = "0.5"
+version = "=0.7.4"
 
 [dev-dependencies.env_logger]
-version = "0.9"
+version = "=0.11.11"
 
 [dev-dependencies.pretty_assertions]
 version = "1.0"

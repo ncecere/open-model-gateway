@@ -13,7 +13,7 @@ use http::method::Method;
 use http::status::StatusCode;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, skip_serializing_none, VecSkipError};
+use serde_with::skip_serializing_none;
 use thiserror::Error;
 
 use std::fmt::Debug;
@@ -36,7 +36,6 @@ impl AdditionalProviderMetadata for EmptyAdditionalProviderMetadata {}
 
 /// Provider metadata returned by [OpenID Connect Discovery](
 /// https://openid.net/specs/openid-connect-discovery-1_0.html#ProviderMetadata).
-#[serde_as]
 #[skip_serializing_none]
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[allow(clippy::type_complexity)]
@@ -76,13 +75,13 @@ where
     #[serde(bound(deserialize = "S: SubjectIdentifierType"))]
     subject_types_supported: Vec<S>,
     #[serde(bound(deserialize = "K: JsonWebKey"))]
-    #[serde_as(as = "VecSkipError<_>")]
+    #[serde(deserialize_with = "crate::helpers::deserialize_vec_skip_error")]
     id_token_signing_alg_values_supported: Vec<K::SigningAlgorithm>,
     #[serde(
         bound(deserialize = "JK: JweKeyManagementAlgorithm"),
         default = "Option::default"
     )]
-    #[serde_as(as = "Option<VecSkipError<_>>")]
+    #[serde(deserialize_with = "crate::helpers::deserialize_optional_vec_skip_error")]
     id_token_encryption_alg_values_supported: Option<Vec<JK>>,
     #[serde(
         bound(
@@ -90,16 +89,16 @@ where
         ),
         default = "Option::default"
     )]
-    #[serde_as(as = "Option<VecSkipError<_>>")]
+    #[serde(deserialize_with = "crate::helpers::deserialize_optional_vec_skip_error")]
     id_token_encryption_enc_values_supported: Option<Vec<JE>>,
     #[serde(bound(deserialize = "K: JsonWebKey"), default = "Option::default")]
-    #[serde_as(as = "Option<VecSkipError<_>>")]
+    #[serde(deserialize_with = "crate::helpers::deserialize_optional_vec_skip_error")]
     userinfo_signing_alg_values_supported: Option<Vec<K::SigningAlgorithm>>,
     #[serde(
         bound(deserialize = "JK: JweKeyManagementAlgorithm"),
         default = "Option::default"
     )]
-    #[serde_as(as = "Option<VecSkipError<_>>")]
+    #[serde(deserialize_with = "crate::helpers::deserialize_optional_vec_skip_error")]
     userinfo_encryption_alg_values_supported: Option<Vec<JK>>,
     #[serde(
         bound(
@@ -107,16 +106,16 @@ where
         ),
         default = "Option::default"
     )]
-    #[serde_as(as = "Option<VecSkipError<_>>")]
+    #[serde(deserialize_with = "crate::helpers::deserialize_optional_vec_skip_error")]
     userinfo_encryption_enc_values_supported: Option<Vec<JE>>,
     #[serde(bound(deserialize = "K: JsonWebKey"), default = "Option::default")]
-    #[serde_as(as = "Option<VecSkipError<_>>")]
+    #[serde(deserialize_with = "crate::helpers::deserialize_optional_vec_skip_error")]
     request_object_signing_alg_values_supported: Option<Vec<K::SigningAlgorithm>>,
     #[serde(
         bound(deserialize = "JK: JweKeyManagementAlgorithm"),
         default = "Option::default"
     )]
-    #[serde_as(as = "Option<VecSkipError<_>>")]
+    #[serde(deserialize_with = "crate::helpers::deserialize_optional_vec_skip_error")]
     request_object_encryption_alg_values_supported: Option<Vec<JK>>,
     #[serde(
         bound(
@@ -124,12 +123,12 @@ where
         ),
         default = "Option::default"
     )]
-    #[serde_as(as = "Option<VecSkipError<_>>")]
+    #[serde(deserialize_with = "crate::helpers::deserialize_optional_vec_skip_error")]
     request_object_encryption_enc_values_supported: Option<Vec<JE>>,
     #[serde(bound(deserialize = "CA: ClientAuthMethod"))]
     token_endpoint_auth_methods_supported: Option<Vec<CA>>,
     #[serde(bound(deserialize = "K: JsonWebKey"), default = "Option::default")]
-    #[serde_as(as = "Option<VecSkipError<_>>")]
+    #[serde(deserialize_with = "crate::helpers::deserialize_optional_vec_skip_error")]
     token_endpoint_auth_signing_alg_values_supported: Option<Vec<K::SigningAlgorithm>>,
     #[serde(bound(deserialize = "AD: AuthDisplay"))]
     display_values_supported: Option<Vec<AD>>,

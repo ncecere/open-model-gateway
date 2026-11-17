@@ -1142,3 +1142,49 @@ fn test_hash_bytes_rsa() {
         BASE64_STANDARD.encode(hash)
     );
 }
+
+#[test]
+fn serde_strategy_jwks_sequence_wire_and_refusal_contracts() {
+    let valid = r#"{"kty":"RSA","kid":"keep","n":"AQ","e":"AQAB"}"#;
+    let duplicate_field = r#"{"kty":"RSA","kty":"RSA","n":"AQ","e":"AQAB"}"#;
+    let wire = format!(
+        r#"{{"keys":[{valid},null,true,17,[],{{}},{{"kty":"UNKNOWN"}},{{"kty":"RSA","n":"!"}},{duplicate_field},{valid}]}}"#
+    );
+    let keys: CoreJsonWebKeySet = serde_json::from_str(&wire).unwrap();
+    assert_eq!(keys.keys().len(), 3);
+    assert_eq!(keys.keys()[0], keys.keys()[2]);
+    // The existing JWK parser discards malformed optional components, but original
+    // signature verification must still refuse the resulting incomplete key.
+    assert!(keys.keys()[1]
+        .verify_signature(
+            &CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
+            b"message",
+            b"signature"
+        )
+        .is_err());
+    assert_eq!(
+        serde_json::to_value(&keys).unwrap(),
+        serde_json::json!({"keys":[serde_json::from_str::<serde_json::Value>(valid).unwrap(), {"kty":"RSA"}, serde_json::from_str::<serde_json::Value>(valid).unwrap()]})
+    );
+    for invalid in [
+        r#"{}"#,
+        r#"{"keys":null}"#,
+        r#"{"keys":{}}"#,
+        r#"{"keys":"[]"}"#,
+        r#"{"keys":false}"#,
+        r#"{"keys":1}"#,
+        r#"{"keys":[],"keys":[]}"#,
+        r#"{"keys":[{"kty":"RSA"},]}"#,
+        r#"{"keys":["unterminated]}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<CoreJsonWebKeySet>(invalid).is_err(),
+            "{invalid}"
+        );
+    }
+    let empty: CoreJsonWebKeySet = serde_json::from_str(r#"{"keys":[null,{}]}"#).unwrap();
+    assert!(empty.keys().is_empty());
+    assert!(empty
+        .filter_keys(None, &CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256)
+        .is_empty());
+}

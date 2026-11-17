@@ -1158,3 +1158,105 @@ fn test_unsupported_enum_values() {
         serde_json::from_str(&serialized_json).unwrap();
     assert_eq!(provider_metadata, redeserialized_metadata);
 }
+
+#[test]
+fn serde_strategy_discovery_sequence_wire_and_refusal_contracts() {
+    use serde_json::json;
+    let minimal = json!({
+        "issuer": "https://issuer.example", "authorization_endpoint": "https://issuer.example/auth",
+        "jwks_uri": "https://issuer.example/keys", "response_types_supported": ["code"],
+        "subject_types_supported": ["public"], "id_token_signing_alg_values_supported": ["RS256"]
+    });
+    for (field, valid, required) in [
+        ("id_token_signing_alg_values_supported", "RS256", true),
+        ("id_token_encryption_alg_values_supported", "RSA1_5", false),
+        (
+            "id_token_encryption_enc_values_supported",
+            "A128CBC-HS256",
+            false,
+        ),
+        ("userinfo_signing_alg_values_supported", "RS256", false),
+        ("userinfo_encryption_alg_values_supported", "RSA1_5", false),
+        (
+            "userinfo_encryption_enc_values_supported",
+            "A128CBC-HS256",
+            false,
+        ),
+        (
+            "request_object_signing_alg_values_supported",
+            "RS256",
+            false,
+        ),
+        (
+            "request_object_encryption_alg_values_supported",
+            "RSA1_5",
+            false,
+        ),
+        (
+            "request_object_encryption_enc_values_supported",
+            "A128CBC-HS256",
+            false,
+        ),
+        (
+            "token_endpoint_auth_signing_alg_values_supported",
+            "RS256",
+            false,
+        ),
+    ] {
+        for (input, expected) in [
+            (
+                json!([valid, null, true, {}, [], 17, "UNKNOWN", valid]),
+                json!([valid, valid]),
+            ),
+            (json!([]), json!([])),
+            (json!([false, {}, [valid], "UNKNOWN"]), json!([])),
+        ] {
+            let mut wire = minimal.clone();
+            wire[field] = input;
+            let metadata: CoreProviderMetadata = serde_json::from_value(wire).unwrap();
+            assert_eq!(
+                serde_json::to_value(metadata).unwrap()[field],
+                expected,
+                "{field}"
+            );
+        }
+        for bad in [json!({}), json!(true), json!(17), json!(valid)] {
+            let mut wire = minimal.clone();
+            wire[field] = bad;
+            assert!(
+                serde_json::from_value::<CoreProviderMetadata>(wire).is_err(),
+                "{field}"
+            );
+        }
+        for missing in [true, false] {
+            let mut wire = minimal.clone();
+            if missing {
+                wire.as_object_mut().unwrap().remove(field);
+            } else {
+                wire[field] = json!(null);
+            }
+            let result = serde_json::from_value::<CoreProviderMetadata>(wire);
+            if required {
+                assert!(result.is_err(), "{field}");
+            } else {
+                assert!(!serde_json::to_value(result.unwrap())
+                    .unwrap()
+                    .as_object()
+                    .unwrap()
+                    .contains_key(field));
+            }
+        }
+        // Flattened additional metadata must not hide duplicate typed fields.
+        let mut wire = minimal.clone();
+        wire.as_object_mut().unwrap().remove(field);
+        let prefix = serde_json::to_string(&wire).unwrap();
+        let duplicate = format!(
+            "{},\"{field}\":[\"{valid}\"],\"{field}\":[\"{valid}\"]}}",
+            prefix.strip_suffix('}').unwrap()
+        );
+        assert!(
+            serde_json::from_str::<CoreProviderMetadata>(&duplicate).is_err(),
+            "{field}"
+        );
+    }
+}

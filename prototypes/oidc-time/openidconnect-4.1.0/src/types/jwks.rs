@@ -7,7 +7,6 @@ use crate::{
 use http::header::ACCEPT;
 use http::{HeaderValue, Method, StatusCode};
 use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, VecSkipError};
 
 use std::future::Future;
 
@@ -17,7 +16,6 @@ new_url_type![
 ];
 
 /// JSON Web Key Set.
-#[serde_as]
 #[derive(Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct JsonWebKeySet<K>
 where
@@ -28,7 +26,7 @@ where
     #[serde(bound = "K: JsonWebKey")]
     // Ignores invalid keys rather than failing. That way, clients can function using the keys that
     // they do understand, which is fine if they only ever get JWTs signed with those keys.
-    #[serde_as(as = "VecSkipError<_>")]
+    #[serde(deserialize_with = "crate::helpers::deserialize_vec_skip_error")]
     keys: Vec<K>,
 }
 

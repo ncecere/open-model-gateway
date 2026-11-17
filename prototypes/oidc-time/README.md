@@ -25,13 +25,63 @@ Read alongside the packaged upgrade guides:
 [OAuth2 5.0.0 release/changelog](https://github.com/ramosbugs/oauth2-rs/releases/tag/5.0.0),
 and [time 0.3.55 changelog](https://github.com/time-rs/time/blob/v0.3.55/CHANGELOG.md).
 OIDC 4.1.0's crypto dependency changes are already part of the published base;
-this port retains its dependency declarations and original signature/JWT/JWKS
-implementations. Transport implementations are unchanged. OAuth request encoding
+this port retains the published crypto dependency declarations and original
+signature/JWT/key-selection implementations. Transport implementations are
+unchanged. OAuth request encoding
 has only two redundant formatting references removed for current Clippy;
 lifetimes, doc indentation, byte-string spelling and a test `is_empty()` fix
 are mechanical lint fixes. The RP certification `PanicIfFail` helper is moved
 unchanged into its sole consumer (code-flow tests), avoiding a dead-code lint in
 the dynamic-registration target without adding a lint allowance.
+
+## Serde and development dependency cleanup
+
+`serde_with = 3.24.0` is pinned with only `macros` enabled, without `std` or
+`alloc`. Its timestamp `DeserializeAs`/`SerializeAs` traits, `serde_as` for
+required/optional timestamps and `skip_serializing_none` remain in use. The sole
+used adapter requiring its allocation feature was `VecSkipError`, on the JWKS
+`keys` list and ten discovery algorithm lists (one required, nine optional).
+
+Those lists now use two small SDK-local deserialization functions built from
+public Serde sequence/option visitors and a derived untagged entry enum. Serde
+buffers each entry before attempting the original item type; failed items are
+consumed and skipped, while syntax/container errors propagate. No conversion via
+`serde_json::Value` occurs, so duplicate members still reach the original item
+parser. Plain derived serialization retains the existing list/optional-list wire
+shape. The existing JWK parser, filtering, signature verification and transports
+are unchanged; only the list Serde attributes route through the new functions.
+No third-party Serde source was copied or forked.
+
+Two new SDK tests were first run against the previous `VecSkipError` setup and
+then against the replacement. They cover every affected discovery field,
+missing/null/empty optional lists, order and duplicate elements, duplicate object
+members, unknown/ill-typed items, malformed containers/JSON, empty usable-key
+sets, and original signature refusal for incomplete keys. Existing timestamp,
+cryptographic, discovery and HTTP tests are retained.
+
+Development-only updates:
+
+* `color-backtrace = 0.7.4` replaces atty-based terminal detection with the standard
+  library. Default backtrace diagnostics remain enabled. Its locked `backtrace`
+  moves from 0.3.71 to 0.3.77, removing the old adler path while retaining native
+  symbolication (addr2line 0.27.1, gimli 0.34.0, object 0.40.0).
+* `env_logger = 0.11.11` preserves its default logging/color/filter features and
+  existing `init()` call sites; timestamp formatting uses Jiff instead of
+  humantime. Jiff remains separate from the SDK's protocol timestamp type.
+* The unused `async-std` dev declaration is removed. No SDK source, example or
+  test used it; the existing Tokio runtime and asynchronous tests remain enabled.
+  No test, example target or ignore attribute was removed or added by this cleanup.
+
+Direct updates are exact manifest pins; every registry package is version/checksum
+pinned in this workspace's Cargo.lock. All 16 added/upgraded archives were checked
+against those checksums before compilation. None declares or contains a build
+script. Source/manifests and the relevant packaged/tagged changelogs were inspected:
+[color-backtrace](https://github.com/athre0z/color-backtrace/blob/v0.7.4/CHANGELOG.md),
+[env_logger](https://github.com/rust-cli/env_logger/blob/v0.11.11/CHANGELOG.md),
+[backtrace](https://github.com/rust-lang/backtrace-rs/blob/backtrace-v0.3.77/CHANGELOG.md),
+and their terminal/parser dependencies. The changed dependencies are development
+diagnostics; no network/crypto dependency versions changed. The lockfile shrinks
+from 342 to 300 packages. No ignored advisory or source-policy exception was added.
 
 ## API and wire contract
 
@@ -84,21 +134,32 @@ No live providers, credentials, Kubernetes or paid calls are involved.
 ```sh
 export CARGO_BUILD_JOBS=2
 cargo fmt --manifest-path prototypes/oidc-time/Cargo.toml --all -- --check
-cargo test --manifest-path prototypes/oidc-time/Cargo.toml --locked --workspace --lib
-cargo test --manifest-path prototypes/oidc-time/Cargo.toml --locked --workspace --lib --all-features
+cargo test --manifest-path prototypes/oidc-time/Cargo.toml --locked --workspace --all-targets
+cargo test --manifest-path prototypes/oidc-time/Cargo.toml --locked --workspace --all-targets --all-features
 cargo test --manifest-path prototypes/oidc-time/Cargo.toml --locked -p oauth2 --all-features --test time_port_http
 cargo clippy --manifest-path prototypes/oidc-time/Cargo.toml --locked --workspace --all-targets --all-features -- -D warnings
-cargo test --manifest-path prototypes/oidc-time/Cargo.toml --locked -p openidconnect --all-features --doc -- src/lib.rs
+cargo test --manifest-path prototypes/oidc-time/Cargo.toml --locked --workspace --all-features --doc
 python3 prototypes/oidc-time/check-graph.py
 cargo deny --manifest-path prototypes/oidc-time/Cargo.toml --all-features --config deny.toml check
 ```
 
-Local results: formatting and strict all-target/all-feature Clippy passed. Default
-library tests passed (69 OAuth2 + 72 OIDC); all-feature library tests passed
-(69 + 75). The loopback HTTP integration test passed all seven response cases.
-OIDC library documentation examples compiled (five passed, two upstream ignored,
-two outside the selected `src/lib.rs` filter). Strict metadata inventory and
-cargo-deny failed for the reasons below. No gateway suite was run.
+Local results after cleanup: formatting and strict all-target/all-feature Clippy
+passed. Default all-target tests passed (69 OAuth2 + 74 OIDC library tests);
+all-feature all-target tests passed (69 + 77), including the loopback HTTP test
+with seven positive/refusal responses. The 21 issuer-dependent certification tests
+retain their upstream ignore attributes, unchanged. Full workspace documentation
+tests passed (11 OAuth2 + 7 OIDC; four upstream ignores unchanged). Strict default,
+no-default and all-feature inventories, including dev/build/all-target edges,
+unfiltered metadata and Cargo.lock, contain no Chrono. Unchanged cargo-deny 0.20.2
+passes advisories, bans, licenses and sources (duplicate-version warnings remain
+allowed by the existing policy). No gateway suite was run.
+
+At prior head `7fe5faf9`, the strict inventory failed on
+inactive Chrono 0.4.45 via serde_with 3.24.0, and cargo-deny failed on adler
+(RUSTSEC-2025-0056), async-std (RUSTSEC-2025-0052), atty (RUSTSEC-2021-0145 and
+RUSTSEC-2024-0375), humantime (RUSTSEC-2026-0542), and pin-utils
+(RUSTSEC-2026-0441). Those dependency failures are now resolved by this cleanup;
+the representation incompatibilities above remain **OPEN and unchanged**.
 
 Baseline contracts were run successfully against the unported SDKs before the
 port; the graph assertion first failed on their direct Chrono dependency. New
@@ -109,34 +170,20 @@ adapter, with synthetic responses and exact request-body assertions; it proves
 positive and malformed-date refusal paths. Upstream RP certification tests are
 compiled by all-target Clippy but are never run (they require a separate issuer).
 
-## Findings that block adoption
+## Decisions and proofs still required before adoption
 
-1. `check-graph.py` **fails** the strict inventory requirement. Active default,
-   no-default and all-feature graphs (including dev/build/all-target edges) have
-   no Chrono, and no `serde_with` Chrono feature is active. Nevertheless Cargo's
-   unfiltered metadata and lockfile retain **chrono 0.4.45** through
-   **serde_with 3.24.0**'s inactive optional/weak-feature references. The checker
-   reports both facts and exits nonzero; this is not a fully clean inventory.
-   Removing that residual requires a reviewed Serde dependency strategy; no
-   additional third-party fork or policy exception is introduced here.
-2. Unchanged **cargo-deny 0.20.2** policy fails advisories on published upstream
-   dev dependencies: `adler` (RUSTSEC-2025-0056 via color-backtrace/backtrace),
-   `async-std` (RUSTSEC-2025-0052), `atty` (RUSTSEC-2021-0145 and
-   RUSTSEC-2024-0375 via color-backtrace/env_logger), `humantime`
-   (RUSTSEC-2026-0542 via env_logger), and `pin-utils` (RUSTSEC-2026-0441 via
-   async-std). Bans, licenses and sources pass; no Chrono advisory is reported
-   for the active graph. The existing root RSA exception is unchanged. This is
-   not a passing supply-chain gate.
-3. Cargo-deny sees these workspace SDKs as **path packages**, so its advisory
-   scan does not establish upstream-base coverage for them. Final adoption must
-   use an approved maintained upstream release, or explicitly authorize fork
-   ownership, update cadence, patch review and the repository's canonical vendored
-   registration/coverage workflow. The current scanner expects root registrations
-   and canonical `vendor/...` paths, not this standalone prototype layout. No
-   source-policy exception or permanent fork maintenance is authorized by this work.
-4. Gateway integration still needs explicit timestamp API changes, dependency
-   source decisions, resolution of the inactive Chrono inventory and dev-tool
-   advisories, and the NumericDate/leap-second representation and optional RFC3339 scope decisions. Parent-owned independent
-   security reviews (including an adversarial review), gateway/PostgreSQL/browser
-   end-to-end proofs and CI remain outstanding. No claim is made that #674 is fixed;
-   the gateway itself still uses Chrono.
+1. **OPEN, unchanged:** the NumericDate tiny-negative-fraction/leap-second
+   representation gap and optional RFC3339 leap-second scope described above.
+   No normalization, representation change or claim of exact equivalence is made.
+2. Cargo-deny sees these workspace SDKs as **path packages**, so its passing
+   advisory scan does not establish upstream-base coverage for them. Final
+   adoption must use an approved maintained upstream release, or explicitly
+   authorize fork ownership, update cadence, patch review and the repository's
+   canonical vendored registration/coverage workflow. The current scanner expects
+   root registrations and canonical `vendor/...` paths, not this standalone layout.
+   No source-policy exception or permanent maintenance is authorized by this work.
+3. Gateway integration still needs explicit timestamp API changes and dependency
+   source decisions. Parent-owned fresh independent security reviews (including
+   an adversarial review), gateway/PostgreSQL/browser/Spark end-to-end proofs and
+   CI remain outstanding. Cross-target/WASM compilation is unproven. No claim is
+   made that #674 is fixed; the gateway itself still uses Chrono.

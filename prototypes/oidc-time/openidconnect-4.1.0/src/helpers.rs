@@ -13,6 +13,73 @@ use std::cmp::PartialEq;
 use std::fmt::{Debug, Display, Formatter, Result as FormatterResult};
 use std::marker::PhantomData;
 
+// JSON entries are buffered by Serde's untagged-enum support before attempting
+// T, so a failed entry cannot leave the sequence parser inside a partial value.
+// Keep object entries as Serde content (not serde_json::Value): duplicate fields
+// must still reach T's existing validation. Syntax/container errors propagate.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ListEntry<T> {
+    Parsed(T),
+    Ignored(serde::de::IgnoredAny),
+}
+
+pub(crate) fn deserialize_vec_skip_error<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct ListVisitor<T>(PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> Visitor<'de> for ListVisitor<T> {
+        type Value = Vec<T>;
+        fn expecting(&self, formatter: &mut Formatter) -> FormatterResult {
+            formatter.write_str("a sequence")
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut sequence: A,
+        ) -> Result<Vec<T>, A::Error> {
+            let mut values = Vec::new();
+            while let Some(entry) = sequence.next_element::<ListEntry<T>>()? {
+                if let ListEntry::Parsed(value) = entry {
+                    values.push(value);
+                }
+            }
+            Ok(values)
+        }
+    }
+    deserializer.deserialize_seq(ListVisitor(PhantomData))
+}
+
+pub(crate) fn deserialize_optional_vec_skip_error<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<Vec<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct OptionalListVisitor<T>(PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> Visitor<'de> for OptionalListVisitor<T> {
+        type Value = Option<Vec<T>>;
+        fn expecting(&self, formatter: &mut Formatter) -> FormatterResult {
+            formatter.write_str("a sequence or null")
+        }
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_some<D: Deserializer<'de>>(
+            self,
+            deserializer: D,
+        ) -> Result<Self::Value, D::Error> {
+            deserialize_vec_skip_error(deserializer).map(Some)
+        }
+    }
+    deserializer.deserialize_option(OptionalListVisitor(PhantomData))
+}
+
 pub(crate) fn deserialize_string_or_vec<'de, T, D>(deserializer: D) -> Result<Vec<T>, D::Error>
 where
     T: DeserializeOwned,

@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 import subprocess
+import tomllib
 
 manifest = Path(__file__).resolve().with_name("Cargo.toml")
 strict_failures = []
@@ -30,3 +31,6 @@ for features in ([], ["--no-default-features"], ["--all-features"]):
 if strict_failures:
     raise SystemExit("Strict metadata inventory FAILED; inactive Chrono remains:\n" + "\n".join(strict_failures))
 print("Strict metadata inventory has no Chrono")
+lock = tomllib.loads(manifest.with_name("Cargo.lock").read_text())
+assert not any(package["name"] == "chrono" for package in lock["package"]), "Chrono remains in lockfile"
+print("Lockfile inventory has no Chrono")

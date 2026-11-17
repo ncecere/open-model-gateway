@@ -98,9 +98,6 @@ features = ["serde"]
 [dev-dependencies.anyhow]
 version = "1.0"
 
-[dev-dependencies.async-std]
-version = "1.13"
-
 [dev-dependencies.hex]
 version = "0.4"
 
