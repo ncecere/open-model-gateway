@@ -560,7 +560,12 @@ async fn decision(
     approve: bool,
 ) -> ApiResult {
     let mut tx = resources::installation_tx(s).await?;
-    type SubmissionScope = (Uuid, Uuid, chrono::DateTime<chrono::Utc>, Option<Uuid>);
+    type SubmissionScope = (
+        Uuid,
+        Uuid,
+        gateway_datetime_compat::UtcInstant,
+        Option<Uuid>,
+    );
     let (ws, requester, submitted_at, model): SubmissionScope = sqlx::query_as(
         "SELECT workspace_id,requester,created_at,model_id FROM access_requests WHERE id=$1",
     )

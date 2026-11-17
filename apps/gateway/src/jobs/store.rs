@@ -1,6 +1,6 @@
 //! Job and job-file rows (migration 0016). Every client lookup is scoped by
 //! the principal's workspace. Metadata only.
-use chrono::{DateTime, TimeDelta, Utc};
+use gateway_datetime_compat::{SignedDuration as TimeDelta, UtcInstant};
 use sqlx::FromRow;
 use uuid::Uuid;
 
@@ -38,13 +38,13 @@ pub struct JobRow {
     pub upstream_status: Option<String>,
     pub progress: Option<i16>,
     pub error_code: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub completed_at: Option<DateTime<Utc>>,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub cancel_requested_at: Option<DateTime<Utc>>,
-    pub deleted_at: Option<DateTime<Utc>>,
-    pub poll_deadline_at: DateTime<Utc>,
-    pub settled_at: Option<DateTime<Utc>>,
+    pub created_at: UtcInstant,
+    pub completed_at: Option<UtcInstant>,
+    pub expires_at: Option<UtcInstant>,
+    pub cancel_requested_at: Option<UtcInstant>,
+    pub deleted_at: Option<UtcInstant>,
+    pub poll_deadline_at: UtcInstant,
+    pub settled_at: Option<UtcInstant>,
     pub video_seconds: Option<i32>,
     pub video_size: Option<String>,
     pub batch_endpoint: Option<String>,
@@ -61,17 +61,19 @@ pub struct JobRow {
     /// Native batches: `batch` when the batch price list applied.
     pub price_tier: Option<String>,
     pub retry_limit: i16,
-    pub submit_started_at: Option<DateTime<Utc>>,
-    pub in_progress_at: Option<DateTime<Utc>>,
-    pub finalizing_at: Option<DateTime<Utc>>,
-    pub last_progress_at: Option<DateTime<Utc>>,
+    pub submit_started_at: Option<UtcInstant>,
+    pub in_progress_at: Option<UtcInstant>,
+    pub finalizing_at: Option<UtcInstant>,
+    pub last_progress_at: Option<UtcInstant>,
     /// Batches (0022): the completion window in hours (`None`: 24).
     pub completion_window_hours: Option<i16>,
 }
 impl JobRow {
     /// A batch's completion window (24 h unless created with a longer one).
-    pub fn completion_window(&self) -> chrono::TimeDelta {
-        chrono::TimeDelta::hours(i64::from(self.completion_window_hours.unwrap_or(24)))
+    pub fn completion_window(&self) -> gateway_datetime_compat::SignedDuration {
+        gateway_datetime_compat::SignedDuration::hours(i64::from(
+            self.completion_window_hours.unwrap_or(24),
+        ))
     }
     pub fn mode(&self) -> Option<BatchMode> {
         match self.batch_mode.as_deref() {
@@ -133,7 +135,7 @@ pub(crate) struct NewJob<'a> {
     pub public_model: &'a str,
     pub provider: &'a str,
     pub upstream_id: &'a UpstreamId,
-    pub poll_deadline_at: DateTime<Utc>,
+    pub poll_deadline_at: UtcInstant,
     pub video_seconds: Option<i32>,
     pub video_size: Option<&'a str>,
     pub batch_endpoint: Option<&'a str>,
@@ -173,7 +175,7 @@ pub(crate) async fn insert_batch(
     conn: &mut sqlx::PgConnection,
     b: &NewBatch<'_>,
     price_tier: Option<&str>,
-    poll_deadline_at: DateTime<Utc>,
+    poll_deadline_at: UtcInstant,
 ) -> Result<JobRow> {
     sqlx::query_as(&format!("INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,upstream_id,poll_deadline_at,batch_endpoint,batch_mode,user_id,input_file_id,work_file_id,price_tier,retry_limit,request_total,request_completed,request_failed,upstream_status,completion_window_hours) VALUES($1,'batch',$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,$11,$12,$13,$14,$15,$16,0,0,'validating',$17) RETURNING {JOB_COLUMNS}"))
         .bind(b.id).bind(b.workspace_id).bind(b.api_key_id).bind(b.deployment_id).bind(b.execution_id).bind(b.public_model).bind(b.provider).bind(poll_deadline_at).bind(b.endpoint.as_str()).bind(b.mode.as_str()).bind(b.user_id).bind(b.input_file_id).bind(b.work_file_id).bind(price_tier).bind(b.retry_limit).bind(b.requests).bind(b.window_hours)
@@ -240,8 +242,8 @@ pub(crate) struct Observation<'a> {
     pub error: Option<&'a ErrorCode>,
     pub counts: Option<RequestCounts>,
 }
-fn at(unix: Option<i64>) -> Option<DateTime<Utc>> {
-    unix.and_then(|s| DateTime::from_timestamp(s, 0))
+fn at(unix: Option<i64>) -> Option<UtcInstant> {
+    unix.and_then(|s| UtcInstant::from_timestamp(s, 0))
 }
 /// Apply `obs` to `job` (regressions are ignored). Returns the current row.
 pub(crate) async fn observe(

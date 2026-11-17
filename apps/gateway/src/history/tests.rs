@@ -5,7 +5,8 @@
 use super::*;
 use crate::governance::tests::db::{Fixture, done, fixture, request};
 use crate::store::Store;
-use chrono::TimeDelta;
+use gateway_datetime_compat::SignedDuration as TimeDelta;
+use gateway_datetime_compat::UtcInstant;
 use sqlx::{PgPool, migrate::Migrator};
 
 type Written = Result<sqlx::postgres::PgQueryResult, sqlx::Error>;
@@ -520,7 +521,7 @@ async fn verify_finds_orphans_and_raises_the_incident(pool: PgPool) {
     );
     assert_eq!(report.finding_count, 5);
     // A window after the orphans finds only the enforcement gap.
-    let later = verify(&pool, Some(Utc::now() + TimeDelta::minutes(1)))
+    let later = verify(&pool, Some(UtcInstant::now() + TimeDelta::minutes(1)))
         .await
         .unwrap();
     assert_eq!(later.finding_count, 1, "{later:#?}");
@@ -564,7 +565,7 @@ async fn verify_finds_orphans_and_raises_the_incident(pool: PgPool) {
         .await
         .unwrap()
     };
-    let windowed = verify(&pool, Some(Utc::now())).await.unwrap();
+    let windowed = verify(&pool, Some(UtcInstant::now())).await.unwrap();
     record_cli_result(&f.store, &windowed).await.unwrap();
     assert_eq!(open_count().await, 1);
     let full = verify(&pool, None).await.unwrap();
@@ -597,7 +598,7 @@ async fn seeded_history_upgrades_to_parent_checks(pool: PgPool) {
     };
     before.run(&pool).await.unwrap();
     let f = fixture(pool.clone()).await;
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
+    let now: UtcInstant = sqlx::query_scalar("SELECT now()")
         .fetch_one(&pool)
         .await
         .unwrap();

@@ -1,6 +1,7 @@
 use super::*;
 use axum::{extract::RawQuery, http::header};
-use chrono::{Datelike, NaiveDate, TimeDelta, Utc};
+use gateway_datetime_compat::UtcInstant;
+use gateway_datetime_compat::{CalendarDate, SignedDuration as TimeDelta};
 use std::collections::HashMap;
 #[cfg(all(test, feature = "integration-tests"))]
 #[path = "scheduled_snapshot_tests.rs"]
@@ -12,8 +13,8 @@ mod usage_sql;
 /// from archived raw history or summed across rollup groups.
 pub(crate) async fn scheduled_snapshot(
     tx: &mut Transaction<'_, Postgres>,
-    start: chrono::DateTime<Utc>,
-    end: chrono::DateTime<Utc>,
+    start: gateway_datetime_compat::UtcInstant,
+    end: gateway_datetime_compat::UtcInstant,
     workspace: Option<Uuid>,
     cost_center: Option<Uuid>,
     platform: bool,
@@ -36,8 +37,8 @@ pub(crate) async fn scheduled_snapshot(
 }
 #[derive(Default)]
 struct Filters {
-    start: NaiveDate,
-    end: NaiveDate,
+    start: CalendarDate,
+    end: CalendarDate,
     compare: bool,
     workspace: Option<Uuid>,
     model: Option<String>,
@@ -94,11 +95,11 @@ fn query_params(raw: Option<String>) -> Result<HashMap<String, String>, ApiError
     }
     Ok(params)
 }
-fn report_date(s: &str) -> Result<NaiveDate, ApiError> {
+fn report_date(s: &str) -> Result<CalendarDate, ApiError> {
     if s.len() != 10 {
         return Err(invalid());
     }
-    NaiveDate::parse_from_str(s, "%Y-%m-%d")
+    gateway_datetime_compat::http::parse_date_filter(s)
         .map_err(|_| invalid())
         .and_then(|d| {
             if (1..=9999).contains(&d.year()) {
@@ -109,13 +110,13 @@ fn report_date(s: &str) -> Result<NaiveDate, ApiError> {
         })
 }
 /// `start_date` and `end_date`: 1 to 93 days, ending no later than tomorrow.
-fn period(params: &mut HashMap<String, String>) -> Result<(NaiveDate, NaiveDate), ApiError> {
+fn period(params: &mut HashMap<String, String>) -> Result<(CalendarDate, CalendarDate), ApiError> {
     let start = report_date(&params.remove("start_date").ok_or_else(invalid)?)?;
     let end = report_date(&params.remove("end_date").ok_or_else(invalid)?)?;
-    let days = (end - start).num_days();
+    let days = (end - start).whole_days();
     if !(1..=93).contains(&days)
         || end
-            > Utc::now()
+            > UtcInstant::now()
                 .date_naive()
                 .checked_add_signed(TimeDelta::days(1))
                 .ok_or_else(invalid)?
@@ -235,10 +236,10 @@ impl Filters {
         }
         Ok(f)
     }
-    fn prior_start(&self) -> Result<NaiveDate, ApiError> {
+    fn prior_start(&self) -> Result<CalendarDate, ApiError> {
         let d = self
             .start
-            .checked_sub_signed(TimeDelta::days((self.end - self.start).num_days()))
+            .checked_sub_signed(TimeDelta::days((self.end - self.start).whole_days()))
             .ok_or_else(invalid)?;
         if d.year() < 1 {
             return Err(invalid());
@@ -260,7 +261,7 @@ fn bind<'q>(
     sql: &'q str,
     f: &Filters,
     own: Option<Uuid>,
-    prior: NaiveDate,
+    prior: CalendarDate,
     platform: bool,
 ) -> Result<sqlx::query::QueryScalar<'q, Postgres, Value, sqlx::postgres::PgArguments>, ApiError> {
     Ok(sqlx::query_scalar(sql)
@@ -440,7 +441,7 @@ pub(super) async fn cost_summary(
     Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
 ) -> ApiResult {
-    deadline(async {let now=Utc::now().date_naive();let f=Filters{workspace:Some(ws),start:now.with_day(1).ok_or_else(invalid)?,end:now.checked_add_signed(TimeDelta::days(1)).ok_or_else(invalid)?,..Default::default()};let(mut tx,a)=workspace_report_tx(&s,&u,ws).await?;let value=report(&mut tx,&f,if a.view_all_activity{None}else{Some(u.user_id())},false).await?;tx.commit().await?;Ok(Json(json!({"currency":"USD","known_cost_microusd":value["totals"]["known_cost_microusd"],"held_microusd":value["totals"]["held_microusd"],"unknown_cost_requests":value["totals"]["unresolved_attempts"],"requests":value["totals"]["attempts"]})))}).await
+    deadline(async {let now=UtcInstant::now().date_naive();let f=Filters{workspace:Some(ws),start:now.with_day(1).ok_or_else(invalid)?,end:now.checked_add_signed(TimeDelta::days(1)).ok_or_else(invalid)?,..Default::default()};let(mut tx,a)=workspace_report_tx(&s,&u,ws).await?;let value=report(&mut tx,&f,if a.view_all_activity{None}else{Some(u.user_id())},false).await?;tx.commit().await?;Ok(Json(json!({"currency":"USD","known_cost_microusd":value["totals"]["known_cost_microusd"],"held_microusd":value["totals"]["held_microusd"],"unknown_cost_requests":value["totals"]["unresolved_attempts"],"requests":value["totals"]["attempts"]})))}).await
 }
 async fn cost_rows(
     tx: &mut Transaction<'_, Postgres>,
@@ -737,7 +738,7 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!((f.end - f.start).num_days(), 93);
+        assert_eq!((f.end - f.start).whole_days(), 93);
         assert_eq!(f.prior_start().unwrap().to_string(), "2024-09-30");
     }
     #[test]

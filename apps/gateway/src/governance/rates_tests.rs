@@ -10,6 +10,7 @@ use crate::{
     auth::Principal,
     governance::tests::db::{Fixture, done, fixture, request},
 };
+use gateway_datetime_compat::UtcInstant;
 use rand::{RngExt, SeedableRng, rngs::StdRng, seq::IndexedRandom};
 use sqlx::{PgPool, migrate::Migrator};
 
@@ -50,7 +51,7 @@ async fn scopes(pool: &PgPool) -> Vec<(Option<Uuid>, Option<Uuid>)> {
 async fn scan_verdict(
     tx: &mut sqlx::Transaction<'_, Postgres>,
     (ws, lineage): (Option<Uuid>, Option<Uuid>),
-    at: DateTime<Utc>,
+    at: UtcInstant,
     l: Limits,
     reserved: Option<i64>,
 ) -> (bool, bool) {
@@ -70,7 +71,7 @@ async fn scan_verdict(
 
 /// Counters equal the scan's quantities for every scope at `at`, and the
 /// verdicts agree at and around every limit.
-async fn assert_parity(pool: &PgPool, at: DateTime<Utc>, context: &str) {
+async fn assert_parity(pool: &PgPool, at: UtcInstant, context: &str) {
     let mut tx = pool.begin().await.unwrap();
     let all = scopes(pool).await;
     let mut read = Vec::new();
@@ -144,7 +145,7 @@ async fn insert_execution(
     f: &Fixture,
     p: Principal,
     kind: &str,
-    started_at: DateTime<Utc>,
+    started_at: UtcInstant,
     batch_job: Option<Uuid>,
 ) -> Uuid {
     let id = Uuid::new_v4();
@@ -159,8 +160,8 @@ async fn insert_reservation(
     f: &Fixture,
     p: Principal,
     id: Uuid,
-    minute: DateTime<Utc>,
-    lease: DateTime<Utc>,
+    minute: UtcInstant,
+    lease: UtcInstant,
     reserved: Option<i64>,
 ) {
     // Admitted at the execution's start (0030 key); the minute is the test's.
@@ -196,13 +197,13 @@ async fn random_interleavings_keep_rate_counters_equal_to_the_scan(pool: PgPool)
     let f = fixture(pool.clone()).await;
     f.price(1_000_000).await; // 110 reserved tokens (100 input ceiling + 10 output)
     let now = f.store.freeze_admission_clock().await.unwrap();
-    let minute: DateTime<Utc> =
+    let minute: UtcInstant =
         sqlx::query_scalar("SELECT date_trunc('minute',$1::timestamptz,'UTC')")
             .bind(now)
             .fetch_one(&pool)
             .await
             .unwrap();
-    let minute_s = chrono::TimeDelta::minutes(1);
+    let minute_s = gateway_datetime_compat::SignedDuration::minutes(1);
     // Limits high enough to admit, so admission reads the counters. The
     // personal workspace's tokens/minute denies while its minute holds an
     // unreserved execution or unpriced reservation (as the scan did).
@@ -244,8 +245,8 @@ async fn random_interleavings_keep_rate_counters_equal_to_the_scan(pool: PgPool)
         now,
         now - minute_s,
         now + minute_s,
-        now + chrono::TimeDelta::seconds(30),
-        now + chrono::TimeDelta::seconds(3600),
+        now + gateway_datetime_compat::SignedDuration::seconds(30),
+        now + gateway_datetime_compat::SignedDuration::seconds(3600),
     ];
     for step in 0..300 {
         let op = rng.random_range(0..100);
@@ -285,7 +286,7 @@ async fn random_interleavings_keep_rate_counters_equal_to_the_scan(pool: PgPool)
             let id = *pending.choose(&mut rng).unwrap();
             let offset = [-61, -30, -1, 0, 1, 30][rng.random_range(0..6)];
             sqlx::query("UPDATE governance_reservations SET lease_expires_at=$2 WHERE execution_id=$1 AND state='pending'")
-                .bind(id).bind(now + chrono::TimeDelta::seconds(offset)).execute(&pool).await.unwrap();
+                .bind(id).bind(now + gateway_datetime_compat::SignedDuration::seconds(offset)).execute(&pool).await.unwrap();
             if rng.random_bool(0.3) {
                 reconcile_expired(&f.store, 100).await.unwrap();
             }
@@ -308,7 +309,7 @@ async fn random_interleavings_keep_rate_counters_equal_to_the_scan(pool: PgPool)
                 p,
                 e,
                 minute + minute_s * rng.random_range(-1..2),
-                now + chrono::TimeDelta::seconds(rng.random_range(-5..4000)),
+                now + gateway_datetime_compat::SignedDuration::seconds(rng.random_range(-5..4000)),
                 Some(rng.random_range(0..500)),
             )
             .await;
@@ -342,7 +343,7 @@ async fn random_interleavings_keep_rate_counters_equal_to_the_scan(pool: PgPool)
                 owner,
                 e,
                 minute,
-                now + chrono::TimeDelta::seconds(60),
+                now + gateway_datetime_compat::SignedDuration::seconds(60),
                 Some(150),
             )
             .await;
@@ -350,7 +351,7 @@ async fn random_interleavings_keep_rate_counters_equal_to_the_scan(pool: PgPool)
         } else if op < 72 {
             what = "unreserved execution";
             let at = instants[rng.random_range(0..3)]
-                + chrono::TimeDelta::seconds(rng.random_range(-20..20));
+                + gateway_datetime_compat::SignedDuration::seconds(rng.random_range(-20..20));
             insert_execution(&pool, &f, p, "generation", at, None).await;
         } else if op < 77 {
             what = "unpriced or untruncated-minute reservation";
@@ -363,7 +364,7 @@ async fn random_interleavings_keep_rate_counters_equal_to_the_scan(pool: PgPool)
                 p,
                 e,
                 at,
-                now + chrono::TimeDelta::seconds(120),
+                now + gateway_datetime_compat::SignedDuration::seconds(120),
                 reserved,
             )
             .await;
@@ -385,7 +386,7 @@ async fn random_interleavings_keep_rate_counters_equal_to_the_scan(pool: PgPool)
             sqlx::query("UPDATE governance_reservations SET minute_start=minute_start+$2 WHERE execution_id=$1")
                 .bind(id).bind(delta).execute(&pool).await.unwrap();
             // A reserved execution's start is its reservation's admission time (0030 key).
-            if delta != chrono::TimeDelta::zero() {
+            if delta != gateway_datetime_compat::SignedDuration::ZERO {
                 assert!(
                     sqlx::query(
                         "UPDATE inference_executions SET started_at=started_at+$2 WHERE id=$1"
@@ -455,18 +456,18 @@ async fn random_interleavings_keep_rate_counters_equal_to_the_scan(pool: PgPool)
 async fn minute_and_lease_boundaries_on_the_pinned_clock(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1_000_000).await;
-    let boundary: DateTime<Utc> = sqlx::query_scalar(
+    let boundary: UtcInstant = sqlx::query_scalar(
         "SELECT date_trunc('minute',clock_timestamp(),'UTC')+interval '1 minute'",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    let pinned = |at: DateTime<Utc>| {
+    let pinned = |at: UtcInstant| {
         let store = Store::new(pool.clone());
         store.pin_admission_clock(at).unwrap();
         store
     };
-    let last = boundary - chrono::TimeDelta::microseconds(1);
+    let last = boundary - gateway_datetime_compat::SignedDuration::microseconds(1);
     let before = pinned(last);
     let after = pinned(boundary);
     // Two requests per minute, at most three at once.
@@ -489,22 +490,22 @@ async fn minute_and_lease_boundaries_on_the_pinned_clock(pool: PgPool) {
     );
     assert_parity(&pool, boundary, "first microsecond of the next minute").await;
     let row: (i64, i64) = sqlx::query_as("SELECT requests,(SELECT requests FROM rate_minute_counters WHERE minute_start=$2 AND scope_kind='workspace' AND scope_id=$3) FROM rate_minute_counters WHERE minute_start=$1 AND scope_kind='workspace' AND scope_id=$3")
-        .bind(boundary - chrono::TimeDelta::minutes(1)).bind(boundary).bind(f.principal.workspace_id)
+        .bind(boundary - gateway_datetime_compat::SignedDuration::minutes(1)).bind(boundary).bind(f.principal.workspace_id)
         .fetch_one(&pool).await.unwrap();
     assert_eq!(row, (2, 1));
     // Leases of the first two end at `last + 60 s`: at that exact instant they
     // are expired (lease > now is false), one microsecond earlier they hold.
     f.policy("workspace_local_policies", None, None, Some(3), None)
         .await;
-    let expiry = last + chrono::TimeDelta::seconds(60);
-    let just_before = pinned(expiry - chrono::TimeDelta::microseconds(1));
+    let expiry = last + gateway_datetime_compat::SignedDuration::seconds(60);
+    let just_before = pinned(expiry - gateway_datetime_compat::SignedDuration::microseconds(1));
     assert_eq!(
         admit(&just_before, &f.start(), &request(), 60).await,
         Err(InferenceError::Busy)
     );
     assert_parity(
         &pool,
-        expiry - chrono::TimeDelta::microseconds(1),
+        expiry - gateway_datetime_compat::SignedDuration::microseconds(1),
         "lease live",
     )
     .await;
@@ -551,7 +552,7 @@ async fn tokens_per_minute_match_the_scan(pool: PgPool) {
             .fetch_one(&pool)
             .await
             .unwrap(),
-        now + chrono::TimeDelta::seconds(60),
+        now + gateway_datetime_compat::SignedDuration::seconds(60),
         Some(10_000),
     )
     .await;
@@ -612,11 +613,14 @@ async fn migrations_backfill_existing_history_exactly(pool: PgPool) {
       END IF;
      END LOOP; END $$"#).execute(&pool).await.unwrap();
     crate::store::MIGRATOR.run(&pool).await.unwrap();
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+    let now: UtcInstant = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&pool)
         .await
         .unwrap();
-    for at in [now, now - chrono::TimeDelta::minutes(2)] {
+    for at in [
+        now,
+        now - gateway_datetime_compat::SignedDuration::minutes(2),
+    ] {
         assert_parity(&pool, at, "backfill").await;
     }
     let split: (String, String) = sqlx::query_as("SELECT sum(held_unknown_microusd)::text,(SELECT coalesce(sum(held_microusd),0) FROM governance_reservations WHERE state='unknown')::text FROM budget_totals WHERE scope_kind='workspace' AND period='lifetime'").fetch_one(&pool).await.unwrap();

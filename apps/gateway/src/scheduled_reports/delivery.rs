@@ -1,9 +1,10 @@
 //! Report-owned envelopes in the shared email outbox. No SMTP or retry loop.
+use crate::timestamp::TimestampFormat as _;
 use crate::{
     governance::locks::{self, Scope},
     identity::IdentityConfig,
 };
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
@@ -64,7 +65,7 @@ pub(crate) async fn message(
     run: Uuid,
     origin: &str,
 ) -> sqlx::Result<(String, String)> {
-    let (schedule, ws, start, end): (Uuid,Option<Uuid>,DateTime<Utc>,DateTime<Utc>) = sqlx::query_as("SELECT r.schedule_id,s.workspace_id,r.period_start,r.period_end FROM report_runs r JOIN report_schedules s ON s.id=r.schedule_id WHERE r.id=$1").bind(run).fetch_one(&mut **tx).await?;
+    let (schedule, ws, start, end): (Uuid,Option<Uuid>,UtcInstant,UtcInstant) = sqlx::query_as("SELECT r.schedule_id,s.workspace_id,r.period_start,r.period_end FROM report_runs r JOIN report_schedules s ON s.id=r.schedule_id WHERE r.id=$1").bind(run).fetch_one(&mut **tx).await?;
     let path = report_path(ws, schedule, run);
     Ok((
         "Scheduled report available".into(),

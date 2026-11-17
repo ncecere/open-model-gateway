@@ -1,5 +1,6 @@
 //! Real loopback gateway, browser authentication and runtime-role PostgreSQL.
 use super::*;
+use crate::timestamp::TimestampFormat as _;
 use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 
@@ -188,7 +189,7 @@ async fn free_price_runtime_http_operator_flow(pool: PgPool) {
         !exported.contains(&f.principal.key_id.to_string()),
         "operator export exposed private key identity"
     );
-    let valid = json!({"apply":false,"month":chrono::Utc::now().format("%Y-%m").to_string(),"workspace_id":f.principal.workspace_id,"deployment_id":f.deployment,"expected_count":"0","reason":"operator reference","offset":"0"});
+    let valid = json!({"apply":false,"month":gateway_datetime_compat::UtcInstant::now().format("%Y-%m").to_string(),"workspace_id":f.principal.workspace_id,"deployment_id":f.deployment,"expected_count":"0","reason":"operator reference","offset":"0"});
     let positional = json!([
         false,
         valid["month"],

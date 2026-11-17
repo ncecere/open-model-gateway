@@ -23,7 +23,7 @@
 //! - No prompt data, key names or owner identities appear in incidents.
 use std::time::Duration;
 
-use chrono::{DateTime, DurationRound, TimeDelta, Utc};
+use gateway_datetime_compat::{SignedDuration as TimeDelta, UtcInstant};
 use serde_json::{Value, json};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
@@ -357,7 +357,7 @@ pub async fn evaluate_once_fenced(
     sqlx::query("SET LOCAL statement_timeout='10s'")
         .execute(&mut *tx)
         .await?;
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+    let now: UtcInstant = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut *tx)
         .await?;
     // Outbox cleanup deliberately does not run here. The delivery worker
@@ -624,7 +624,7 @@ mod unit_tests {
                     transition: "fired".into(),
                     summary: format!("Holds with unknown cost are over {hours} hours old"),
                     severity: severity.into(),
-                    fired_at: DateTime::<Utc>::UNIX_EPOCH,
+                    fired_at: UtcInstant::UNIX_EPOCH,
                     resolved_at: None,
                     rule_name: None,
                     workspace_name: None,
@@ -657,7 +657,7 @@ mod unit_tests {
             critical: false,
             scope: "Team\r\nBcc: x@example.test".into(),
             rule: None,
-            at: DateTime::<Utc>::UNIX_EPOCH,
+            at: UtcInstant::UNIX_EPOCH,
         };
         let (subject, body) = email_text(&facts, Some("https://gw.example.test"));
         assert!(!subject.contains('\n') && !subject.contains('\r'));

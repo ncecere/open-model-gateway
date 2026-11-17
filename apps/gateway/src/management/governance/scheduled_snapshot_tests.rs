@@ -1,19 +1,20 @@
 use super::*;
 use crate::governance::tests::db::fixture;
+use crate::timestamp::TimestampFormat as _;
 use sqlx::PgPool;
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn scheduled_reports_snapshot_exact_live_parity_rollups_privacy_and_attribution(
     pool: PgPool,
 ) {
     let f = fixture(pool.clone()).await;
-    let now: chrono::DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+    let now: gateway_datetime_compat::UtcInstant = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&pool)
         .await
         .unwrap();
     let end = now.date_naive().with_day(1).unwrap();
-    let start = end.checked_sub_months(chrono::Months::new(1)).unwrap();
-    let lo = start.and_hms_opt(0, 0, 0).unwrap().and_utc();
-    let hi = end.and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let start = end.checked_add_months(-1).unwrap();
+    let lo = start.midnight().unwrap();
+    let hi = end.midnight().unwrap();
     let cc = Uuid::new_v4();
     sqlx::query("INSERT INTO cost_centers(id,name,code) VALUES($1,'Historical allocation','HIST')")
         .bind(cc)

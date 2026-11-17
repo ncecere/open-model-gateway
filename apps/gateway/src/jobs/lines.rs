@@ -262,7 +262,9 @@ pub(crate) fn response_body(
     model: &str,
     response: BatchResponse,
 ) -> Result<Value, InferenceError> {
-    let created = chrono::Utc::now().timestamp().max(0) as u64;
+    let created = gateway_datetime_compat::UtcInstant::now()
+        .timestamp()
+        .max(0) as u64;
     let hex = request_id.simple();
     match (endpoint, response) {
         (BatchEndpoint::ChatCompletions, BatchResponse::Chat(r)) => {

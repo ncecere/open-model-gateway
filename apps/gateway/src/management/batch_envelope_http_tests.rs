@@ -1,6 +1,8 @@
 //! Runs against the same loopback gateway and restricted runtime as #657.
 use super::*;
 use crate::management::openapi::{http_vectors, responses};
+use crate::timestamp::TimestampFormat as _;
+use gateway_datetime_compat::UtcInstant;
 const PATH: &str = "/api/v1/platform/reservations/resolve-batch-envelopes";
 pub(super) async fn run(
     f: &crate::governance::tests::db::Fixture,
@@ -120,7 +122,7 @@ pub(super) async fn run(
             "operator export exposed personal identity"
         );
     }
-    let valid = json!({"apply":false,"month":chrono::Utc::now().format("%Y-%m").to_string(),"workspace_id":f.principal.workspace_id,"deployment_id":f.deployment,"expected_count":"0","reason":"operator reference","offset":"0"});
+    let valid = json!({"apply":false,"month":UtcInstant::now().format("%Y-%m").to_string(),"workspace_id":f.principal.workspace_id,"deployment_id":f.deployment,"expected_count":"0","reason":"operator reference","offset":"0"});
     let positional = json!([
         false,
         valid["month"],

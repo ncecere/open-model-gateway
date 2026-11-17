@@ -2,7 +2,7 @@
 use super::free_price::{MAX_CANDIDATES, Resolve};
 use super::*;
 use crate::governance::locks::{self, Scope};
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 use sqlx::{Postgres, Transaction};
 use std::collections::{BTreeMap, BTreeSet};
 mod paging;
@@ -13,7 +13,7 @@ struct Candidate {
     execution_id: Uuid,
     workspace_id: Uuid,
     api_key_id: Uuid,
-    admitted_at: DateTime<Utc>,
+    admitted_at: UtcInstant,
     held_microusd: i64,
 }
 // A terminal gateway record proves the envelope covers no provider attempt.

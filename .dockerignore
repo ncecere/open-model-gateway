@@ -17,6 +17,16 @@
 # Runtime grants and privilege probes are embedded in the binary (`grants apply|verify`).
 !deploy/staging/runtime-grants.sql
 !deploy/staging/verify-privileges.sql
+!crates/
+!crates/datetime/
+!crates/datetime/Cargo.toml
+!crates/datetime/src/
+!crates/datetime/src/**
+!vendor/
+!vendor/oauth2/
+!vendor/oauth2/**
+!vendor/openidconnect/
+!vendor/openidconnect/**
 !tools/
 !tools/mock-upstream/
 !tools/mock-upstream/Cargo.toml

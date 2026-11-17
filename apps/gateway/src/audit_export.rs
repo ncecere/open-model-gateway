@@ -569,7 +569,7 @@ fn parse_syslog_url(url: &str) -> anyhow::Result<(String, u16)> {
 impl Webhook {
     /// The same signed JSON bodies as before #107.
     async fn send(&self, payload: &Payload) -> Result<(), &'static str> {
-        let sent_at = chrono::Utc::now();
+        let sent_at = gateway_datetime_compat::UtcInstant::now();
         let body = match payload {
             Payload::Events {
                 installation,
@@ -609,7 +609,7 @@ impl Webhook {
     /// POST one signed body. `Ok(status)` for any HTTP answer; `Err(category)`
     /// when there was none.
     async fn post(&self, body: Vec<u8>) -> Result<u16, &'static str> {
-        let t = chrono::Utc::now().timestamp();
+        let t = gateway_datetime_compat::UtcInstant::now().timestamp();
         let response = self
             .client
             .post(self.url.clone())
@@ -632,7 +632,7 @@ impl Otlp {
     /// One OTLP/HTTP JSON request. A 2xx is delivered; its body may say the
     /// collector refused some records for good (`partialSuccess`).
     async fn send(&self, payload: &Payload) -> Result<Delivery, &'static str> {
-        let (body, records) = otlp_body(payload, chrono::Utc::now());
+        let (body, records) = otlp_body(payload, gateway_datetime_compat::UtcInstant::now());
         let body = serde_json::to_vec(&body).map_err(|_| "body")?;
         let response = self
             .client
@@ -755,7 +755,7 @@ fn io_category(error: std::io::Error) -> &'static str {
 
 /// The RFC 5425 frames for a payload: one RFC 5424 message per event.
 fn frames(payload: Payload) -> Vec<u8> {
-    let at = chrono::Utc::now();
+    let at = gateway_datetime_compat::UtcInstant::now();
     match payload {
         Payload::Events {
             installation,
@@ -794,14 +794,14 @@ fn frames(payload: Payload) -> Vec<u8> {
 /// RFC 5425 octet counting around an RFC 5424 message without structured
 /// data or BOM.
 fn frame(
-    at: chrono::DateTime<chrono::Utc>,
+    at: gateway_datetime_compat::UtcInstant,
     installation: Uuid,
     msgid: &str,
     json: &Value,
 ) -> Vec<u8> {
     let message = format!(
         "<{PRI}>1 {} {installation} {APP_NAME} - {msgid} - {json}",
-        at.format("%Y-%m-%dT%H:%M:%S%.3fZ")
+        gateway_datetime_compat::format::syslog_millis(at)
     );
     format!("{} {message}", message.len()).into_bytes()
 }
@@ -1566,9 +1566,8 @@ mod tests {
         assert_eq!(msgid("a b\tc\u{e9}d"), "a_b_c_d");
         assert_eq!(msgid(&"x".repeat(40)).len(), 32);
         assert_eq!(msgid(""), "-");
-        let at = chrono::DateTime::parse_from_rfc3339("2026-10-14T01:02:03.456789Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
+        let at =
+            gateway_datetime_compat::http::parse_rfc3339("2026-10-14T01:02:03.456789Z").unwrap();
         let installation = Uuid::nil();
         let frame = frame(at, installation, "test", &json!({"a":"\u{e9}"}));
         let text = String::from_utf8(frame).unwrap();
@@ -3158,7 +3157,7 @@ mod database {
             time.len() == 24 && time.ends_with('Z') && time.as_bytes()[19] == b'.',
             "UTC with milliseconds: {time}"
         );
-        chrono::DateTime::parse_from_rfc3339(time).unwrap();
+        gateway_datetime_compat::http::parse_rfc3339(time).unwrap();
         assert_eq!(parts[2], installation.to_string(), "HOSTNAME");
         assert_eq!(parts[3], "open-model-gateway", "APP-NAME");
         assert_eq!(parts[4], "-", "PROCID");

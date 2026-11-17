@@ -105,11 +105,11 @@ async fn a_person_exports_their_own_data_and_nothing_else(pool: PgPool) {
         .collect();
     assert!(kinds.contains(&"personal") && kinds.contains(&"team"));
     // Ranges: at most 93 days, ending today or earlier.
-    let today = chrono::Utc::now().date_naive();
+    let today = gateway_datetime_compat::UtcInstant::now().date_naive();
     let old = format!(
         "/api/v1/me/export?from={}&to={}",
-        today - chrono::TimeDelta::days(210),
-        today - chrono::TimeDelta::days(190)
+        today - gateway_datetime_compat::SignedDuration::days(210),
+        today - gateway_datetime_compat::SignedDuration::days(190)
     );
     let (_, _, old) = download(&f.s, &f.owner, &old).await;
     let old: Value = serde_json::from_slice(&old).unwrap();
@@ -120,7 +120,7 @@ async fn a_person_exports_their_own_data_and_nothing_else(pool: PgPool) {
     );
     let wide = format!(
         "/api/v1/me/export?from={}&to={today}",
-        today - chrono::TimeDelta::days(100)
+        today - gateway_datetime_compat::SignedDuration::days(100)
     );
     assert_eq!(
         download(&f.s, &f.owner, &wide).await.0,

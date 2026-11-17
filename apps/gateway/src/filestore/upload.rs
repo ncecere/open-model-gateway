@@ -8,8 +8,8 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use bytes::Bytes;
-use chrono::TimeDelta;
 use futures::{Stream, StreamExt};
+use gateway_datetime_compat::SignedDuration as TimeDelta;
 use uuid::Uuid;
 
 use super::{

@@ -1,7 +1,7 @@
 //! #48 browser-only, append-only provider-reported cost reconciliation.
 use super::*;
 use axum::extract::rejection::JsonRejection;
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 use serde::Serialize;
 mod matching;
 pub(super) mod parser;
@@ -112,7 +112,7 @@ async fn import(
         tx.commit().await?;
         return Ok(identifier(id));
     }
-    let overlaps: Vec<(Uuid, DateTime<Utc>, DateTime<Utc>)> = sqlx::query_as("SELECT id,period_start,period_end FROM provider_cost_imports i WHERE account_id=$1 AND period_start<$3 AND period_end>$2 AND NOT EXISTS(SELECT FROM provider_cost_imports c WHERE c.supersedes=i.id)")
+    let overlaps: Vec<(Uuid, UtcInstant, UtcInstant)> = sqlx::query_as("SELECT id,period_start,period_end FROM provider_cost_imports i WHERE account_id=$1 AND period_start<$3 AND period_end>$2 AND NOT EXISTS(SELECT FROM provider_cost_imports c WHERE c.supersedes=i.id)")
         .bind(&b.account_id).bind(parsed.start).bind(parsed.end).fetch_all(&mut *tx).await?;
     match (b.supersedes, overlaps.as_slice()) {
         (None, []) => {}
@@ -168,8 +168,8 @@ pub(super) struct Binding {
     connection_id: Uuid,
     deployment_id: Option<Uuid>,
     workspace_id: Option<Uuid>,
-    effective_start: DateTime<Utc>,
-    effective_end: DateTime<Utc>,
+    effective_start: UtcInstant,
+    effective_end: UtcInstant,
     exclusive: bool,
     non_omg_traffic: bool,
     attested: bool,
@@ -356,7 +356,7 @@ async fn reconcile(
 ) -> ApiResult {
     let b = json_body(body)?;
     let mut tx = write_tx(&s, &u).await?;
-    let (account, start, end): (String, DateTime<Utc>, DateTime<Utc>) = sqlx::query_as(
+    let (account, start, end): (String, UtcInstant, UtcInstant) = sqlx::query_as(
         "SELECT account_id,period_start,period_end FROM provider_cost_imports WHERE id=$1",
     )
     .bind(b.import_id)

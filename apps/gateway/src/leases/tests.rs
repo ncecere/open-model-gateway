@@ -64,15 +64,15 @@ async fn exactly_one_of_three_replicas_holds_each_lease(pool: PgPool) {
 }
 
 /// [`SHORT`] as a database-timestamp difference.
-fn term() -> chrono::Duration {
-    chrono::Duration::from_std(SHORT).unwrap()
+fn term() -> gateway_datetime_compat::SignedDuration {
+    gateway_datetime_compat::SignedDuration::try_from(SHORT).unwrap()
 }
 
 /// Whether the database's clock has not yet reached `instant`. Expiry is the
 /// database's decision (`omg_lease_acquire` compares against
 /// `clock_timestamp()`), so the test reads the same clock rather than timing
 /// the test process, whose pace under load says nothing about the term.
-async fn db_before(pool: &PgPool, instant: chrono::DateTime<chrono::Utc>) -> bool {
+async fn db_before(pool: &PgPool, instant: gateway_datetime_compat::UtcInstant) -> bool {
     sqlx::query_scalar("SELECT clock_timestamp() < $1")
         .bind(instant)
         .fetch_one(pool)
@@ -81,7 +81,7 @@ async fn db_before(pool: &PgPool, instant: chrono::DateTime<chrono::Utc>) -> boo
 }
 
 /// Block inside the database until its clock has reached `instant`.
-async fn wait_db_until(pool: &PgPool, instant: chrono::DateTime<chrono::Utc>) {
+async fn wait_db_until(pool: &PgPool, instant: gateway_datetime_compat::UtcInstant) {
     while db_before(pool, instant).await {
         sqlx::query(
             "SELECT pg_sleep(GREATEST(EXTRACT(EPOCH FROM ($1 - clock_timestamp())), 0.001))",
@@ -99,8 +99,8 @@ type LeaseRow = (
     String,
     Option<Uuid>,
     i64,
-    Option<chrono::DateTime<chrono::Utc>>,
-    chrono::DateTime<chrono::Utc>,
+    Option<gateway_datetime_compat::UtcInstant>,
+    gateway_datetime_compat::UtcInstant,
 );
 
 async fn lease_rows(pool: &PgPool) -> Vec<LeaseRow> {
@@ -148,8 +148,8 @@ async fn a_dead_holder_is_replaced_after_expiry_and_fenced(pool: PgPool) {
     // The old term as the database recorded it: every timing assertion below
     // is made on these database timestamps, not on how fast this process ran.
     let (old_acquired, old_expires): (
-        chrono::DateTime<chrono::Utc>,
-        chrono::DateTime<chrono::Utc>,
+        gateway_datetime_compat::UtcInstant,
+        gateway_datetime_compat::UtcInstant,
     ) = sqlx::query_as("SELECT acquired_at,expires_at FROM work_leases WHERE name='maintenance'")
         .fetch_one(&pool)
         .await
@@ -188,7 +188,7 @@ async fn a_dead_holder_is_replaced_after_expiry_and_fenced(pool: PgPool) {
     };
     // The new term began no earlier than the old one's expiry, i.e. at least a
     // full term after the old one began (database time, no tolerance needed).
-    let new_acquired: chrono::DateTime<chrono::Utc> =
+    let new_acquired: gateway_datetime_compat::UtcInstant =
         sqlx::query_scalar("SELECT acquired_at FROM work_leases WHERE name='maintenance'")
             .fetch_one(&pool)
             .await

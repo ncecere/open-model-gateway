@@ -472,7 +472,11 @@ mod database {
         record_result(&f.store, deployment.id, None).await.unwrap();
         assert_ne!(version().await, stale, "a stale observation is refreshed");
         let h = health(&f.store, deployment.id).await.unwrap();
-        assert!(h.last_observed_at.unwrap() > chrono::Utc::now() - chrono::TimeDelta::seconds(5));
+        assert!(
+            h.last_observed_at.unwrap()
+                > gateway_datetime_compat::UtcInstant::now()
+                    - gateway_datetime_compat::SignedDuration::seconds(5)
+        );
     }
 
     /// When the observation goes stale while its row is busy (a slow commit
@@ -538,6 +542,10 @@ mod database {
         // Released: the next success refreshes the stale observation.
         record_result(&f.store, deployment.id, None).await.unwrap();
         let h = health(&f.store, deployment.id).await.unwrap();
-        assert!(h.last_observed_at.unwrap() > chrono::Utc::now() - chrono::TimeDelta::seconds(5));
+        assert!(
+            h.last_observed_at.unwrap()
+                > gateway_datetime_compat::UtcInstant::now()
+                    - gateway_datetime_compat::SignedDuration::seconds(5)
+        );
     }
 }

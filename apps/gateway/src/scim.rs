@@ -27,7 +27,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{any, get},
 };
-use chrono::{DateTime, SecondsFormat, Utc};
+use gateway_datetime_compat::UtcInstant;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::{Postgres, Transaction};
@@ -327,8 +327,8 @@ async fn unknown() -> ScimError {
     not_found()
 }
 
-fn ts(value: DateTime<Utc>) -> String {
-    value.to_rfc3339_opts(SecondsFormat::Millis, true)
+fn ts(value: UtcInstant) -> String {
+    gateway_datetime_compat::format::scim_millis(value)
 }
 
 fn body_json(bytes: &Bytes) -> Result<Value, ScimError> {
@@ -615,7 +615,7 @@ pub(crate) async fn summary(
     let Some(rt) = runtime else {
         return Ok(json!({ "enabled": false }));
     };
-    let (users, active, groups, memberships, last): (i64, i64, i64, i64, Option<DateTime<Utc>>) =
+    let (users, active, groups, memberships, last): (i64, i64, i64, i64, Option<UtcInstant>) =
         sqlx::query_as("SELECT (SELECT count(*) FROM scim_users s JOIN users u ON u.id=s.user_id WHERE u.cleaned_at IS NULL),(SELECT count(*) FROM scim_users s JOIN users u ON u.id=s.user_id WHERE u.cleaned_at IS NULL AND s.active),(SELECT count(*) FROM scim_groups),(SELECT count(*) FROM scim_group_members m JOIN users u ON u.id=m.user_id WHERE u.cleaned_at IS NULL),(SELECT last_write_at FROM scim_state WHERE singleton)")
             .fetch_one(&mut **tx)
             .await?;

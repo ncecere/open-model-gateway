@@ -31,7 +31,7 @@
 //! makes override rows written without these columns by a replica that predates
 //! migration 0053 harmless. A missing value is never unlimited.
 use super::*;
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 
 pub(super) const WINDOW_SECONDS: i64 = 86_400;
 const REFUSED: &str = "key_issuance_limit_exceeded";
@@ -78,14 +78,14 @@ pub(in crate::management) struct Usage {
     pub(in crate::management) workspace_used: i64,
 }
 /// The database's current time: read once per call, after the workspace lock.
-async fn db_now(tx: &mut Transaction<'_, Postgres>) -> Result<DateTime<Utc>, ApiError> {
+async fn db_now(tx: &mut Transaction<'_, Postgres>) -> Result<UtcInstant, ApiError> {
     Ok(sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut **tx)
         .await?)
 }
 /// Start of the rolling window that ends at `now`.
-fn window_start(now: DateTime<Utc>) -> DateTime<Utc> {
-    now - chrono::Duration::seconds(WINDOW_SECONDS)
+fn window_start(now: UtcInstant) -> UtcInstant {
+    now - gateway_datetime_compat::SignedDuration::seconds(WINDOW_SECONDS)
 }
 /// The effective limits and the counts, in one statement (so one snapshot).
 /// `$1` workspace, `$2` holder, `$3` start of the window.
@@ -110,7 +110,7 @@ pub(in crate::management) async fn usage(
     tx: &mut Transaction<'_, Postgres>,
     ws: Uuid,
     holder: Holder,
-    since: DateTime<Utc>,
+    since: UtcInstant,
 ) -> Result<Usage, ApiError> {
     let (holder_limit, workspace_limit, holder_used, workspace_used): (i64, i64, i64, i64) =
         sqlx::query_as(&usage_sql(holder))
@@ -136,13 +136,13 @@ async fn frees_up(
     holder: Option<Holder>,
     used: i64,
     limit: i64,
-    now: DateTime<Utc>,
-) -> Result<Option<(DateTime<Utc>, i64)>, ApiError> {
+    now: UtcInstant,
+) -> Result<Option<(UtcInstant, i64)>, ApiError> {
     if used < limit {
         return Ok(None);
     }
     let since = window_start(now);
-    let oldest: Option<DateTime<Utc>> = match holder {
+    let oldest: Option<UtcInstant> = match holder {
         Some(h) => {
             sqlx::query_scalar(&format!(
                 "SELECT k.created_at FROM api_keys k WHERE k.workspace_id=$1 AND k.{}=$3 AND k.created_at>$4 ORDER BY k.created_at OFFSET $2 LIMIT 1",
@@ -167,12 +167,15 @@ async fn frees_up(
     // Rows only age out of the window; if the row vanished from it since the
     // count, the budget has room now.
     let at = oldest.map_or(now, |created| {
-        created + chrono::Duration::seconds(WINDOW_SECONDS)
+        created + gateway_datetime_compat::SignedDuration::seconds(WINDOW_SECONDS)
     });
-    let seconds = ((at - now).num_milliseconds() + 999)
+    let seconds = ((at - now).whole_milliseconds() + 999)
         .div_euclid(1000)
         .max(1);
-    Ok(Some((at, seconds)))
+    Ok(Some((
+        at,
+        i64::try_from(seconds).expect("issuance window fits i64 seconds"),
+    )))
 }
 
 /// Refuses (429) when this issuance would exceed the holder's or the
@@ -234,7 +237,7 @@ pub(in crate::management) async fn check(
     Ok(())
 }
 
-fn block(used: i64, limit: i64, next: Option<(DateTime<Utc>, i64)>) -> Value {
+fn block(used: i64, limit: i64, next: Option<(UtcInstant, i64)>) -> Value {
     json!({"used":used,"limit":limit,"next_available_at":next.map(|(at, _)| at)})
 }
 /// `GET /workspaces/{ws}/key-issuance`: the caller's own budget, and for

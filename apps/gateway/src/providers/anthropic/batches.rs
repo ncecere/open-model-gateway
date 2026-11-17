@@ -76,7 +76,7 @@ pub(super) fn encode_native_line(
 fn timestamp(value: &Value) -> Option<i64> {
     value
         .as_str()
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .and_then(|s| gateway_datetime_compat::http::parse_rfc3339(s).ok())
         .map(|t| t.timestamp())
 }
 

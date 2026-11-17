@@ -2,6 +2,7 @@
 //! rejections, single-key reads, usage/records filters, string series,
 //! installation budget usage, platform member privacy and model `created_at`.
 use super::*;
+use gateway_datetime_compat::UtcInstant;
 
 async fn key_count(pool: &PgPool, ws: Uuid) -> i64 {
     sqlx::query_scalar("SELECT count(*) FROM api_keys WHERE workspace_id=$1")
@@ -328,11 +329,11 @@ async fn usage_and_records_filters_are_strict_scoped_and_series_are_strings(pool
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{service_key}");
-    let today = Utc::now().date_naive();
+    let today = UtcInstant::now().date_naive();
     let range = format!(
         "start_date={}&end_date={}",
-        today - chrono::TimeDelta::days(6),
-        today + chrono::TimeDelta::days(1)
+        today - gateway_datetime_compat::SignedDuration::days(6),
+        today + gateway_datetime_compat::SignedDuration::days(1)
     );
     attempt(
         &pool,
@@ -604,11 +605,11 @@ async fn platform_member_rows_show_totals_never_personal_key_identity(pool: PgPo
         },
     )
     .await;
-    let today = Utc::now().date_naive();
+    let today = UtcInstant::now().date_naive();
     let range = format!(
         "start_date={}&end_date={}",
-        today - chrono::TimeDelta::days(1),
-        today + chrono::TimeDelta::days(1)
+        today - gateway_datetime_compat::SignedDuration::days(1),
+        today + gateway_datetime_compat::SignedDuration::days(1)
     );
     let private = |v: &Value| {
         let s = v.to_string();

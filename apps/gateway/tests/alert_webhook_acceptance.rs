@@ -12,6 +12,7 @@ use axum::{
     response::IntoResponse,
     routing::post,
 };
+use open_model_gateway::timestamp::TimestampFormat as _;
 use open_model_gateway::{admin_tokens, governance::locks};
 use serde_json::{Value, json};
 use sqlx::{ConnectOptions, PgPool};
@@ -246,7 +247,7 @@ async fn serve_signed_fire_clear_restart_fixed_test_and_refusals(pool: PgPool) {
     let mut gateway = start(&database, &addr, &urls);
     ready(&mut gateway, &client, &base).await;
     let dest = create(&client, &base, &token.token, &urls[0]).await;
-    assert_eq!(client.patch(format!("{base}/api/v1/platform/alerts/webhooks/{dest}")).bearer_auth(&token.token).json(&json!({"previous_secret_ref":"env:HOOK_PREVIOUS","previous_secret_until":(chrono::Utc::now()+chrono::Duration::hours(1)).to_rfc3339()})).send().await.unwrap().status(),200);
+    assert_eq!(client.patch(format!("{base}/api/v1/platform/alerts/webhooks/{dest}")).bearer_auth(&token.token).json(&json!({"previous_secret_ref":"env:HOOK_PREVIOUS","previous_secret_until":(gateway_datetime_compat::UtcInstant::now()+gateway_datetime_compat::SignedDuration::hours(1)).to_rfc3339()})).send().await.unwrap().status(),200);
     let event:Uuid=sqlx::query_scalar("INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),'history_orphans','history_orphans',gen_random_uuid()::text,1,'warning','PRIVATE CANARY') RETURNING id").fetch_one(&pool).await.unwrap();
     sqlx::query(
         "INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),$1,'fired')",

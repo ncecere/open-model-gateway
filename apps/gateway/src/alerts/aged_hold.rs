@@ -1,5 +1,6 @@
 //! Fixed, built-in unknown-hold review incidents (#101). No accounting writes.
 use super::*;
+use gateway_datetime_compat::UtcInstant;
 
 pub const AGED_HOLD_WARNING_HOURS: i64 = 24;
 pub const AGED_HOLD_CRITICAL_HOURS: i64 = 168;
@@ -67,7 +68,7 @@ impl AgedHoldCounts {
     }
 }
 
-type AgedHoldCandidate = (String, Option<Uuid>, DateTime<Utc>, bool);
+type AgedHoldCandidate = (String, Option<Uuid>, UtcInstant, bool);
 type AgedHoldRetirement = (Uuid, String);
 
 /// One serialized/fenced job. All time comes from the post-lock database
@@ -76,7 +77,7 @@ type AgedHoldRetirement = (Uuid, String);
 /// scopes retire even when no unknown reservations remain anywhere.
 pub(crate) async fn aged_hold_tick(
     tx: &mut Transaction<'_, Postgres>,
-    now: DateTime<Utc>,
+    now: UtcInstant,
 ) -> Result<(Changes, AgedHoldCounts), sqlx::Error> {
     let mut counts = AgedHoldCounts::default();
     let (_, unknown): (i64, i64) = sqlx::query_as(crate::governance::totals::RESERVATION_COUNTS)

@@ -1,5 +1,6 @@
 use super::*;
 use axum::{body::Body, http::Method};
+use gateway_datetime_compat::UtcInstant;
 use tower::ServiceExt;
 
 const TOKEN: &str = "scim-test-token-0123456789abcdefghijklmnop";
@@ -699,11 +700,10 @@ mod database {
             .await;
             assert_eq!(status, StatusCode::NOT_FOUND);
         }
-        let last: Option<DateTime<Utc>> =
-            sqlx::query_scalar("SELECT last_write_at FROM scim_state")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let last: Option<UtcInstant> = sqlx::query_scalar("SELECT last_write_at FROM scim_state")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert!(last.is_some());
         let audit: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE action IN ('scim.user.created','scim.user.updated') AND actor_user_id IS NULL").fetch_one(&pool).await.unwrap();
         assert_eq!(audit, 2);

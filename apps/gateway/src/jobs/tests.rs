@@ -1,6 +1,7 @@
 //! Pure job-service units: configuration, settlement mapping, rendering.
 use super::*;
 use crate::billing::MeterVariant;
+use gateway_datetime_compat::UtcInstant;
 
 #[test]
 fn limits_parse_strictly() {
@@ -59,12 +60,12 @@ fn row(state: &str) -> JobRow {
         upstream_status: Some(state.into()),
         progress: None,
         error_code: Some("moderation_blocked".into()),
-        created_at: Utc::now(),
+        created_at: UtcInstant::now(),
         completed_at: None,
         expires_at: None,
         cancel_requested_at: None,
         deleted_at: None,
-        poll_deadline_at: Utc::now(),
+        poll_deadline_at: UtcInstant::now(),
         settled_at: None,
         video_seconds: Some(8),
         video_size: Some("720x1280".into()),
@@ -179,7 +180,7 @@ fn rendering_uses_gateway_ids_and_no_content() {
     // Terminal rows show their state; legacy rows their 0016 file ids.
     let mut done = b.clone();
     done.state = "cancelled".into();
-    done.completed_at = Some(Utc::now());
+    done.completed_at = Some(UtcInstant::now());
     let legacy = Uuid::new_v4();
     let v = batch::render_batch(&done, Some((Some(legacy), None, None)));
     assert_eq!(v["status"], "cancelled");

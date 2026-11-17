@@ -4,6 +4,7 @@ use super::*;
 use crate::providers::bedrock::auth::{
     self, AwsAuth, Plan, Policy, connection_valid, valid_upstream_model,
 };
+use crate::timestamp::TimestampFormat as _;
 use aws_sdk_bedrockruntime::config::{Credentials, ProvideCredentials, SharedCredentialsProvider};
 
 const ROLE: &str = "arn:aws:iam::123456789012:role/gateway/bedrock-invoke";
@@ -371,7 +372,7 @@ async fn an_sts_response_date_never_moves_the_signing_time() {
                 .header("content-type", "text/xml")
                 .header(
                     "date",
-                    (chrono::Utc::now() - chrono::Duration::hours(1))
+                    (gateway_datetime_compat::UtcInstant::now() - gateway_datetime_compat::SignedDuration::hours(1))
                         .format("%a, %d %b %Y %H:%M:%S GMT")
                         .to_string(),
                 )
@@ -403,10 +404,10 @@ async fn an_sts_response_date_never_moves_the_signing_time() {
     let dates = dates.lock().unwrap().clone();
     assert_eq!(dates.len(), 3);
     for (index, signed) in dates.iter().enumerate() {
-        let signed = chrono::NaiveDateTime::parse_from_str(signed, "%Y%m%dT%H%M%SZ")
-            .unwrap()
-            .and_utc();
-        let off = (chrono::Utc::now() - signed).num_seconds().abs();
+        let signed = crate::timestamp::parse_sigv4(signed).unwrap();
+        let off = (gateway_datetime_compat::UtcInstant::now() - signed)
+            .whole_seconds()
+            .abs();
         assert!(
             off < 300,
             "request {index} was signed {off} s away from this host's clock"

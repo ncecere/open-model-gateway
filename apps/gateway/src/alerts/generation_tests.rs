@@ -1,5 +1,6 @@
 //! #277: real PostgreSQL admission, concurrency and rolling-upgrade oracles.
 use super::*;
+use gateway_datetime_compat::UtcInstant;
 
 pub(super) async fn generation_rule(s: &Seed, workspace: Option<Uuid>) -> Uuid {
     match workspace {
@@ -236,8 +237,13 @@ async fn alert_generation_real_reconcile_and_key_expiry_lock_order(pool: PgPool)
     sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) VALUES($1,$2,'owner','manual')").bind(ws).bind(s.owner).execute(&s.pool).await.unwrap();
     let now = expiry_now(&s).await;
     sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash,expires_at) VALUES($1,$2,$3,'Other',decode(repeat('42',32),'hex'),$4)")
-        .bind(key).bind(ws).bind(s.owner).bind(now+chrono::Duration::days(2)).execute(&s.pool).await.unwrap();
-    set_expiry(&s, s.key, Some(now + chrono::Duration::days(3))).await;
+        .bind(key).bind(ws).bind(s.owner).bind(now+gateway_datetime_compat::SignedDuration::days(2)).execute(&s.pool).await.unwrap();
+    set_expiry(
+        &s,
+        s.key,
+        Some(now + gateway_datetime_compat::SignedDuration::days(3)),
+    )
+    .await;
     let r = generation_rule(&s, None).await;
     // Key expiry visits ws then team (expiry order); reconciliation visits
     // team then ws. Neither may lock incrementally in that visit order.
@@ -324,13 +330,12 @@ async fn alert_generation_clock_boundary_forgery_and_isolation(pool: PgPool) {
     let before = expiry_now(&s).await;
     sqlx::query("INSERT INTO alert_deliveries(id,event_id,transition,bucket_id,created_at,quota_charged,suppression_reason) VALUES(gen_random_uuid(),$1,'fired',$2,'2000-01-01',false,'workspace_generation_limit')")
         .bind(ids[0]).bind(s.personal).execute(&s.pool).await.unwrap();
-    let (bucket, at, charged, reason): (Uuid, DateTime<Utc>, bool, Option<String>) =
-        sqlx::query_as(
-            "SELECT bucket_id,created_at,quota_charged,suppression_reason FROM alert_deliveries",
-        )
-        .fetch_one(&s.pool)
-        .await
-        .unwrap();
+    let (bucket, at, charged, reason): (Uuid, UtcInstant, bool, Option<String>) = sqlx::query_as(
+        "SELECT bucket_id,created_at,quota_charged,suppression_reason FROM alert_deliveries",
+    )
+    .fetch_one(&s.pool)
+    .await
+    .unwrap();
     assert_eq!(bucket, s.team);
     assert!(at >= before);
     assert!(charged);
@@ -480,7 +485,12 @@ async fn alert_generation_recipient_50_51_and_suppressed_terminal(pool: PgPool) 
     );
     // Neither critical severity nor the urgent 1-day reminder bypasses quota.
     let now = expiry_now(&s).await;
-    set_expiry(&s, s.key, Some(now + chrono::Duration::hours(12))).await;
+    set_expiry(
+        &s,
+        s.key,
+        Some(now + gateway_datetime_compat::SignedDuration::hours(12)),
+    )
+    .await;
     assert_eq!(expiry_tick(&s, now).await.fired, 1);
     let urgent: (String,i32,i32) = sqlx::query_as("SELECT d.status,d.recipients,d.attempt_count FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id WHERE e.kind='key_expiring'").fetch_one(&s.pool).await.unwrap();
     assert_eq!(urgent, ("suppressed".into(), 0, 0));

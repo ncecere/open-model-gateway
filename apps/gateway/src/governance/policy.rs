@@ -1,5 +1,6 @@
 //! Budget periods and the applicable policy and budget rows of an admission.
 use super::*;
+use gateway_datetime_compat::UtcInstant;
 /// Budget window of one policy budget. Each scope (type default, workspace
 /// override, workspace local, key lineage) may hold at most
 /// one budget per period; every applicable budget is enforced over its own
@@ -41,10 +42,10 @@ impl BudgetPeriod {
     }
     /// Half-open UTC window `[start, end)` containing `at`. A lifetime budget
     /// spans every admission (no consumption predates its scope).
-    pub fn window(self, at: DateTime<Utc>) -> (DateTime<Utc>, DateTime<Utc>) {
-        use chrono::{Datelike, NaiveDate, TimeDelta};
+    pub fn window(self, at: UtcInstant) -> (UtcInstant, UtcInstant) {
+        use gateway_datetime_compat::{CalendarDate, SignedDuration as TimeDelta};
         let date = at.date_naive();
-        let midnight = |d: NaiveDate| d.and_time(chrono::NaiveTime::MIN).and_utc();
+        let midnight = |d: CalendarDate| d.midnight().expect("midnight");
         match self {
             Self::Day => {
                 let start = midnight(date);
@@ -52,25 +53,25 @@ impl BudgetPeriod {
             }
             Self::Week => {
                 let monday =
-                    date - TimeDelta::days(i64::from(date.weekday().num_days_from_monday()));
+                    date - TimeDelta::days(i64::from(date.weekday().number_days_from_monday()));
                 let start = midnight(monday);
                 (start, start + TimeDelta::days(7))
             }
             Self::Month => {
                 let first = date.with_day(1).unwrap_or(date);
                 let next = if first.month() == 12 {
-                    NaiveDate::from_ymd_opt(first.year() + 1, 1, 1)
+                    CalendarDate::from_ymd_opt(first.year() + 1, 1, 1)
                 } else {
-                    NaiveDate::from_ymd_opt(first.year(), first.month() + 1, 1)
+                    CalendarDate::from_ymd_opt(first.year(), u32::from(first.month()) + 1, 1)
                 }
                 .unwrap_or(first);
                 (midnight(first), midnight(next))
             }
             Self::Lifetime => (
-                DateTime::<Utc>::UNIX_EPOCH,
-                NaiveDate::from_ymd_opt(9999, 1, 1)
+                UtcInstant::UNIX_EPOCH,
+                CalendarDate::from_ymd_opt(9999, 1, 1)
                     .map(midnight)
-                    .unwrap_or(DateTime::<Utc>::MAX_UTC),
+                    .unwrap_or(UtcInstant::MAX_UTC),
             ),
         }
     }

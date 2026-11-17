@@ -8,14 +8,14 @@ struct UserRow {
     email: String,
     display_name: Option<String>,
     enabled: bool,
-    user_created: DateTime<Utc>,
+    user_created: UtcInstant,
     user_name: Option<String>,
     external_id: Option<String>,
     given_name: Option<String>,
     family_name: Option<String>,
     scim_active: Option<bool>,
-    scim_created: Option<DateTime<Utc>>,
-    scim_updated: Option<DateTime<Utc>>,
+    scim_created: Option<UtcInstant>,
+    scim_updated: Option<UtcInstant>,
 }
 
 const USER_SELECT: &str = "SELECT u.id,u.email,u.display_name,u.disabled_at IS NULL AS enabled,u.created_at AS user_created,s.user_name,s.external_id,s.given_name,s.family_name,s.active AS scim_active,s.created_at AS scim_created,s.updated_at AS scim_updated FROM users u LEFT JOIN scim_users s ON s.user_id=u.id WHERE u.cleaned_at IS NULL AND u.email IS NOT NULL";

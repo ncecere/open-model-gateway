@@ -1,6 +1,6 @@
 //! Saved platform receivers only. No network I/O or secret resolution here.
 use super::*;
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 
 pub(super) fn routes() -> Router<Store> {
     Router::new()
@@ -221,7 +221,7 @@ struct Patch {
     #[serde(default, deserialize_with = "present")]
     previous_secret_ref: Option<Option<String>>,
     #[serde(default, deserialize_with = "present")]
-    previous_secret_until: Option<Option<DateTime<Utc>>>,
+    previous_secret_until: Option<Option<UtcInstant>>,
 }
 #[test]
 fn management_openapi_manual_webhook_request_vectors() {
@@ -234,7 +234,7 @@ fn management_openapi_manual_webhook_request_vectors() {
     vectors::<Patch>(
         "PATCH",
         "/api/v1/platform/alerts/webhooks/{id}",
-        json!({"label":"Renamed", "enabled":true, "current_secret_ref":"env:HOOK_CURRENT", "previous_secret_ref":"env:HOOK_PREVIOUS", "previous_secret_until":chrono::Utc::now()+chrono::Duration::hours(1)}),
+        json!({"label":"Renamed", "enabled":true, "current_secret_ref":"env:HOOK_CURRENT", "previous_secret_ref":"env:HOOK_PREVIOUS", "previous_secret_until":gateway_datetime_compat::UtcInstant::now()+gateway_datetime_compat::SignedDuration::hours(1)}),
     );
 }
 
@@ -245,7 +245,7 @@ struct Saved {
     enabled: bool,
     current_secret_ref: String,
     previous_secret_ref: Option<String>,
-    previous_secret_until: Option<DateTime<Utc>>,
+    previous_secret_until: Option<UtcInstant>,
 }
 async fn update(
     State(s): State<Store>,
@@ -297,10 +297,10 @@ async fn update(
     }
     let rotating = b.previous_secret_ref.is_some() || b.previous_secret_until.is_some();
     if rotating && let Some(until) = until {
-        let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        let now: UtcInstant = sqlx::query_scalar("SELECT clock_timestamp()")
             .fetch_one(&mut *tx)
             .await?;
-        if until <= now || until > now + chrono::Duration::hours(24) {
+        if until <= now || until > now + gateway_datetime_compat::SignedDuration::hours(24) {
             return Err(invalid());
         }
     }

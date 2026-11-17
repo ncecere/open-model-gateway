@@ -2,6 +2,7 @@
 // Exact band/cap tests below call the tick with a captured DATABASE timestamp,
 // just like the key-expiry tests; production must obtain it after fencing.
 use super::*;
+use gateway_datetime_compat::UtcInstant;
 use sqlx::PgPool;
 
 use super::generation::{GENERATE, generation_events, generation_rule};
@@ -13,7 +14,7 @@ mod metrics;
 #[path = "aged_hold_reconciliation_tests.rs"]
 mod reconciliation;
 
-async fn tick(s: &Seed, now: DateTime<Utc>) -> Changes {
+async fn tick(s: &Seed, now: UtcInstant) -> Changes {
     let mut tx = s.pool.begin().await.unwrap();
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(EVALUATION_LOCK)
@@ -25,7 +26,7 @@ async fn tick(s: &Seed, now: DateTime<Utc>) -> Changes {
     result
 }
 
-async fn hold_since(s: &Seed, ws: Uuid, key: Uuid, since: DateTime<Utc>) {
+async fn hold_since(s: &Seed, ws: Uuid, key: Uuid, since: UtcInstant) {
     attempt(s, ws, key, "failed", None, "unknown", None, 12000).await;
     sqlx::query("INSERT INTO monetary_ledger(id,execution_id,admitted_at,kind,created_at) SELECT gen_random_uuid(),r.execution_id,r.admitted_at,'unknown',$2 FROM governance_reservations r WHERE r.workspace_id=$1 AND r.state='unknown' AND NOT EXISTS(SELECT 1 FROM monetary_ledger l WHERE l.execution_id=r.execution_id AND l.admitted_at=r.admitted_at AND l.kind='unknown')")
         .bind(ws).bind(since).execute(&s.pool).await.unwrap();

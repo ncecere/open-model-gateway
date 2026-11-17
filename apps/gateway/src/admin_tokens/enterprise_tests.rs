@@ -3,6 +3,7 @@
 //! authorization, the parser's no-DB-access refusal and the last-use
 //! throttle. Runtime-role ACL probes live in `tests/runtime_privileges.rs`.
 use super::*;
+use gateway_datetime_compat::UtcInstant;
 use sqlx::PgPool;
 
 /// Test convenience: `create_admin_token` on a transaction of its own
@@ -486,14 +487,14 @@ async fn revocation_is_final_and_revoke_is_idempotent(pool: PgPool) {
         .unwrap();
     assert!(revoke(&pool, created.id).await);
     // Idempotent: revoking again is not an error and does not move the time.
-    let first: DateTime<Utc> =
+    let first: UtcInstant =
         sqlx::query_scalar("SELECT revoked_at FROM admin_api_tokens WHERE id=$1")
             .bind(created.id)
             .fetch_one(&pool)
             .await
             .unwrap();
     assert!(revoke(&pool, created.id).await);
-    let second: DateTime<Utc> =
+    let second: UtcInstant =
         sqlx::query_scalar("SELECT revoked_at FROM admin_api_tokens WHERE id=$1")
             .bind(created.id)
             .fetch_one(&pool)
@@ -1015,41 +1016,41 @@ async fn concurrent_demotion_blocks_and_then_fails_a_pending_create(pool: PgPool
 }
 
 /// Coordinator review of #37 PR1, issue 3: `created_at`/`expires_at` came
-/// from the app's `Utc::now()`, but expiry is enforced against the
+/// from the app's `UtcInstant::now()`, but expiry is enforced against the
 /// database's `clock_timestamp()`. A skewed app clock could let a token
 /// outlive 90 real days, or be created already expired. Both timestamps
 /// must come from one database instant.
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn created_at_and_expires_at_come_from_the_database_clock_not_the_app(pool: PgPool) {
     let owner = admin(&pool, "clock@test.invalid").await;
-    let before: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+    let before: UtcInstant = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&pool)
         .await
         .unwrap();
     let created = create(&pool, owner, "n", &scopes(&["platform:read"]), 30, None)
         .await
         .unwrap();
-    let after: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+    let after: UtcInstant = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&pool)
         .await
         .unwrap();
     assert!(
-        created.created_at >= before - chrono::Duration::seconds(1),
+        created.created_at >= before - gateway_datetime_compat::SignedDuration::seconds(1),
         "created_at={:?} before={before:?}",
         created.created_at
     );
     assert!(
-        created.created_at <= after + chrono::Duration::seconds(1),
+        created.created_at <= after + gateway_datetime_compat::SignedDuration::seconds(1),
         "created_at={:?} after={after:?}",
         created.created_at
     );
     assert_eq!(
         created.expires_at - created.created_at,
-        chrono::Duration::days(30)
+        gateway_datetime_compat::SignedDuration::days(30)
     );
     // The returned timestamps are exactly what the row stores, not a
     // separately-computed app-side echo of them.
-    let (db_created, db_expires): (DateTime<Utc>, DateTime<Utc>) =
+    let (db_created, db_expires): (UtcInstant, UtcInstant) =
         sqlx::query_as("SELECT created_at,expires_at FROM admin_api_tokens WHERE id=$1")
             .bind(created.id)
             .fetch_one(&pool)
@@ -1237,7 +1238,7 @@ async fn last_use_is_throttled_to_once_per_five_minutes(pool: PgPool) {
         .touch_admin_token_use(created.id, Some("203.0.113.5".parse().unwrap()))
         .await
         .unwrap();
-    let (first_at, first_addr): (DateTime<Utc>, String) = sqlx::query_as(
+    let (first_at, first_addr): (UtcInstant, String) = sqlx::query_as(
         "SELECT last_used_at,host(last_used_address) FROM admin_api_tokens WHERE id=$1",
     )
     .bind(created.id)
@@ -1250,7 +1251,7 @@ async fn last_use_is_throttled_to_once_per_five_minutes(pool: PgPool) {
         .touch_admin_token_use(created.id, Some("198.51.100.9".parse().unwrap()))
         .await
         .unwrap();
-    let (second_at, second_addr): (DateTime<Utc>, String) = sqlx::query_as(
+    let (second_at, second_addr): (UtcInstant, String) = sqlx::query_as(
         "SELECT last_used_at,host(last_used_address) FROM admin_api_tokens WHERE id=$1",
     )
     .bind(created.id)

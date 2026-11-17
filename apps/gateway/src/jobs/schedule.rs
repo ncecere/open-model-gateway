@@ -27,7 +27,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -181,7 +181,7 @@ pub struct CompiledWindow {
 }
 impl CompiledWindow {
     /// Whether a line may start at `at`.
-    pub fn allows(&self, at: DateTime<Utc>) -> bool {
+    pub fn allows(&self, at: UtcInstant) -> bool {
         let Ok(ts) = jiff::Timestamp::from_second(at.timestamp()) else {
             return false;
         };
@@ -683,7 +683,7 @@ impl Scheduler {
         let mut pause = compiled
             .window
             .as_ref()
-            .is_some_and(|w| !w.allows(Utc::now()))
+            .is_some_and(|w| !w.allows(UtcInstant::now()))
             .then_some(Pause::OutsideWindow);
         if pause.is_none()
             && let Some(threshold) = s.yield_live_threshold

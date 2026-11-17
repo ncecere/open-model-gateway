@@ -3,7 +3,7 @@
 //! and list. Native batches are then driven by the poller (`native`),
 //! gateway-run batches by the batch runner (`runner`). Batches created by
 //! the 0016 passthrough are still polled until settled (`refresh_legacy`).
-use chrono::Utc;
+use gateway_datetime_compat::UtcInstant;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
@@ -123,7 +123,7 @@ pub fn render_batch(
     job: &JobRow,
     legacy: Option<(Option<Uuid>, Option<Uuid>, Option<Uuid>)>,
 ) -> Value {
-    let unix = |t: Option<chrono::DateTime<Utc>>| t.map(|t| t.timestamp());
+    let unix = |t: Option<gateway_datetime_compat::UtcInstant>| t.map(|t| t.timestamp());
     let file = |id: Option<Uuid>| id.map(public_id);
     let (input, output, error) = match legacy {
         Some(files) => files,
@@ -166,7 +166,8 @@ pub fn render_batch(
 }
 
 /// The 24 h completion window.
-pub const BATCH_WINDOW: chrono::TimeDelta = chrono::TimeDelta::hours(24);
+pub const BATCH_WINDOW: gateway_datetime_compat::SignedDuration =
+    gateway_datetime_compat::SignedDuration::hours(24);
 
 impl Jobs {
     /// `POST /v1/batches`: validate the input, choose the mode and admit the
@@ -370,7 +371,9 @@ impl Jobs {
             Some(BatchMode::Native) if job.upstream_id.is_none() => {
                 if store::cancel_unsubmitted(&self.store, job.id).await? {
                     // Nothing reached the provider: release the ceiling.
-                    let elapsed = (Utc::now() - job.created_at).num_milliseconds().max(0) as u64;
+                    let elapsed = (UtcInstant::now() - job.created_at)
+                        .whole_milliseconds()
+                        .max(0) as u64;
                     crate::governance::batch::close_batch(
                         &self.store,
                         job.execution_id,

@@ -1,7 +1,7 @@
 //! Readable allowlisted snapshots, authorized on every read. Never reconstruct
 //! legacy values from live configuration. IDs survive target removal/renaming.
 use super::*;
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,10 +40,10 @@ async fn read(
     s: &Store,
     u: &ManagementPrincipal,
     id: Uuid,
-    cursor: Option<(DateTime<Utc>, Uuid)>,
+    cursor: Option<(UtcInstant, Uuid)>,
     change: Option<Uuid>,
     limit: i64,
-) -> Result<Vec<(Value, DateTime<Utc>, Uuid)>, ApiError> {
+) -> Result<Vec<(Value, UtcInstant, Uuid)>, ApiError> {
     if u.token_id().is_some() {
         return Err(denied());
     }

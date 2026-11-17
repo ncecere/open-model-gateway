@@ -555,7 +555,7 @@ async fn test_email(
     if mine >= TESTS_PER_MINUTE || all >= TESTS_PER_HOUR {
         return Err(ApiError(StatusCode::TOO_MANY_REQUESTS, EMAIL_TEST_LIMIT));
     }
-    let (name, updated_at): (String, chrono::DateTime<chrono::Utc>) = sqlx::query_as("SELECT i.name,s.updated_at FROM installation i JOIN installation_settings s ON s.singleton WHERE i.singleton")
+    let (name, updated_at): (String, gateway_datetime_compat::UtcInstant) = sqlx::query_as("SELECT i.name,s.updated_at FROM installation i JOIN installation_settings s ON s.singleton WHERE i.singleton")
         .fetch_one(&mut *tx)
         .await?;
     audit(

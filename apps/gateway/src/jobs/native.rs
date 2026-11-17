@@ -20,7 +20,7 @@ use super::{
     store::Finished,
     *,
 };
-use chrono::Utc;
+use gateway_datetime_compat::UtcInstant;
 
 /// Longer than one submission may take; afterwards an unfinished submission
 /// is treated as interrupted.
@@ -33,7 +33,9 @@ impl Jobs {
             return match job.submit_started_at {
                 None if job.cancel_requested_at.is_none() => self.submit_native(job).await,
                 None => Ok(()),
-                Some(at) if Utc::now() - at > SUBMIT_GRACE => self.submission_lost(job).await,
+                Some(at) if UtcInstant::now() - at > SUBMIT_GRACE => {
+                    self.submission_lost(job).await
+                }
                 Some(_) => Ok(()),
             };
         }

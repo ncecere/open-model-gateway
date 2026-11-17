@@ -29,7 +29,7 @@ use crate::{
     db::accounting_failure::{Waiting, settlement_waiting},
     inference::realtime::{RealtimeFinish, RealtimeUsage, ResponseBound, ResponseStatus},
 };
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 
 impl Price {
     /// `(text input, audio input, output)` ceilings of a window: each input
@@ -109,8 +109,8 @@ struct Session {
     deployment_id: Uuid,
     price_id: Option<Uuid>,
     state: String,
-    admitted_at: DateTime<Utc>,
-    minute_start: DateTime<Utc>,
+    admitted_at: UtcInstant,
+    minute_start: UtcInstant,
     held_microusd: Option<i64>,
     unbounded_cost: bool,
     workload_kind: String,

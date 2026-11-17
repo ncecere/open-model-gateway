@@ -4,13 +4,14 @@
 use super::*;
 use crate::governance::tests::db::fixture;
 use crate::partitions::tests::seed_history;
-use chrono::TimeDelta;
+use gateway_datetime_compat::SignedDuration as TimeDelta;
+use gateway_datetime_compat::UtcInstant;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 /// Rows of `omg_usage_rows` and of the raw aggregation over `[lo, hi)` that
 /// are not in the other (multiset difference, both ways).
-async fn differences(pool: &PgPool, lo: DateTime<Utc>, hi: DateTime<Utc>) -> i64 {
+async fn differences(pool: &PgPool, lo: UtcInstant, hi: UtcInstant) -> i64 {
     sqlx::query_scalar("SELECT (SELECT count(*) FROM (SELECT * FROM omg_usage_rows($1,$2) EXCEPT ALL SELECT * FROM omg_usage_aggregate($1,$2)) a)+(SELECT count(*) FROM (SELECT * FROM omg_usage_aggregate($1,$2) EXCEPT ALL SELECT * FROM omg_usage_rows($1,$2)) b)")
         .bind(lo)
         .bind(hi)
@@ -19,7 +20,7 @@ async fn differences(pool: &PgPool, lo: DateTime<Utc>, hi: DateTime<Utc>) -> i64
         .unwrap()
 }
 
-async fn hour(pool: &PgPool, back: i64) -> DateTime<Utc> {
+async fn hour(pool: &PgPool, back: i64) -> UtcInstant {
     sqlx::query_scalar("SELECT date_trunc('hour',now(),'UTC')-make_interval(hours=>$1::int)")
         .bind(back as i32)
         .fetch_one(pool)
@@ -32,7 +33,7 @@ async fn rollups_equal_raw_history_and_follow_late_changes(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     let lo = hour(&pool, 72).await;
     let hi = hour(&pool, 2).await;
-    seed_history(&pool, &f, "r1-", 4000, lo, (hi - lo).num_seconds(), true).await;
+    seed_history(&pool, &f, "r1-", 4000, lo, (hi - lo).whole_seconds(), true).await;
     // Seeded rows of ended hours left change markers (a late write).
     let marks: i64 =
         sqlx::query_scalar("SELECT count(DISTINCT hour_start) FROM usage_rollup_dirty")
@@ -54,7 +55,7 @@ async fn rollups_equal_raw_history_and_follow_late_changes(pool: PgPool) {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(rolled, (hi - lo).num_hours());
+    assert_eq!(rolled, (hi - lo).whole_hours());
     let open: i64 =
         sqlx::query_scalar("SELECT count(*) FROM usage_rollup_dirty WHERE hour_start<$1")
             .bind(hi)
@@ -84,7 +85,7 @@ async fn rollups_equal_raw_history_and_follow_late_changes(pool: PgPool) {
     // readers use raw for it until the job recomputes it.
     let id: Uuid = sqlx::query_scalar("SELECT execution_id FROM governance_reservations WHERE state='unknown' AND admitted_at>=$1 AND admitted_at<$2 ORDER BY 1 LIMIT 1")
         .bind(lo).bind(hi).fetch_one(&pool).await.unwrap();
-    let changed_hour: DateTime<Utc> = sqlx::query_scalar("UPDATE governance_reservations SET state='settled',actual_microusd=4242,input_tokens=1,output_tokens=1 WHERE execution_id=$1 RETURNING date_trunc('hour',admitted_at,'UTC')")
+    let changed_hour: UtcInstant = sqlx::query_scalar("UPDATE governance_reservations SET state='settled',actual_microusd=4242,input_tokens=1,output_tokens=1 WHERE execution_id=$1 RETURNING date_trunc('hour',admitted_at,'UTC')")
         .bind(id).fetch_one(&pool).await.unwrap();
     let marked: i64 =
         sqlx::query_scalar("SELECT count(*) FROM usage_rollup_dirty WHERE hour_start=$1")
@@ -122,7 +123,7 @@ async fn the_bound_waits_for_running_transactions(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     // A transaction that began (here: 0 hours ago) bounds what may be rolled.
     let mut open = pool.begin().await.unwrap();
-    let started: DateTime<Utc> =
+    let started: UtcInstant =
         sqlx::query_scalar("SELECT date_trunc('hour',transaction_timestamp(),'UTC')")
             .fetch_one(&mut *open)
             .await
@@ -143,7 +144,7 @@ async fn the_bound_waits_for_running_transactions(pool: PgPool) {
 async fn spike_baseline_from_rollups_equals_the_raw_scan(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     let lo = hour(&pool, 200).await;
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
+    let now: UtcInstant = sqlx::query_scalar("SELECT now()")
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -153,7 +154,7 @@ async fn spike_baseline_from_rollups_equals_the_raw_scan(pool: PgPool) {
         "s1-",
         3000,
         lo,
-        (now - lo).num_seconds() - 5,
+        (now - lo).whole_seconds() - 5,
         true,
     )
     .await;

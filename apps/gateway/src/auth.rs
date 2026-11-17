@@ -63,7 +63,7 @@ struct KeyRecord {
     workspace_id: Uuid,
     issued_to_user_id: Option<Uuid>,
     secret_hash: Vec<u8>,
-    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    expires_at: Option<gateway_datetime_compat::UtcInstant>,
 }
 
 impl Store {
@@ -92,7 +92,11 @@ impl Store {
         }
         let hash = digest(token);
         let stamp = match self.caches.keys.get(&self.caches.versions, &hash) {
-            Lookup::Hit(entry) if entry.expires_at.is_none_or(|at| at > chrono::Utc::now()) => {
+            Lookup::Hit(entry)
+                if entry
+                    .expires_at
+                    .is_none_or(|at| at > gateway_datetime_compat::UtcInstant::now()) =>
+            {
                 return Ok(Some(entry.principal));
             }
             Lookup::Hit(_) => {

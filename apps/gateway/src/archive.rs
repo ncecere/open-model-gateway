@@ -25,8 +25,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use chrono::{DateTime, Datelike, Months, NaiveDate, TimeZone, Utc};
 use futures::StreamExt;
+use gateway_datetime_compat::{CalendarDate, UtcInstant};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::{PgConnection, PgPool};
@@ -94,7 +94,7 @@ impl Group {
 /// A month `YYYY-MM` or the pre-partitioning `legacy` partition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Month {
-    Month(NaiveDate),
+    Month(CalendarDate),
     Legacy,
 }
 impl Month {
@@ -106,7 +106,7 @@ impl Month {
         if y.len() != 4 || m.len() != 2 {
             return None;
         }
-        NaiveDate::from_ymd_opt(y.parse().ok()?, m.parse().ok()?, 1).map(Self::Month)
+        CalendarDate::from_ymd_opt(y.parse().ok()?, m.parse().ok()?, 1).map(Self::Month)
     }
     fn label(self) -> String {
         match self {
@@ -194,12 +194,12 @@ struct Partition {
     parent: &'static str,
     name: String,
     /// `None`: the legacy partition (MINVALUE).
-    lower: Option<DateTime<Utc>>,
-    upper: DateTime<Utc>,
+    lower: Option<UtcInstant>,
+    upper: UtcInstant,
 }
 
-fn utc(d: NaiveDate) -> DateTime<Utc> {
-    Utc.from_utc_datetime(&d.and_hms_opt(0, 0, 0).expect("midnight"))
+fn utc(d: CalendarDate) -> UtcInstant {
+    d.midnight().expect("midnight")
 }
 
 /// Archive one month of `group`. See the module documentation.
@@ -213,7 +213,7 @@ pub async fn archive(pool: &PgPool, req: &Request) -> anyhow::Result<Report> {
 pub async fn archive_as_of(
     pool: &PgPool,
     req: &Request,
-    now: DateTime<Utc>,
+    now: UtcInstant,
 ) -> anyhow::Result<Report> {
     archive_at(pool, req, Some(now)).await
 }
@@ -221,7 +221,7 @@ pub async fn archive_as_of(
 async fn archive_at(
     pool: &PgPool,
     req: &Request,
-    as_of: Option<DateTime<Utc>>,
+    as_of: Option<UtcInstant>,
 ) -> anyhow::Result<Report> {
     let id = Uuid::now_v7();
     let dir = req
@@ -258,7 +258,7 @@ impl Run<'_> {
     fn disposition(&self) -> &'static str {
         if self.req.drop { "dropped" } else { "detached" }
     }
-    fn bounds(&self) -> (Option<DateTime<Utc>>, DateTime<Utc>) {
+    fn bounds(&self) -> (Option<UtcInstant>, UtcInstant) {
         (self.parts[0].lower, self.parts[0].upper)
     }
 }
@@ -268,7 +268,7 @@ async fn archive_in(
     req: &Request,
     id: Uuid,
     dir: &Path,
-    as_of: Option<DateTime<Utc>>,
+    as_of: Option<UtcInstant>,
 ) -> anyhow::Result<Report> {
     let month = req.month.label();
     // Locate the partitions before the transaction: its snapshot must be
@@ -314,7 +314,7 @@ async fn locate_partitions(
     let mut parts = Vec::new();
     for parent in req.group.parents() {
         let name = format!("{parent}_{}", req.month.suffix());
-        let bounds: Option<(Option<DateTime<Utc>>, DateTime<Utc>)> = sqlx::query_as(
+        let bounds: Option<(Option<UtcInstant>, UtcInstant)> = sqlx::query_as(
             "SELECT CASE WHEN isfinite(lower_bound) THEN lower_bound END,upper_bound FROM omg_partition_bounds($1) WHERE partition=$2",
         )
         .bind(parent)
@@ -325,7 +325,7 @@ async fn locate_partitions(
             return Err(Refusal::Missing((*parent).into(), month.into()).into());
         };
         if let Month::Month(d) = req.month
-            && (lower != Some(utc(d)) || upper != utc(d + Months::new(1)))
+            && (lower != Some(utc(d)) || upper != utc(d.checked_add_months(1).unwrap()))
         {
             return Err(Refusal::Missing((*parent).into(), month.into()).into());
         }
@@ -387,9 +387,9 @@ async fn begin_and_lock(conn: &mut PgConnection, run: &Run<'_>) -> anyhow::Resul
 async fn check_retention(
     conn: &mut PgConnection,
     run: &Run<'_>,
-    as_of: Option<DateTime<Utc>>,
-) -> anyhow::Result<DateTime<Utc>> {
-    let now: DateTime<Utc> = match as_of {
+    as_of: Option<UtcInstant>,
+) -> anyhow::Result<UtcInstant> {
+    let now: UtcInstant = match as_of {
         Some(at) => at,
         None => {
             sqlx::query_scalar("SELECT clock_timestamp()")
@@ -397,8 +397,12 @@ async fn check_retention(
                 .await?
         }
     };
-    let current = NaiveDate::from_ymd_opt(now.year(), now.month(), 1).expect("month");
-    let limit = utc(current - Months::new(run.req.retention_months));
+    let current = CalendarDate::from_ymd_opt(now.year(), now.month(), 1).expect("month");
+    let limit = utc(current
+        .checked_add_months(
+            -i32::try_from(run.req.retention_months).expect("retention months fit calendar range"),
+        )
+        .expect("retention month"));
     if run.parts.iter().any(|p| p.upper > limit) {
         return Err(Refusal::WithinRetention(run.month.clone(), run.req.retention_months).into());
     }
@@ -546,7 +550,7 @@ async fn write_manifest(
     run: &Run<'_>,
     files: &[ArchivedFile],
     sums: &serde_json::Value,
-    now: DateTime<Utc>,
+    now: UtcInstant,
 ) -> anyhow::Result<String> {
     let lineage: Vec<(i64, Vec<u8>)> =
         sqlx::query_as("SELECT version,checksum FROM _sqlx_migrations ORDER BY version")

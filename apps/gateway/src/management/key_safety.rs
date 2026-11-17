@@ -12,7 +12,7 @@
 //! layer: type default (or its platform replacement), workspace local and key
 //! lineage (there are no installation-wide limits).
 use super::*;
-use chrono::{DateTime, TimeDelta, Utc};
+use gateway_datetime_compat::{SignedDuration as TimeDelta, UtcInstant};
 
 /// A workspace with at least this many usable models makes an unrestricted key "broad".
 pub(crate) const BROAD_MODELS: i64 = 5;
@@ -68,9 +68,9 @@ pub(crate) struct Facts {
     pub(crate) workspace_kind: String,
     pub(crate) issued_to_user_id: Option<Uuid>,
     pub(crate) service_account_id: Option<Uuid>,
-    pub(crate) created_at: DateTime<Utc>,
-    pub(crate) expires_at: Option<DateTime<Utc>>,
-    pub(crate) last_used_at: Option<DateTime<Utc>>,
+    pub(crate) created_at: UtcInstant,
+    pub(crate) expires_at: Option<UtcInstant>,
+    pub(crate) last_used_at: Option<UtcInstant>,
     pub(crate) restricted: bool,
     pub(crate) workspace_models: i64,
     pub(crate) has_budget: bool,
@@ -78,10 +78,10 @@ pub(crate) struct Facts {
     pub(crate) holder_has_access: bool,
 }
 fn days(d: TimeDelta) -> i64 {
-    d.num_days()
+    d.whole_days()
 }
 /// Every finding for one key, most severe first. Pure: `now` and thresholds are inputs.
-pub(crate) fn findings(f: &Facts, now: DateTime<Utc>, t: &Thresholds) -> Vec<Finding> {
+pub(crate) fn findings(f: &Facts, now: UtcInstant, t: &Thresholds) -> Vec<Finding> {
     let mut out = Vec::new();
     let mut push = |code, severity, value| {
         out.push(Finding {
@@ -209,7 +209,7 @@ async fn load(
     .fetch_one(&mut **tx)
     .await?;
     let t = q.thresholds(i64::from(max))?;
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
+    let now: UtcInstant = sqlx::query_scalar("SELECT now()")
         .fetch_one(&mut **tx)
         .await?;
     let sql = FACTS.replace("{SCOPE}", scope).replace("{CAPPED}", CAPPED);
@@ -360,7 +360,7 @@ pub(super) fn routes() -> Router<Store> {
 mod tests {
     use super::*;
     fn facts() -> Facts {
-        let now = Utc::now();
+        let now = UtcInstant::now();
         Facts {
             id: Uuid::nil(),
             name: "k".into(),
@@ -385,7 +385,10 @@ mod tests {
         max_lifetime_days: 90,
     };
     fn codes(f: &Facts) -> Vec<&'static str> {
-        findings(f, Utc::now(), &T).iter().map(|f| f.code).collect()
+        findings(f, UtcInstant::now(), &T)
+            .iter()
+            .map(|f| f.code)
+            .collect()
     }
     #[test]
     fn healthy_key_has_no_findings() {
@@ -396,7 +399,7 @@ mod tests {
         let mut f = facts();
         f.expires_at = None;
         assert_eq!(codes(&f), ["no_expiry"]);
-        f.expires_at = Some(Utc::now() + TimeDelta::days(200));
+        f.expires_at = Some(UtcInstant::now() + TimeDelta::days(200));
         assert_eq!(codes(&f), ["expiry_beyond_max"]);
         f.issued_to_user_id = None;
         f.service_account_id = Some(Uuid::nil());
@@ -408,13 +411,13 @@ mod tests {
         f.has_budget = false;
         assert_eq!(codes(&f), ["no_budget"]);
         f.has_caps = false;
-        let all = findings(&f, Utc::now(), &T);
+        let all = findings(&f, UtcInstant::now(), &T);
         assert_eq!(all[0].code, "no_limits");
         assert_eq!(all[0].severity, Severity::High);
     }
     #[test]
     fn usage_rotation_and_broad_access() {
-        let now = Utc::now();
+        let now = UtcInstant::now();
         let mut f = facts();
         f.last_used_at = Some(now - TimeDelta::days(45));
         assert_eq!(codes(&f), ["unused"]);

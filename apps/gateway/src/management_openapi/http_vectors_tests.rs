@@ -62,7 +62,7 @@ fn base() -> Vec<(String, String)> {
 struct Q {
     limit: Option<i64>,
     status: Option<String>,
-    day: Option<chrono::NaiveDate>,
+    day: Option<gateway_datetime_compat::CalendarDate>,
     flag: Option<bool>,
     tag: String,
 }
