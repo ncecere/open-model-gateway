@@ -5,7 +5,7 @@
       "token_policy": "Denied",
       "scope": null,
       "operation": {
-        "description": "Explicit browser-session Platform Admin action. Preview first, then apply with expected_count and reason. Rechecks pinned pricing and live authority; missing usage remains NULL. Only aggregate counts leave the route, including personal workspaces. No automatic resolution. Nonzero holds, priced/unknown/missing rates, realtime, running executions/jobs and unpinned batch envelopes are excluded. The preview is advisory; applying selects again and refuses a changed count.",
+        "description": "Explicit browser-session Platform Admin action. Preview a bounded page, then apply with expected_count, reason and the same numeric offset. Rechecks pinned pricing and live authority; missing usage remains NULL. Only counts and a numeric next_offset leave the route, including personal workspaces. No automatic resolution. Nonzero holds, priced/unknown/missing rates, missing variant defaults, realtime, running executions/jobs and unpinned batch envelopes are excluded. Preview is advisory; applying selects again and refuses a changed page count. Follow the apply response next_offset because resolved candidates are removed; null means the selected scan reached its end.",
         "requestBody": {
           "required": true,
           "content": {
@@ -43,7 +43,7 @@
             }
           },
           "409": {
-            "description": "Eligible count changed or selectors exceed 10000 zero-hold candidates",
+            "description": "Eligible page count changed; preview again",
             "content": {
               "application/json": {
                 "schema": {

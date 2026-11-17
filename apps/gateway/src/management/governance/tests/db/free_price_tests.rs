@@ -40,7 +40,10 @@ async fn free_price_preview_apply_preserves_null_and_audits(pool: PgPool) {
     let admin = user(f.owner, true);
     let (status, preview) = call(&f, &admin, "POST", PATH, json!({})).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(preview, json!({"eligible_count":"1","resolved_count":"0"}));
+    assert_eq!(
+        preview,
+        json!({"eligible_count":"1","resolved_count":"0","next_offset":null})
+    );
     let (status, result) = call(
         &f,
         &admin,
@@ -50,7 +53,10 @@ async fn free_price_preview_apply_preserves_null_and_audits(pool: PgPool) {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(result, json!({"eligible_count":"1","resolved_count":"1"}));
+    assert_eq!(
+        result,
+        json!({"eligible_count":"1","resolved_count":"1","next_offset":null})
+    );
     let row: (String, Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as("SELECT state,actual_microusd,input_tokens,output_tokens FROM governance_reservations WHERE execution_id=$1").bind(id).fetch_one(&f.store.pool).await.unwrap();
     assert_eq!(row, ("settled".into(), Some(0), None, None));
     let ledger: (i64, Option<i64>, Option<i64>, String) = sqlx::query_as("SELECT amount_microusd,input_tokens,output_tokens,evidence FROM monetary_ledger WHERE execution_id=$1 AND kind='reconciliation'").bind(id).fetch_one(&f.store.pool).await.unwrap();
@@ -156,7 +162,7 @@ async fn free_price_selection_refusals_and_concurrency(pool: PgPool) {
     assert_eq!(observed, (Some(7), None, Some(observation)));
     assert_eq!(
         call(&f, &admin, "POST", PATH, json!({})).await.1,
-        json!({"eligible_count":"0","resolved_count":"0"})
+        json!({"eligible_count":"0","resolved_count":"0","next_offset":null})
     );
     assert_eq!(
         call(
@@ -475,4 +481,125 @@ async fn free_price_native_job_requires_terminal_gateway_record(pool: PgPool) {
         .0,
         StatusCode::OK
     );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn free_price_variants_require_free_default_coverage(pool: PgPool) {
+    let f = fixture(pool).await;
+    let admin = user(f.owner, true);
+    for default in [false, true] {
+        for variant in [None, Some("1k"), Some("2k")] {
+            let price = v3(&f, |lines| {
+                let image = lines.iter_mut().find(|l| l["meter"] == "output_images").unwrap();
+                *image = json!({"meter":"output_images","variant":"1K","microusd_per_batch":"0","batch":1,"unit_label":"/image","sku_label":"Image"});
+                if default {
+                    lines.push(json!({"meter":"output_images","microusd_per_batch":"0","batch":1,"unit_label":"/image","sku_label":"Image default"}));
+                }
+            }).await;
+            let id = unknown(&f, Some(price), Some(0)).await;
+            sqlx::query("UPDATE inference_executions SET workload_kind='images',output_image_variant=$2 WHERE id=$1")
+                .bind(id).bind(variant).execute(&f.store.pool).await.unwrap();
+            sqlx::query(
+                "UPDATE governance_reservations SET output_image_variant=$2 WHERE execution_id=$1",
+            )
+            .bind(id)
+            .bind(variant)
+            .execute(&f.store.pool)
+            .await
+            .unwrap();
+            let (status, preview) = call(&f, &admin, "POST", PATH, json!({})).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(
+                preview["eligible_count"],
+                if default { "1" } else { "0" },
+                "default={default}, variant={variant:?}"
+            );
+            if default {
+                assert_eq!(call(&f, &admin, "POST", PATH, json!({"apply":true,"expected_count":"1","reason":"free default covers every image variant"})).await.0, StatusCode::OK);
+                let retained: (Option<String>, Option<i64>, Option<i64>) = sqlx::query_as("SELECT output_image_variant,input_tokens,output_tokens FROM monetary_ledger WHERE execution_id=$1 AND kind='reconciliation'")
+                    .bind(id).fetch_one(&f.store.pool).await.unwrap();
+                assert_eq!(retained, (variant.map(str::to_owned), None, None));
+            }
+        }
+    }
+}
+
+async fn many_unknowns(f: &Fixture, price: Uuid, count: i32) {
+    sqlx::query("WITH ids AS MATERIALIZED(SELECT gen_random_uuid() AS id FROM generate_series(1,$5)), e AS (INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id) SELECT id,$1,$2,$3,'company/smart','openai',true,'failed',id FROM ids RETURNING id,started_at) INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,price_id,admitted_at,minute_start,month_start,lease_expires_at,state,held_microusd) SELECT id,$1,$2,$3,$4,started_at,date_trunc('minute',started_at,'UTC'),date_trunc('month',started_at,'UTC'),started_at,'unknown',0 FROM e")
+        .bind(f.principal.workspace_id).bind(f.principal.key_id).bind(f.deployment).bind(price).bind(count).execute(&f.store.pool).await.unwrap();
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn free_price_large_bucket_makes_bounded_progress(pool: PgPool) {
+    let f = fixture(pool).await;
+    let free = f.price(0).await;
+    let admin = user(f.owner, true);
+    many_unknowns(&f, free, 10_001).await;
+    let (status, first) = call(&f, &admin, "POST", PATH, json!({})).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a single large bucket must remain processable"
+    );
+    assert_eq!(first["eligible_count"], "10000");
+    assert_eq!(first["next_offset"], "10000");
+    let (status, applied) = call(
+        &f,
+        &admin,
+        "POST",
+        PATH,
+        json!({"apply":true,"expected_count":"10000","reason":"resolve first bounded page"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(applied["resolved_count"], "10000");
+    assert_eq!(
+        applied["next_offset"], "0",
+        "resolved rows no longer occupy the next page's offset"
+    );
+    let (status, last) = call(&f, &admin, "POST", PATH, json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(last["eligible_count"], "1");
+    assert_eq!(last["next_offset"], Value::Null);
+    assert_eq!(
+        call(
+            &f,
+            &admin,
+            "POST",
+            PATH,
+            json!({"apply":true,"expected_count":"1","reason":"resolve final page"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM governance_reservations WHERE state='settled' AND free_price_resolved AND actual_microusd=0 AND input_tokens IS NULL AND output_tokens IS NULL").fetch_one(&f.store.pool).await.unwrap();
+    assert_eq!(rows, 10_001);
+
+    // Ineligible prices in the first page must not hide later free candidates.
+    let priced = f.price(1_000_000).await;
+    many_unknowns(&f, priced, 10_000).await;
+    let id = unknown(&f, Some(free), Some(0)).await;
+    let (status, page) = call(&f, &admin, "POST", PATH, json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["eligible_count"], "0");
+    assert_eq!(page["next_offset"], "10000");
+    let (status, page) = call(&f, &admin, "POST", PATH, json!({"offset":"10000"})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["eligible_count"], "1");
+    assert_eq!(page["next_offset"], Value::Null);
+    assert_eq!(call(&f, &admin, "POST", PATH, json!({"offset":"10000","apply":true,"expected_count":"1","reason":"priced prefix stays unknown"})).await.0, StatusCode::OK);
+    let state: String =
+        sqlx::query_scalar("SELECT state FROM governance_reservations WHERE execution_id=$1")
+            .bind(id)
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(state, "settled");
+    let retained: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM governance_reservations WHERE state='unknown'")
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(retained, 10_000);
 }

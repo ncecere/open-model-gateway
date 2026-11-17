@@ -39,8 +39,8 @@ pub(crate) const SEMANTIC_REFINEMENTS: &[(&str, &str, &str, &[&str])] = &[
     (
         "POST",
         "/api/v1/platform/reservations/resolve-free-price",
-        "month is a canonical UTC month; expected count is bounded canonical decimal; reason is nonblank without controls, and applying requires count and reason",
-        &["/apply", "/month", "/expected_count", "/reason"],
+        "month is a canonical UTC month; expected count and offset are bounded canonical decimals; reason is nonblank without controls, and applying requires count and reason",
+        &["/apply", "/month", "/expected_count", "/reason", "/offset"],
     ),
     (
         "POST",

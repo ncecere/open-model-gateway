@@ -16,6 +16,8 @@ pub(super) struct Resolve {
     deployment_id: Option<Uuid>,
     expected_count: Option<String>,
     reason: Option<String>,
+    #[serde(default)]
+    offset: Option<String>,
 }
 impl Resolve {
     fn bounds(&self) -> Result<Option<MonthBounds>, ApiError> {
@@ -40,6 +42,7 @@ impl Resolve {
     }
     fn validate(&self) -> Result<(), ApiError> {
         self.bounds()?;
+        self.offset()?;
         if self.reason.as_ref().is_some_and(|r| {
             r.trim().is_empty() || r.chars().count() > 150 || r.chars().any(char::is_control)
         }) {
@@ -55,6 +58,14 @@ impl Resolve {
             return Err(invalid());
         }
         Ok(())
+    }
+    fn offset(&self) -> Result<i64, ApiError> {
+        let raw = self.offset.as_deref().unwrap_or("0");
+        let offset = money(raw, false)?;
+        if offset.to_string() != raw || offset > i64::MAX - MAX_CANDIDATES as i64 {
+            return Err(invalid());
+        }
+        Ok(offset)
     }
 }
 #[derive(sqlx::FromRow)]
@@ -77,12 +88,13 @@ const CANDIDATES: &str = "SELECT r.execution_id,r.workspace_id,r.api_key_id,r.de
  AND (e.workload_kind NOT IN ('videos','batches') OR EXISTS(SELECT 1 FROM async_jobs j WHERE j.execution_id=r.execution_id AND j.state IN ('completed','failed','cancelled','expired')))
  AND ($1::timestamptz IS NULL OR r.admitted_at >= $1) AND ($2::timestamptz IS NULL OR r.admitted_at < $2)
  AND ($3::uuid IS NULL OR r.workspace_id=$3) AND ($4::uuid IS NULL OR r.deployment_id=$4)
- AND ($5::uuid[] IS NULL OR r.execution_id=ANY($5))
- ORDER BY r.admitted_at,r.execution_id LIMIT 10001";
+ AND ($5::uuid[] IS NULL OR (r.execution_id,r.admitted_at) IN (SELECT * FROM unnest($5::uuid[],$6::timestamptz[])))
+ ORDER BY r.admitted_at,r.execution_id LIMIT 10001 OFFSET $7";
 async fn candidates(
     tx: &mut Transaction<'_, Postgres>,
     p: &Resolve,
     ids: Option<&[Uuid]>,
+    ats: Option<&[DateTime<Utc>]>,
     lock: bool,
 ) -> Result<Vec<Candidate>, ApiError> {
     let bounds = p.bounds()?;
@@ -95,15 +107,45 @@ async fn candidates(
     .bind(p.workspace_id)
     .bind(p.deployment_id)
     .bind(ids)
+    .bind(ats)
+    .bind(if ids.is_none() { p.offset()? } else { 0 })
     .fetch_all(&mut **tx)
     .await?;
-    if rows.len() > MAX_CANDIDATES {
-        return Err(ApiError(
-            StatusCode::CONFLICT,
-            "Narrow the reservation selectors",
-        ));
-    }
     Ok(rows)
+}
+
+async fn eligible(
+    tx: &mut Transaction<'_, Postgres>,
+    rows: Vec<Candidate>,
+) -> Result<Vec<Candidate>, ApiError> {
+    let mut selected = Vec::new();
+    let mut prices = std::collections::BTreeMap::new();
+    for row in rows {
+        let key = (
+            row.price_id,
+            row.deployment_id,
+            row.price_tier.clone(),
+            row.workload_kind == "videos",
+        );
+        let free = if let Some(free) = prices.get(&key) {
+            *free
+        } else {
+            let free = crate::governance::entirely_free_price(tx, key.0, key.1, &key.2, key.3)
+                .await
+                .map_err(|_| {
+                    ApiError(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Pinned pricing unavailable",
+                    )
+                })?;
+            prices.insert(key, free);
+            free
+        };
+        if free {
+            selected.push(row);
+        }
+    }
+    Ok(selected)
 }
 pub(super) async fn resolve(
     State(s): State<Store>,
@@ -111,6 +153,7 @@ pub(super) async fn resolve(
     Json(p): Json<Resolve>,
 ) -> ApiResult {
     p.validate()?;
+    let offset = p.offset()?;
     // This operation intentionally has no token delegation, even if a caller
     // bypasses route middleware in an internal harness.
     if u.token_id().is_some() {
@@ -121,7 +164,10 @@ pub(super) async fn resolve(
     resources::require_platform_admin(
         &resources::platform_role_snapshot(&mut tx, u.user_id()).await?,
     )?;
-    let initial = candidates(&mut tx, &p, None, false).await?;
+    let mut initial = candidates(&mut tx, &p, None, None, false).await?;
+    let more = initial.len() > MAX_CANDIDATES;
+    initial.truncate(MAX_CANDIDATES);
+    let scanned = initial.len() as i64;
     locks::shared(
         &mut tx,
         initial
@@ -134,25 +180,9 @@ pub(super) async fn resolve(
     // Restrict the second read to scopes already locked, so newly arriving
     // unknowns cannot introduce an earlier authority scope after the actor.
     let ids: Vec<_> = initial.iter().map(|r| r.execution_id).collect();
-    let mut eligible = Vec::new();
-    for row in candidates(&mut tx, &p, Some(&ids), p.apply).await? {
-        if crate::governance::entirely_free_price(
-            &mut tx,
-            row.price_id,
-            row.deployment_id,
-            &row.price_tier,
-            row.workload_kind == "videos",
-        )
-        .await
-        .map_err(|_| {
-            ApiError(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Pinned pricing unavailable",
-            )
-        })? {
-            eligible.push(row);
-        }
-    }
+    let ats: Vec<_> = initial.iter().map(|r| r.admitted_at).collect();
+    let rows = candidates(&mut tx, &p, Some(&ids), Some(&ats), p.apply).await?;
+    let eligible = eligible(&mut tx, rows).await?;
     let count = eligible.len().to_string();
     if p.apply {
         if p.expected_count.as_deref() != Some(count.as_str()) {
@@ -176,9 +206,13 @@ pub(super) async fn resolve(
         }
         audit(&mut tx, &eligible, u.user_id(), reason).await?;
     }
+    // Applying removes resolved rows from the candidate sequence. Continue
+    // after the remaining rows of this page, without skipping the next page.
+    let removed = if p.apply { eligible.len() as i64 } else { 0 };
+    let next = more.then(|| (offset + scanned - removed).to_string());
     tx.commit().await?;
     Ok(Json(
-        json!({"eligible_count":count,"resolved_count":if p.apply {eligible.len().to_string()} else {"0".into()}}),
+        json!({"eligible_count":count,"resolved_count":if p.apply {eligible.len().to_string()} else {"0".into()},"next_offset":next}),
     ))
 }
 async fn settle(

@@ -281,6 +281,15 @@ pub(crate) async fn entirely_free_price(
                     .0
                     .iter()
                     .all(|l| l.rate.is_none_or(|r| r.microusd_per_batch == 0))
+                // A free named variant does not price an absent or unlisted
+                // variant. A free default must cover that missing evidence.
+                && lines.0.iter().filter(|l| l.variant.is_some()).all(|l| {
+                    lines.0.iter().any(|default| {
+                        default.meter == l.meter
+                            && default.variant.is_none()
+                            && default.rate.is_some_and(|r| r.microusd_per_batch == 0)
+                    })
+                })
                 && (!video
                     || lines
                         .0

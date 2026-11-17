@@ -13,7 +13,7 @@ impl Drop for Server {
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn free_price_runtime_http_operator_flow(pool: PgPool) {
     let f = crate::governance::tests::db::fixture(pool.clone()).await;
-    f.price(0).await;
+    let free = f.price(0).await;
     let start = f.start();
     crate::governance::admit(
         &f.store,
@@ -136,7 +136,7 @@ async fn free_price_runtime_http_operator_flow(pool: PgPool) {
     .await;
     assert_eq!(
         serde_json::from_slice::<Value>(&preview.bytes).unwrap(),
-        json!({"eligible_count":"1","resolved_count":"0"})
+        json!({"eligible_count":"1","resolved_count":"0","next_offset":null})
     );
     seen.observe(&preview);
     let body = json!({"apply":true,"expected_count":"1","reason":"loopback operator proof"});
@@ -178,20 +178,33 @@ async fn free_price_runtime_http_operator_flow(pool: PgPool) {
         !exported.contains(&f.principal.key_id.to_string()),
         "operator export exposed private key identity"
     );
-    let valid = json!({"apply":false,"month":chrono::Utc::now().format("%Y-%m").to_string(),"workspace_id":f.principal.workspace_id,"deployment_id":f.deployment,"expected_count":"0","reason":"operator reference"});
+    let valid = json!({"apply":false,"month":chrono::Utc::now().format("%Y-%m").to_string(),"workspace_id":f.principal.workspace_id,"deployment_id":f.deployment,"expected_count":"0","reason":"operator reference","offset":"0"});
     let positional = json!([
         false,
         valid["month"],
         valid["workspace_id"],
         valid["deployment_id"],
         "0",
-        "operator reference"
+        "operator reference",
+        "0"
     ]);
+    let mut legacy = positional.as_array().unwrap().clone();
+    legacy.pop();
+    let response = send(Some(&admin), true, ORIGIN, json!(legacy)).await;
+    assert_eq!(response.status().as_u16(), 200);
+    seen.observe(
+        &crate::management::openapi::responses::capture_http(
+            "POST",
+            "/api/v1/platform/reservations/resolve-free-price",
+            response,
+        )
+        .await,
+    );
     for valid in [valid, positional] {
-        let (month, count) = if valid.is_array() {
-            ("/1", "/4")
+        let (month, count, offset) = if valid.is_array() {
+            ("/1", "/4", "/6")
         } else {
-            ("/month", "/expected_count")
+            ("/month", "/expected_count", "/offset")
         };
         let candidates = vec![
             (month, json!("2026-01")),
@@ -201,6 +214,14 @@ async fn free_price_runtime_http_operator_flow(pool: PgPool) {
             (count, json!("")),
             (count, json!("10000")),
             (count, json!("100000")),
+            (offset, json!("0")),
+            (offset, json!("10000")),
+            (offset, json!("00")),
+            (offset, json!("-1")),
+            (offset, json!("9223372036854765807")),
+            (offset, json!("9223372036854765808")),
+            (offset, json!("9223372036854775807")),
+            (offset, json!("10000000000000000000")),
         ];
         crate::management::openapi::http_vectors::body_vectors_extended(
             &mut seen,
@@ -220,6 +241,23 @@ async fn free_price_runtime_http_operator_flow(pool: PgPool) {
             },
         )
         .await;
+    }
+    sqlx::query("WITH ids AS MATERIALIZED(SELECT gen_random_uuid() AS id FROM generate_series(1,10001)), e AS (INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id) SELECT id,$1,$2,$3,'company/smart','openai',true,'failed',id FROM ids RETURNING id,started_at) INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,price_id,admitted_at,minute_start,month_start,lease_expires_at,state,held_microusd) SELECT id,$1,$2,$3,$4,started_at,date_trunc('minute',started_at,'UTC'),date_trunc('month',started_at,'UTC'),started_at,'unknown',0 FROM e")
+        .bind(f.principal.workspace_id).bind(f.principal.key_id).bind(f.deployment).bind(free).execute(&pool).await.unwrap();
+    for (offset, count, next) in [("0", "10000", json!("10000")), ("10000", "1", Value::Null)] {
+        let page = send(Some(&admin), true, ORIGIN, json!({"offset":offset})).await;
+        assert_eq!(page.status().as_u16(), 200);
+        let page = crate::management::openapi::responses::capture_http(
+            "POST",
+            "/api/v1/platform/reservations/resolve-free-price",
+            page,
+        )
+        .await;
+        assert_eq!(
+            serde_json::from_slice::<Value>(&page.bytes).unwrap(),
+            json!({"eligible_count":count,"resolved_count":"0","next_offset":next})
+        );
+        seen.observe(&page);
     }
     seen.finish(crate::management::openapi::responses::FREE_PRICE_AREAS);
     let mut tx = crate::db::begin(&pool).await.unwrap();
