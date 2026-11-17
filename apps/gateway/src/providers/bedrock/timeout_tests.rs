@@ -223,7 +223,7 @@ async fn non_stream_total_timeout_is_preserved() {
 }
 
 #[tokio::test]
-async fn downstream_pause_does_not_consume_active_receive_or_sdk_stall_budget() {
+async fn downstream_pause_does_not_consume_active_receive_budget() {
     let mock = TimedMock::new(Script::Gated).await;
     let adapter = BedrockAdapter::for_test_with_timeouts(
         &mock.base,
@@ -310,7 +310,7 @@ async fn streaming_http_error_body_keeps_its_active_read_bound() {
 
 // A consumer may stop polling after Pending, not only after a yielded delta.
 // The old reqwest body-read timer checked elapsed time before ready body data;
-// the active recv timeout polls the receiver first, so queued healthy frames win.
+// the active body-read timeout polls for bytes first, so queued healthy frames win.
 #[tokio::test]
 async fn ready_frames_after_unpolled_pending_receive_are_not_read_timeouts() {
     for old_read_timer in [true, false] {

@@ -207,9 +207,10 @@ assembly. There is no separate whole-event `recv()` timer: that would include
 unpolled backpressure when only a partial frame is queued, and could reject a
 healthy frame whose remaining bytes arrive promptly after the reader resumes.
 The wire/body bounds and engine watchdog still bound incomplete or dribbling
-frames. SDK stalled-download protection remains enabled and distinguishes
-unpolled readers from pending upstream reads. Genuine active-read timeouts fail
-the stream; engine deadline cancellation and client disconnect remain
+frames. The pinned Bedrock SDK (1.152.0) installs stalled-stream protection for
+non-stream Converse, but not ConverseStream. Streaming stall and lifetime bounds
+come from the raw-read timer and engine watchdog above. Genuine active-read
+timeouts fail the stream; engine deadline cancellation and client disconnect remain
 health-neutral. Unknown usage and retained holds follow the ordinary
 failed/cancelled stream rules. No adapter producer task is spawned; dropping the
 returned stream drops the AWS receiver and upstream response body.
