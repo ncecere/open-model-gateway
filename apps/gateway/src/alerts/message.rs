@@ -1,6 +1,8 @@
 //! Alert email: the relay settings row and the subject/body built from an
 //! incident's stored facts. No I/O beyond reading the settings; the outbox sends.
 use super::*;
+use crate::timestamp::TimestampFormat as _;
+use gateway_datetime_compat::UtcInstant;
 
 // ---------- Delivery ----------
 
@@ -58,7 +60,7 @@ pub struct EmailFacts {
     pub scope: String,
     /// Rule name, or `None` for built-in alerts.
     pub rule: Option<String>,
-    pub at: DateTime<Utc>,
+    pub at: UtcInstant,
 }
 pub fn email_text(f: &EmailFacts, link: Option<&str>) -> (String, String) {
     let clean = |s: &str| {
@@ -103,15 +105,15 @@ pub(super) struct Pending {
     pub(super) transition: String,
     pub(super) summary: String,
     pub(super) severity: String,
-    pub(super) fired_at: DateTime<Utc>,
-    pub(super) resolved_at: Option<DateTime<Utc>>,
+    pub(super) fired_at: UtcInstant,
+    pub(super) resolved_at: Option<UtcInstant>,
     pub(super) rule_name: Option<String>,
     pub(super) workspace_name: Option<String>,
     pub(super) workspace_kind: Option<String>,
     pub(super) connection_name: Option<String>,
     pub(super) builtin: Option<String>,
     pub(super) kind: String,
-    pub(super) key_expires_at: Option<DateTime<Utc>>,
+    pub(super) key_expires_at: Option<UtcInstant>,
 }
 
 // Pure: constructs one email's subject/body from its stored facts. Called

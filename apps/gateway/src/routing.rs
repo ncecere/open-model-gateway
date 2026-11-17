@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 use rand::{
     SeedableRng,
     distr::{Distribution, weighted::WeightedIndex},
@@ -526,8 +526,8 @@ pub struct RouteHealth {
     pub deployment_id: Uuid,
     pub operator_disabled: bool,
     pub consecutive_failures: i32,
-    pub open_until: Option<DateTime<Utc>>,
-    pub last_observed_at: Option<DateTime<Utc>>,
+    pub open_until: Option<UtcInstant>,
+    pub last_observed_at: Option<UtcInstant>,
     pub circuit_open: bool,
 }
 

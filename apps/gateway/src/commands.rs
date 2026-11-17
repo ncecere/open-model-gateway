@@ -239,8 +239,7 @@ pub(crate) async fn history_verify(store: &Store, since: Option<String>) -> Resu
     store.preflight_enterprise().await?;
     let since = since
         .map(|s| {
-            chrono::DateTime::parse_from_rfc3339(&s)
-                .map(|t| t.with_timezone(&chrono::Utc))
+            gateway_datetime_compat::http::parse_rfc3339(&s)
                 .context("--since must be an RFC 3339 time")
         })
         .transpose()?;

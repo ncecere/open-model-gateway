@@ -1,6 +1,7 @@
 //! What each rule kind watches: the queries and exact comparisons that turn one
 //! rule (or the built-in personal budget alert) into its firing conditions.
 use super::*;
+use gateway_datetime_compat::UtcInstant;
 
 // ---------- Evaluation ----------
 
@@ -23,7 +24,7 @@ LEFT JOIN budget_totals t ON t.scope_kind=CASE WHEN b.lineage IS NULL THEN 'work
 WHERE b.amount_microusd>0 AND b.layer=ANY($3)
 ORDER BY b.workspace_id,b.layer,b.lineage,b.period LIMIT 5001"#;
 
-pub(super) fn windows(now: DateTime<Utc>) -> [(DateTime<Utc>, DateTime<Utc>); 4] {
+pub(super) fn windows(now: UtcInstant) -> [(UtcInstant, UtcInstant); 4] {
     BudgetPeriod::ALL.map(|p| p.window(now))
 }
 
@@ -37,7 +38,7 @@ fn budget_condition(
     used: i128,
     unknown: i64,
     thresholds: &[i32],
-    now: DateTime<Utc>,
+    now: UtcInstant,
 ) -> Option<Condition> {
     let level = threshold_level(used, i128::from(amount), thresholds)?;
     let (start, end) = BudgetPeriod::parse(period)?.window(now);
@@ -72,7 +73,7 @@ pub(super) async fn budget_conditions(
     set: Workspaces,
     layers: &[String],
     thresholds: &[i32],
-    now: DateTime<Utc>,
+    now: UtcInstant,
 ) -> Result<Vec<Condition>, sqlx::Error> {
     let w = windows(now);
     let mut out = Vec::new();
@@ -127,7 +128,7 @@ pub(super) async fn budget_conditions(
 async fn spend_conditions(
     tx: &mut Transaction<'_, Postgres>,
     rule: &Rule,
-    now: DateTime<Utc>,
+    now: UtcInstant,
 ) -> Result<Vec<Condition>, sqlx::Error> {
     let (Some(period), Some(amount), Some(thresholds)) = (
         rule.spend_period.as_deref().and_then(BudgetPeriod::parse),
@@ -175,7 +176,7 @@ async fn spend_conditions(
 async fn spike_conditions(
     tx: &mut Transaction<'_, Postgres>,
     rule: &Rule,
-    now: DateTime<Utc>,
+    now: UtcInstant,
 ) -> Result<Vec<Condition>, sqlx::Error> {
     let (Some(factor), Some(floor)) = (rule.spike_factor_percent, rule.min_spend_microusd) else {
         return Ok(vec![]);
@@ -217,7 +218,7 @@ async fn spike_conditions(
 async fn error_rate_conditions(
     tx: &mut Transaction<'_, Postgres>,
     rule: &Rule,
-    now: DateTime<Utc>,
+    now: UtcInstant,
 ) -> Result<Vec<Condition>, sqlx::Error> {
     let (Some(window), Some(rate), Some(min)) = (
         rule.window_minutes,
@@ -257,7 +258,7 @@ async fn error_rate_conditions(
 async fn provider_conditions(
     tx: &mut Transaction<'_, Postgres>,
     rule: &Rule,
-    now: DateTime<Utc>,
+    now: UtcInstant,
 ) -> Result<Vec<Condition>, sqlx::Error> {
     let Some(window) = rule.window_minutes else {
         return Ok(vec![]);
@@ -349,14 +350,14 @@ type StalledBatch = (
     Option<String>,
     Option<i32>,
     Option<i32>,
-    DateTime<Utc>,
+    UtcInstant,
 );
 
 /// One incident per batch that ended failed or expired in the last day.
 async fn batch_failed_conditions(
     tx: &mut Transaction<'_, Postgres>,
     rule: &Rule,
-    now: DateTime<Utc>,
+    now: UtcInstant,
 ) -> Result<Vec<Condition>, sqlx::Error> {
     let rows: Vec<FailedBatch> = sqlx::query_as(&format!("SELECT j.id,j.workspace_id,j.state,j.error_code,j.batch_mode,j.request_total,j.request_completed,j.request_failed FROM async_jobs j JOIN workspaces w ON w.id=j.workspace_id WHERE {BATCH_SCOPE} AND j.state IN('failed','expired') AND j.completed_at>$2 AND j.completed_at<=$3 ORDER BY j.completed_at DESC LIMIT 100"))
         .bind(rule.workspace_id)
@@ -403,7 +404,7 @@ async fn batch_failed_conditions(
 async fn batch_stalled_conditions(
     tx: &mut Transaction<'_, Postgres>,
     rule: &Rule,
-    now: DateTime<Utc>,
+    now: UtcInstant,
 ) -> Result<Vec<Condition>, sqlx::Error> {
     let Some(window) = rule.window_minutes else {
         return Ok(vec![]);
@@ -427,7 +428,7 @@ async fn batch_stalled_conditions(
                 "mode": mode.unwrap_or_else(|| "native".into()),
                 "total": total,
                 "done": done,
-                "minutes_without_progress": (now - since).num_minutes().max(0),
+                "minutes_without_progress": (now - since).whole_minutes().max(0),
                 "window_minutes": window,
             }),
         })
@@ -488,7 +489,7 @@ pub fn p95_at_least_ms(waits: &[i64], requests: i64) -> Option<i32> {
 async fn ceiling_conditions(
     tx: &mut Transaction<'_, Postgres>,
     rule: &Rule,
-    now: DateTime<Utc>,
+    now: UtcInstant,
 ) -> Result<Vec<Condition>, sqlx::Error> {
     let Some(window) = rule.window_minutes else {
         return Ok(vec![]);
@@ -562,7 +563,7 @@ async fn ceiling_conditions(
 pub(super) async fn evaluate_rule(
     tx: &mut Transaction<'_, Postgres>,
     rule: &Rule,
-    now: DateTime<Utc>,
+    now: UtcInstant,
 ) -> Result<Vec<Condition>, sqlx::Error> {
     match Kind::parse(&rule.kind) {
         Some(Kind::Budget) => {

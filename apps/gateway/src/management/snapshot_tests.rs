@@ -39,10 +39,11 @@ async fn activity(f: &Fixture, pool: &PgPool) -> Activity {
     }
 }
 fn range() -> String {
-    let end = chrono::Utc::now().date_naive() + chrono::TimeDelta::days(1);
+    let end = gateway_datetime_compat::UtcInstant::now().date_naive()
+        + gateway_datetime_compat::SignedDuration::days(1);
     format!(
         "start_date={}&end_date={end}",
-        end - chrono::TimeDelta::days(7)
+        end - gateway_datetime_compat::SignedDuration::days(7)
     )
 }
 /// Every lock-free read endpoint as (who, path).

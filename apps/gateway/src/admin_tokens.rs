@@ -16,7 +16,7 @@
 //! permanently revokes the owner's tokens through migration 0051's
 //! triggers, in the same transaction as whatever caused the loss; regaining
 //! access never restores them (revocation is final).
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 use sha2::{Digest, Sha256};
 use sqlx::{Postgres, Transaction};
 use subtle::ConstantTimeEq;
@@ -86,8 +86,8 @@ pub struct NewAdminToken {
     pub id: Uuid,
     pub token: String,
     pub digest: [u8; 32],
-    pub created_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
+    pub created_at: UtcInstant,
+    pub expires_at: UtcInstant,
 }
 
 /// The secret-bearing part of a token, generated before any database
@@ -356,7 +356,7 @@ pub async fn create_admin_token(
     // same instant the trigger assigns to created_at), never the app's
     // clock: a skewed app clock must not be able to create an
     // already-expired token or one that outlives 90 real days.
-    let (created_at, expires_at): (DateTime<Utc>, DateTime<Utc>) = sqlx::query_as(
+    let (created_at, expires_at): (UtcInstant, UtcInstant) = sqlx::query_as(
         "INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,ip_allowlist,expires_at)
          VALUES($1,$2,$3,$4,$5,$6::text[]::cidr[],now()+make_interval(days=>$7))
          RETURNING created_at,expires_at",

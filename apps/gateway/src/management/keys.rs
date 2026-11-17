@@ -174,8 +174,8 @@ pub(super) async fn key_stats(
 ) -> ApiResult {
     let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
     resources::detail_access(&a)?;
-    let (lineage, status, last_used): (Uuid, String, Option<chrono::DateTime<chrono::Utc>>) = sqlx::query_as(&format!("SELECT k.governance_key_id,{KEY_STATUS},{LAST_USED} FROM api_keys k WHERE k.workspace_id=$1 AND k.id=$2 AND ($3 OR k.issued_to_user_id=$4)")).bind(ws).bind(id).bind(a.admin).bind(u.user_id).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
-    let now: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+    let (lineage, status, last_used): (Uuid, String, Option<gateway_datetime_compat::UtcInstant>) = sqlx::query_as(&format!("SELECT k.governance_key_id,{KEY_STATUS},{LAST_USED} FROM api_keys k WHERE k.workspace_id=$1 AND k.id=$2 AND ($3 OR k.issued_to_user_id=$4)")).bind(ws).bind(id).bind(a.admin).bind(u.user_id).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
+    let now: gateway_datetime_compat::UtcInstant = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut *tx)
         .await?;
     let scope = "FROM inference_executions e LEFT JOIN governance_reservations r ON r.execution_id=e.id WHERE e.workspace_id=$1 AND e.api_key_id IN(SELECT id FROM api_keys WHERE workspace_id=$1 AND governance_key_id=$2)";

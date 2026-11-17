@@ -4,7 +4,8 @@
 //! unknown is null.
 use super::requests::strict_date;
 use super::*;
-use chrono::{NaiveDate, TimeDelta, Utc};
+use gateway_datetime_compat::UtcInstant;
+use gateway_datetime_compat::{CalendarDate, SignedDuration as TimeDelta};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -96,12 +97,12 @@ fn filters(
         service_account,
     })
 }
-fn period(start: &str, end: &str) -> Result<(NaiveDate, NaiveDate, NaiveDate), ApiError> {
+fn period(start: &str, end: &str) -> Result<(CalendarDate, CalendarDate, CalendarDate), ApiError> {
     let (start, end) = (strict_date(start)?, strict_date(end)?);
-    let days = (end - start).num_days();
+    let days = (end - start).whole_days();
     if !(1..=93).contains(&days)
         || end
-            > Utc::now()
+            > UtcInstant::now()
                 .date_naive()
                 .checked_add_signed(TimeDelta::days(1))
                 .ok_or_else(invalid)?
@@ -158,8 +159,8 @@ type Scalar<'q> = sqlx::query::QueryScalar<'q, Postgres, Value, sqlx::postgres::
 fn bind_base<'q>(
     q: Scalar<'q>,
     sc: &Scope,
-    start: NaiveDate,
-    end: NaiveDate,
+    start: CalendarDate,
+    end: CalendarDate,
     f: &'q Filters,
 ) -> Scalar<'q> {
     q.bind(sc.workspace)
@@ -393,7 +394,7 @@ async fn explore_with(
     deadline(async {
         let (_, start, end) = period(&p.start_date, &p.end_date)?;
         let rolled =
-            p.metric != "requests" && crate::rollups::use_rollups(rollups, (end - start).num_days());
+            p.metric != "requests" && crate::rollups::use_rollups(rollups, (end - start).whole_days());
         let (base, metric): (&str, fn(&str) -> Option<&'static str>) = if rolled {
             (ROLLUP_BASE, rolled_metric)
         } else {

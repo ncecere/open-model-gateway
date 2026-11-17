@@ -306,7 +306,7 @@ pub(super) async fn apply_membership_request(
     tx: &mut Transaction<'_, Postgres>,
     ws: Uuid,
     user: Uuid,
-    submitted_at: chrono::DateTime<chrono::Utc>,
+    submitted_at: gateway_datetime_compat::UtcInstant,
 ) -> Result<Uuid, ApiError> {
     if let Err(e) = resources::platform_role_snapshot(tx, user).await {
         return Err(if e.0 == StatusCode::FORBIDDEN {

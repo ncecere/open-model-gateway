@@ -5,6 +5,7 @@
 //! only a static label, the template and statuses on failure.
 use super::vectors::{Vx, coherent_billing, meters};
 use super::*;
+use crate::timestamp::TimestampFormat as _;
 
 /// How the handler is expected to answer (by status class), pinned per probe.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -40,8 +41,8 @@ fn mb(count: usize) -> String {
 fn unique() -> String {
     Uuid::new_v4().simple().to_string()
 }
-fn stamp(base: chrono::NaiveDateTime, hours: i64) -> String {
-    (base + chrono::TimeDelta::hours(hours))
+fn stamp(base: gateway_datetime_compat::UtcInstant, hours: i64) -> String {
+    (base + gateway_datetime_compat::SignedDuration::hours(hours))
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string()
 }
@@ -170,12 +171,15 @@ impl Vx<'_> {
     }
 
     fn base_mapping(&self, account: &str) -> Value {
-        let day = chrono::Utc::now().date_naive() - chrono::TimeDelta::days(20);
+        let day = gateway_datetime_compat::UtcInstant::now().date_naive()
+            - gateway_datetime_compat::SignedDuration::days(20);
         let mut mapping = provider_cost_tests::mapping(self.connection, Some(self.team));
         mapping["account_id"] = json!(account);
         mapping["bindings"][0]["effective_start"] = json!(format!("{day}T00:00:00Z"));
-        mapping["bindings"][0]["effective_end"] =
-            json!(format!("{}T00:00:00Z", day + chrono::TimeDelta::days(1)));
+        mapping["bindings"][0]["effective_end"] = json!(format!(
+            "{}T00:00:00Z",
+            day + gateway_datetime_compat::SignedDuration::days(1)
+        ));
         mapping
     }
 
@@ -425,8 +429,14 @@ impl Vx<'_> {
     // -----------------------------------------------------------------
     async fn mapping_rules(&self) {
         let mappings = "/api/v1/platform/provider-cost-mappings";
-        let day = chrono::Utc::now().date_naive() - chrono::TimeDelta::days(20);
-        let at = |n: i64| format!("{}T00:00:00Z", day + chrono::TimeDelta::days(n));
+        let day = gateway_datetime_compat::UtcInstant::now().date_naive()
+            - gateway_datetime_compat::SignedDuration::days(20);
+        let at = |n: i64| {
+            format!(
+                "{}T00:00:00Z",
+                day + gateway_datetime_compat::SignedDuration::days(n)
+            )
+        };
         let account = || format!("rule-{}", unique());
         type Edit = fn(&mut Value);
         let single: [(&str, Edit, Want); 6] = [
@@ -542,8 +552,9 @@ impl Vx<'_> {
     /// past it, with distinct, non-overlapping, otherwise valid elements.
     async fn mapping_caps(&self) {
         let mappings = "/api/v1/platform/provider-cost-mappings";
-        let base = chrono::Utc::now().date_naive() - chrono::TimeDelta::days(60);
-        let origin = base.and_hms_opt(0, 0, 0).unwrap();
+        let base = gateway_datetime_compat::UtcInstant::now().date_naive()
+            - gateway_datetime_compat::SignedDuration::days(60);
+        let origin = base.midnight().unwrap();
         let binding = |n: i64| {
             json!({"provider_workspace_id":null,"connection_id":self.connection,"deployment_id":null,"workspace_id":null,
                 "effective_start":stamp(origin, n),"effective_end":stamp(origin, n + 1),"exclusive":false,
@@ -596,8 +607,9 @@ impl Vx<'_> {
     /// A chain of `days` one-day buckets (the first holds one item with the
     /// given amount), `per_page` buckets to a page, from a fresh account.
     fn import_chain(&self, days: usize, per_page: usize, amount: &str) -> Value {
-        let start = chrono::Utc::now().date_naive() - chrono::TimeDelta::days(45);
-        let origin = start.and_hms_opt(0, 0, 0).unwrap();
+        let start = gateway_datetime_compat::UtcInstant::now().date_naive()
+            - gateway_datetime_compat::SignedDuration::days(45);
+        let origin = start.midnight().unwrap();
         let item = json!({"amount":amount,"currency":"USD","workspace_id":null,"description":null,"model":null,"service_tier":null,"context_window":null,"cost_type":null,"token_type":null,"inference_geo":null,"speed":null});
         let buckets: Vec<Value> = (0..days as i64)
             .map(|d| {
@@ -1078,13 +1090,16 @@ impl Vx<'_> {
             .await;
         }
         let imports = "/api/v1/platform/provider-cost-imports";
-        let day = chrono::Utc::now().date_naive() - chrono::TimeDelta::days(25);
+        let day = gateway_datetime_compat::UtcInstant::now().date_naive()
+            - gateway_datetime_compat::SignedDuration::days(25);
         let upload = || {
             let mut upload = provider_cost_tests::upload();
             upload["account_id"] = json!("positional-account");
             upload["request"]["starting_at"] = json!(format!("{day}T00:00:00Z"));
-            upload["request"]["ending_at"] =
-                json!(format!("{}T00:00:00Z", day + chrono::TimeDelta::days(1)));
+            upload["request"]["ending_at"] = json!(format!(
+                "{}T00:00:00Z",
+                day + gateway_datetime_compat::SignedDuration::days(1)
+            ));
             upload["exported_at"] = upload["request"]["ending_at"].clone();
             upload["pages"][0]["data"][0]["starting_at"] = upload["request"]["starting_at"].clone();
             upload["pages"][0]["data"][0]["ending_at"] = upload["request"]["ending_at"].clone();

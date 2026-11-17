@@ -12,7 +12,8 @@
 use super::requests::strict_date;
 use super::*;
 use crate::filestore::{files::QUOTA_SQL, usage::GB_DAY_BYTE_SECONDS};
-use chrono::{NaiveDate, TimeDelta, Utc};
+use gateway_datetime_compat::UtcInstant;
+use gateway_datetime_compat::{CalendarDate, SignedDuration as TimeDelta};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -22,10 +23,10 @@ pub(super) struct StorageQuery {
 }
 
 /// `[start, end)` in whole UTC days, 1..=366 days, not after tomorrow.
-fn period(q: &StorageQuery) -> Result<(NaiveDate, NaiveDate), ApiError> {
+fn period(q: &StorageQuery) -> Result<(CalendarDate, CalendarDate), ApiError> {
     let (start, end) = (strict_date(&q.start_date)?, strict_date(&q.end_date)?);
-    let days = (end - start).num_days();
-    let tomorrow = Utc::now()
+    let days = (end - start).whole_days();
+    let tomorrow = UtcInstant::now()
         .date_naive()
         .checked_add_signed(TimeDelta::days(1))
         .ok_or_else(invalid)?;
@@ -50,7 +51,7 @@ fn amount(byte_seconds: &str) -> Result<Value, ApiError> {
     Ok(json!({"byte_seconds": byte_seconds, "gb_days": gb_days(byte_seconds)?}))
 }
 
-fn envelope(start: NaiveDate, end: NaiveDate, through: DateTimeUtc) -> Value {
+fn envelope(start: CalendarDate, end: CalendarDate, through: DateTimeUtc) -> Value {
     json!({
         "period": {"start_date": start.to_string(), "end_date": end.to_string(), "timezone": "UTC"},
         "unit": "gb_day",
@@ -59,7 +60,7 @@ fn envelope(start: NaiveDate, end: NaiveDate, through: DateTimeUtc) -> Value {
         "recorded_through": through,
     })
 }
-type DateTimeUtc = chrono::DateTime<Utc>;
+type DateTimeUtc = gateway_datetime_compat::UtcInstant;
 
 async fn recorded_through(tx: &mut Transaction<'_, Postgres>) -> Result<DateTimeUtc, ApiError> {
     Ok(

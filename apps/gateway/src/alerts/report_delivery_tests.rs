@@ -4,6 +4,7 @@ use crate::{
     email::mock::{self, Behaviour},
     leases::{Lease, Leases},
 };
+use gateway_datetime_compat::UtcInstant;
 use sqlx::PgPool;
 
 fn decode_quoted_printable(raw: &str) -> String {
@@ -69,7 +70,7 @@ async fn published(pool: &PgPool, kind: &str) -> (Store, Uuid, Uuid, Uuid, Optio
         .await
         .unwrap()
         .unwrap();
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+    let now: UtcInstant = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(pool)
         .await
         .unwrap();

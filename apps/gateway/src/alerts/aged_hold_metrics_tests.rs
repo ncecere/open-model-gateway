@@ -1,7 +1,8 @@
 //! Transaction-local counts, published by the evaluator only after commit.
 use super::*;
+use gateway_datetime_compat::UtcInstant;
 
-async fn measured(s: &Seed, now: DateTime<Utc>) -> super::super::super::aged_hold::AgedHoldCounts {
+async fn measured(s: &Seed, now: UtcInstant) -> super::super::super::aged_hold::AgedHoldCounts {
     let mut tx = s.pool.begin().await.unwrap();
     let (_, counts) = aged_hold_tick(&mut tx, now).await.unwrap();
     tx.commit().await.unwrap();

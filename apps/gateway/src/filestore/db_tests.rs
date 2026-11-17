@@ -138,7 +138,7 @@ async fn files_are_scoped_toggled_and_tracked(pool: PgPool) {
         format!("batch_input/{}/{}", f.ws, file.id)
     );
     // Default batch retention: 7 days.
-    let days = (file.expires_at.unwrap() - file.created_at).num_days();
+    let days = (file.expires_at.unwrap() - file.created_at).whole_days();
     assert_eq!(days, 7);
     // Scope is exact: another workspace or installation scope sees nothing.
     assert!(
@@ -176,16 +176,20 @@ async fn files_are_scoped_toggled_and_tracked(pool: PgPool) {
     );
     // A past explicit expiry is invalid; a near one wins over retention.
     let mut past = NewFile::new(Purpose::Export, None);
-    past.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+    past.expires_at = Some(
+        gateway_datetime_compat::UtcInstant::now()
+            - gateway_datetime_compat::SignedDuration::seconds(1),
+    );
     assert_eq!(
         f.files.create(past, body(b"x")).await.unwrap_err(),
         FileError::Invalid
     );
     let mut soon = NewFile::new(Purpose::Export, Some(f.ws));
-    let at = chrono::Utc::now() + chrono::Duration::hours(1);
+    let at = gateway_datetime_compat::UtcInstant::now()
+        + gateway_datetime_compat::SignedDuration::hours(1);
     soon.expires_at = Some(at);
     let export = f.files.create(soon, body(b"csv")).await.unwrap();
-    assert!((export.expires_at.unwrap() - at).num_seconds().abs() <= 1);
+    assert!((export.expires_at.unwrap() - at).whole_seconds().abs() <= 1);
     // A failed upload leaves no live row and no object.
     let failing: ByteStream =
         futures::stream::iter([Ok(Bytes::from_static(b"x")), Err(FileStoreError::Source)]).boxed();

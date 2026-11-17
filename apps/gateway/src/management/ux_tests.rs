@@ -1,6 +1,6 @@
 //! UX program endpoints: Home (/me), key detail/disable, request logs and usage analytics.
 use super::*;
-use chrono::Utc;
+use gateway_datetime_compat::UtcInstant;
 #[path = "logs_tests.rs"]
 mod logs_tests;
 #[path = "usage_rollup_tests.rs"]
@@ -502,9 +502,9 @@ async fn usage_overview_and_explore_are_exact_scoped_and_bounded(pool: PgPool) {
     let (_, owner_key) = key(&f, &f.owner, f.team, Value::Null).await;
     let (_, member_key) = key(&f, &f.member, f.team, Value::Null).await;
     let (_, personal_key) = key(&f, &f.owner, f.personal, Value::Null).await;
-    let today = Utc::now().date_naive();
-    let start = today - chrono::TimeDelta::days(6);
-    let end = today + chrono::TimeDelta::days(1);
+    let today = UtcInstant::now().date_naive();
+    let start = today - gateway_datetime_compat::SignedDuration::days(6);
+    let end = today + gateway_datetime_compat::SignedDuration::days(1);
     let range = format!("start_date={start}&end_date={end}");
     attempt(
         &pool,

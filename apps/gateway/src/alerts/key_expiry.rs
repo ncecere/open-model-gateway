@@ -1,6 +1,7 @@
 //! Built-in key-expiry reminders (#100): candidates, retirement, the per-tick
 //! evaluation and the live visibility/deliverability predicates.
 use super::*;
+use gateway_datetime_compat::UtcInstant;
 
 // ---------- Key-expiry reminders (#100) ----------
 //
@@ -59,7 +60,7 @@ const KEY_EXPIRY_RETIRE: &str = "WITH decided AS ( \
 ), obsolete AS (SELECT id,resolution FROM decided WHERE resolution IS NOT NULL ORDER BY fired_at,id LIMIT $2) \
  UPDATE alert_events e SET resolved_at=clock_timestamp(),resolution=d.resolution FROM obsolete d WHERE e.id=d.id";
 
-type KeyExpiryCandidate = (Uuid, DateTime<Utc>, Uuid, i32);
+type KeyExpiryCandidate = (Uuid, UtcInstant, Uuid, i32);
 
 /// One bounded tick: retire obsolete open reminders, then create new ones
 /// for current candidates. Retiring first means a key that just crossed
@@ -67,7 +68,7 @@ type KeyExpiryCandidate = (Uuid, DateTime<Utc>, Uuid, i32);
 /// the open-uniqueness index before the new 1-day row tries to claim it.
 pub(crate) async fn key_expiring_tick(
     tx: &mut Transaction<'_, Postgres>,
-    now: DateTime<Utc>,
+    now: UtcInstant,
 ) -> Result<Changes, sqlx::Error> {
     let mut changes = Changes::default();
     // Apply each workspace's remaining allowance BEFORE the global LIMIT:

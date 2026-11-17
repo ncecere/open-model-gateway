@@ -1,6 +1,7 @@
 //! One claimed line's execution: why a batch stops, its shared run state,
 //! and running a line (with its explicit retries) through the engine.
 use super::*;
+use gateway_datetime_compat::UtcInstant;
 
 /// Why a batch stopped dispatching.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,7 +84,7 @@ impl RunState {
             Some(Stop::Budget)
         } else if self.cancel.load(Ordering::SeqCst) {
             Some(Stop::Cancelled)
-        } else if Utc::now() >= job.created_at + job.completion_window() {
+        } else if UtcInstant::now() >= job.created_at + job.completion_window() {
             Some(Stop::Expired)
         } else if self.hold_unavailable.load(Ordering::SeqCst) {
             Some(Stop::HoldUnavailable)

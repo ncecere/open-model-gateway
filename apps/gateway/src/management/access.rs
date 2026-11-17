@@ -5,7 +5,7 @@
 //! turned off, no enabled route); it has no limits and no layer row.
 use super::*;
 use crate::governance::{BudgetPeriod, budget_consumption};
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -107,7 +107,7 @@ async fn budget_reasons(
     tx: &mut Transaction<'_, Postgres>,
     ws: Uuid,
     scopes: &[(&'static str, &governance::Limits, Option<Uuid>)],
-    now: DateTime<Utc>,
+    now: UtcInstant,
     global: &mut Vec<Reason>,
 ) -> Result<(), ApiError> {
     for (layer, limits, lin) in scopes {
@@ -237,7 +237,7 @@ async fn access(
     };
     let catalogs = catalog_lists(&mut tx, ws, &l.kind).await?;
     let catalog_override = catalogs.overridden;
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+    let now: UtcInstant = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut *tx)
         .await?;
     let platform_layer = if l.override_present {

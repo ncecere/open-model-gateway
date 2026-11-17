@@ -20,7 +20,7 @@ use std::{
     time::Duration,
 };
 
-use chrono::{DateTime, DurationRound, TimeDelta, Utc};
+use gateway_datetime_compat::{SignedDuration as TimeDelta, UtcInstant};
 use uuid::Uuid;
 
 /// Lower bounds (ms) of the recorded lock waits; `waits[i]` counts the
@@ -33,7 +33,7 @@ const MAX_ENTRIES: usize = 20_000;
 /// Rows kept for diagnosis; the alert reads at most the last 10 minutes.
 pub const RETAINED_HOURS: i64 = 1;
 
-type Key = (DateTime<Utc>, &'static str, Uuid);
+type Key = (UtcInstant, &'static str, Uuid);
 static WAITS: LazyLock<Mutex<HashMap<Key, [i64; 8]>>> = LazyLock::new(Mutex::default);
 
 /// Bucket counts of one wait: 1 for every bound it reached.
@@ -48,7 +48,7 @@ fn buckets(wait: Duration) -> Option<[i64; 8]> {
 /// Record the scope-lock wait of one interactive admission of `workspace`
 /// and key `lineage`, admitted at `at`. Cheap and non-blocking for fast
 /// admissions (nothing is recorded below 10 ms).
-pub fn record(at: DateTime<Utc>, workspace: Uuid, lineage: Uuid, wait: Duration) {
+pub fn record(at: UtcInstant, workspace: Uuid, lineage: Uuid, wait: Duration) {
     let Some(add) = buckets(wait) else {
         return;
     };

@@ -5,7 +5,9 @@
 use super::*;
 use crate::governance::tests::db::{Fixture, done, fixture, request};
 use crate::store::Store;
-use chrono::TimeDelta;
+use crate::timestamp::TimestampFormat as _;
+use gateway_datetime_compat::SignedDuration as TimeDelta;
+use gateway_datetime_compat::UtcInstant;
 use sqlx::{PgPool, migrate::Migrator};
 
 /// Seed `n` attempts of history at `lo + (i * 7919 mod span)` seconds into
@@ -18,7 +20,7 @@ pub(crate) async fn seed_history(
     f: &Fixture,
     tag: &str,
     n: i64,
-    lo: DateTime<Utc>,
+    lo: UtcInstant,
     span_seconds: i64,
     ledger_admitted: bool,
 ) {
@@ -73,7 +75,7 @@ SELECT md5('s'||$1||r.execution_id)::uuid,r.execution_id,CASE r.state WHEN 'sett
     }
 }
 
-async fn legacy_upper(pool: &PgPool) -> DateTime<Utc> {
+async fn legacy_upper(pool: &PgPool) -> UtcInstant {
     sqlx::query_scalar(
         "SELECT legacy_upper FROM history_partitions WHERE parent='inference_executions'",
     )
@@ -103,8 +105,8 @@ async fn assert_consistent(pool: &PgPool, context: &str) {
 async fn months_are_created_ahead_and_rows_route_at_the_boundary(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     let upper = legacy_upper(&pool).await;
-    let month = |n: u32| upper + chrono::Months::new(n);
-    let name = |m: DateTime<Utc>| format!("inference_executions_p{}", m.format("%Y_%m"));
+    let month = |n: u32| upper.checked_add_months(i32::try_from(n).unwrap()).unwrap();
+    let name = |m: UtcInstant| format!("inference_executions_p{}", m.format("%Y_%m"));
     // The migration covered the next three months already.
     let now = coverage(&pool, None).await.unwrap();
     assert!(now.iter().all(|c| c.months_ahead >= 3), "{now:?}");
@@ -233,7 +235,7 @@ async fn reservation_partitions_get_threshold_autovacuum_now_and_when_created(po
         );
     }
     // Months the partitions job creates later get them too (runtime path).
-    let at = legacy_upper(&pool).await + chrono::Months::new(8);
+    let at = legacy_upper(&pool).await.checked_add_months(8).unwrap();
     let report = ensure_at(&pool, 0, at).await.unwrap();
     let created = format!("governance_reservations_p{}", at.format("%Y_%m"));
     assert!(
@@ -255,7 +257,7 @@ async fn reservation_partitions_get_threshold_autovacuum_now_and_when_created(po
 async fn missing_future_months_raise_and_clear_the_builtin_alert(pool: PgPool) {
     let upper = legacy_upper(&pool).await;
     // Seen from eight months later, nothing ahead is covered.
-    let later = upper + chrono::Months::new(8);
+    let later = upper.checked_add_months(8).unwrap();
     let coverage_later = coverage(&pool, Some(later)).await.unwrap();
     assert!(
         coverage_later.iter().all(|c| c.months_ahead == -1),
@@ -403,7 +405,7 @@ async fn seeded_history_converts_without_exclusive_rewrites(test_pool: PgPool) {
     before.run(&pool).await.unwrap();
     let f = fixture(pool.clone()).await;
     let seeded = std::time::Instant::now();
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
+    let now: UtcInstant = sqlx::query_scalar("SELECT now()")
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -525,7 +527,7 @@ async fn prepared_keys_are_adopted_by_the_upgrade(pool: PgPool) {
     };
     before.run(&pool).await.unwrap();
     let f = fixture(pool.clone()).await;
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
+    let now: UtcInstant = sqlx::query_scalar("SELECT now()")
         .fetch_one(&pool)
         .await
         .unwrap();

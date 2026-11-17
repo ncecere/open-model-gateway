@@ -1,11 +1,11 @@
 // The required `gateway` check must fail closed, including skipped/cancelled jobs.
-const expected = ["gateway-lint", "gateway-special", "gateway-tests"];
+const expected = ["gateway-lint", "gateway-special", "gateway-tests", "sdk-compat"];
 try {
   const needs = JSON.parse(process.env.GATEWAY_NEEDS);
   if (!needs || Array.isArray(needs) || typeof needs !== "object"
       || JSON.stringify(Object.keys(needs).sort()) !== JSON.stringify(expected)
       || expected.some(name => needs[name]?.result !== "success")) {
-    throw new Error("gateway requires exactly gateway-lint, gateway-tests (all four matrix legs), and gateway-special to succeed");
+    throw new Error("gateway requires exactly gateway-lint, gateway-tests (all four matrix legs), gateway-special, and sdk-compat to succeed");
   }
   console.log("All gateway gates succeeded");
 } catch (error) {

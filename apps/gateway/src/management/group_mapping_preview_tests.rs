@@ -320,7 +320,7 @@ async fn renaming_a_mapping_shows_the_immediate_revoke_even_when_reconciliation_
         .0,
         StatusCode::OK
     );
-    let revoked_at: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+    let revoked_at: Option<gateway_datetime_compat::UtcInstant> = sqlx::query_scalar(
         "SELECT revoked_at FROM workspace_membership_grants WHERE workspace_id=$1 AND user_id=$2 AND mapping_id=$3",
     )
     .bind(f.team)

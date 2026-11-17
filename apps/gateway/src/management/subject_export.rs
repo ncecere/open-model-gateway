@@ -17,7 +17,8 @@
 
 use super::*;
 use axum::response::{IntoResponse, Response};
-use chrono::{Duration as Days, NaiveDate, Utc};
+use gateway_datetime_compat::UtcInstant;
+use gateway_datetime_compat::{CalendarDate, SignedDuration as Days};
 use sha2::{Digest, Sha256};
 
 pub const FORMAT: &str = "omg.subject-export.v1";
@@ -46,16 +47,16 @@ pub(super) fn routes() -> Router<Store> {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Range {
-    from: Option<NaiveDate>,
-    to: Option<NaiveDate>,
+    from: Option<CalendarDate>,
+    to: Option<CalendarDate>,
 }
 
 /// `[from, to]` inclusive UTC days, at most 93; default the last 30.
-fn range(q: &Range) -> Result<(NaiveDate, NaiveDate), ApiError> {
-    let today = Utc::now().date_naive();
+fn range(q: &Range) -> Result<(CalendarDate, CalendarDate), ApiError> {
+    let today = UtcInstant::now().date_naive();
     let to = q.to.unwrap_or(today);
     let from = q.from.unwrap_or(to - Days::days(DEFAULT_DAYS - 1));
-    if from > to || (to - from).num_days() + 1 > MAX_DAYS || to > today {
+    if from > to || (to - from).whole_days() + 1 > MAX_DAYS || to > today {
         return Err(ApiError(
             StatusCode::BAD_REQUEST,
             "Choose a range of up to 93 days, ending today or earlier",
@@ -168,8 +169,8 @@ async fn mine(
 async fn export_mine(
     s: &Store,
     u: &BrowserPrincipal,
-    from: NaiveDate,
-    to: NaiveDate,
+    from: CalendarDate,
+    to: CalendarDate,
 ) -> Result<Response, ApiError> {
     record(s, u, "subject.exported", u.user_id).await?;
     let mut tx = s.snapshot().await?;
@@ -181,11 +182,8 @@ async fn export_mine(
         .await?
         .ok_or_else(missing)?;
     let (start, end) = (
-        from.and_hms_opt(0, 0, 0).expect("midnight").and_utc(),
-        (to + Days::days(1))
-            .and_hms_opt(0, 0, 0)
-            .expect("midnight")
-            .and_utc(),
+        from.midnight().expect("midnight"),
+        (to + Days::days(1)).midnight().expect("midnight"),
     );
     let access_requests = capped(&mut tx, "SELECT id,workspace_id,workspace_name_at_request,model_id,model_name_at_request,target_kind,requested_role,status,reason,created_at,expires_at,decided_by,decided_at FROM access_requests WHERE requester=$1 ORDER BY created_at,id", LIST_CAP, |q|q.bind(me)).await?;
     let roles = capped(&mut tx, ROLES, LIST_CAP, |q| q.bind(me)).await?;
@@ -201,7 +199,7 @@ async fn export_mine(
         .await?;
     let body = json!({
         "format": FORMAT,
-        "generated_at": Utc::now(),
+        "generated_at": UtcInstant::now(),
         "installation": { "id": installation.0, "name": installation.1 },
         "range": { "from": from, "to": to },
         "subject": profile,
@@ -272,7 +270,7 @@ async fn export_platform(s: &Store, u: &impl Actor, user: Uuid) -> Result<Respon
     tx.commit().await?;
     let body = json!({
         "format": FORMAT,
-        "generated_at": Utc::now(),
+        "generated_at": UtcInstant::now(),
         "scope": "platform",
         "subject": profile,
         "platform_roles": roles,
@@ -290,8 +288,8 @@ mod tests {
 
     #[test]
     fn ranges_are_bounded_and_end_today_or_earlier() {
-        let today = Utc::now().date_naive();
-        let q = |from: Option<NaiveDate>, to: Option<NaiveDate>| range(&Range { from, to });
+        let today = UtcInstant::now().date_naive();
+        let q = |from: Option<CalendarDate>, to: Option<CalendarDate>| range(&Range { from, to });
         assert_eq!(q(None, None).unwrap(), (today - Days::days(29), today));
         assert!(
             q(Some(today - Days::days(92)), Some(today)).is_ok(),

@@ -56,7 +56,7 @@ async fn created(pool: PgPool, native: bool, metadata: Option<Value>) -> (World,
 
 /// The envelope outlives the job's poll deadline from the moment the job exists.
 async fn lease_covers_the_job(w: &World, job: &JobRow) {
-    let (lease, deadline): (chrono::DateTime<Utc>, chrono::DateTime<Utc>) = sqlx::query_as("SELECT r.lease_expires_at,j.poll_deadline_at FROM governance_reservations r JOIN async_jobs j ON j.execution_id=r.execution_id WHERE j.id=$1")
+    let (lease, deadline): (gateway_datetime_compat::UtcInstant, gateway_datetime_compat::UtcInstant) = sqlx::query_as("SELECT r.lease_expires_at,j.poll_deadline_at FROM governance_reservations r JOIN async_jobs j ON j.execution_id=r.execution_id WHERE j.id=$1")
         .bind(job.id)
         .fetch_one(&w.f.store.pool)
         .await

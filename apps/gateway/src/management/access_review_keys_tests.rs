@@ -525,7 +525,7 @@ async fn platform_views_never_name_keys_or_holders(pool: PgPool) {
         .split("\r\n")
         .find(|l| l.starts_with(&format!("\"{item}\"")))
         .unwrap();
-    let expires: chrono::DateTime<chrono::Utc> =
+    let expires: gateway_datetime_compat::UtcInstant =
         sqlx::query_scalar("SELECT expires_at FROM api_keys WHERE id=$1")
             .bind(human)
             .fetch_one(&pool)
@@ -548,7 +548,7 @@ async fn platform_views_never_name_keys_or_holders(pool: PgPool) {
     assert_eq!(
         row["expires_at"]
             .as_str()
-            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .and_then(|t| gateway_datetime_compat::http::parse_rfc3339(t).ok())
             .map(|t| t.timestamp_micros()),
         Some(expires.timestamp_micros())
     );
@@ -791,7 +791,7 @@ async fn remove_revokes_the_whole_lineage_and_it_never_returns(pool: PgPool) {
         .find(|r| r["id"] == item.to_string())
         .unwrap();
     assert!(row["last_used_at"].is_string(), "{row}");
-    let expires: chrono::DateTime<chrono::Utc> =
+    let expires: gateway_datetime_compat::UtcInstant =
         sqlx::query_scalar("SELECT expires_at FROM api_keys WHERE id=$1")
             .bind(rotated)
             .fetch_one(&pool)
@@ -800,7 +800,7 @@ async fn remove_revokes_the_whole_lineage_and_it_never_returns(pool: PgPool) {
     assert_eq!(
         row["expires_at"]
             .as_str()
-            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .and_then(|t| gateway_datetime_compat::http::parse_rfc3339(t).ok())
             .map(|t| t.timestamp_micros()),
         Some(expires.timestamp_micros())
     );

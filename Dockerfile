@@ -18,6 +18,8 @@ FROM mirror.gcr.io/library/rust:1.99.1-bookworm@sha256:e6f2cff35d0f309acf8433b4f
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY apps/gateway/ apps/gateway/
+COPY crates/ crates/
+COPY vendor/ vendor/
 # Embedded by `open-model-gateway grants apply|verify`.
 COPY deploy/staging/runtime-grants.sql deploy/staging/verify-privileges.sql deploy/staging/
 # Workspace members (load-test tools) must exist for Cargo to load the
@@ -39,6 +41,8 @@ WORKDIR /app
 COPY --from=build --chmod=0555 /build/target/release/open-model-gateway /usr/local/bin/open-model-gateway
 COPY --from=web /build/apps/web/dist/ /app/web/
 COPY --from=web /build/apps/web/src/components/ui/LICENSE /usr/share/licenses/open-model-gateway/bitop-ui-LICENSE
+COPY vendor/oauth2/LICENSE-MIT vendor/oauth2/LICENSE-APACHE /usr/share/licenses/open-model-gateway/oauth2/
+COPY vendor/openidconnect/LICENSE /usr/share/licenses/open-model-gateway/openidconnect-LICENSE
 # HOME matches the former passwd entry; nothing is written there.
 ENV GATEWAY_ENV=production \
     GATEWAY_LISTEN=0.0.0.0:8080 \

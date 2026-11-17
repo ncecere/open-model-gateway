@@ -1187,7 +1187,7 @@ pub(crate) mod db {
         let a = f.start();
         // Admitted one second before this UTC month (a second store pinned
         // there; admission times are immutable partition keys since 0030).
-        let last_month: chrono::DateTime<chrono::Utc> =
+        let last_month: gateway_datetime_compat::UtcInstant =
             sqlx::query_scalar("SELECT date_trunc('month',now(),'UTC')-interval '1 second'")
                 .fetch_one(&f.store.pool)
                 .await

@@ -1,6 +1,6 @@
 //! Signed, bounded webhook delivery. No connection spans HTTP.
 use crate::store::Store;
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 use sqlx::{Postgres, Transaction};
 use std::time::Duration;
 use uuid::Uuid;
@@ -106,14 +106,14 @@ fn request_failure(error: &reqwest::Error) -> Failure {
 #[derive(sqlx::FromRow)]
 struct Destination {
     enabled: bool,
-    deleted_at: Option<DateTime<Utc>>,
+    deleted_at: Option<UtcInstant>,
     url: Option<String>,
     current_secret_ref: Option<String>,
     previous_secret_ref: Option<String>,
-    previous_secret_until: Option<DateTime<Utc>>,
+    previous_secret_until: Option<UtcInstant>,
     enable_generation: i64,
 }
-fn active_previous(d: &Destination, now: DateTime<Utc>) -> Option<&str> {
+fn active_previous(d: &Destination, now: UtcInstant) -> Option<&str> {
     d.previous_secret_until
         .filter(|until| *until > now)
         .and(d.previous_secret_ref.as_deref())
@@ -191,7 +191,7 @@ async fn claim(store: &Store, owner: Uuid) -> sqlx::Result<Option<Option<Claim>>
             || d.current_secret_ref
                 .as_deref()
                 .is_none_or(|r| !store.alert_webhooks.secrets.allows(r))
-            || active_previous(&d, Utc::now())
+            || active_previous(&d, UtcInstant::now())
                 .is_some_and(|r| !store.alert_webhooks.secrets.allows(r));
         let token = Uuid::new_v4();
         let before = tokio::time::Instant::now();
@@ -230,12 +230,12 @@ async fn send_with(
     let url = reqwest::Url::parse(&approved).map_err(|_| Failure::DestinationPolicy)?;
     let current_ref = d.current_secret_ref.as_deref().ok_or(Failure::Credential)?;
     if !policy.secrets.allows(current_ref)
-        || active_previous(d, Utc::now()).is_some_and(|r| !policy.secrets.allows(r))
+        || active_previous(d, UtcInstant::now()).is_some_and(|r| !policy.secrets.allows(r))
     {
         return Err(Failure::DestinationPolicy);
     }
     let current = resolve(current_ref).ok_or(Failure::Credential)?;
-    let previous = active_previous(d, Utc::now())
+    let previous = active_previous(d, UtcInstant::now())
         .map(|r| resolve(r).ok_or(Failure::Credential))
         .transpose()?;
     let mut egress = crate::egress::policy().permit_loopback(policy.development);
@@ -255,7 +255,7 @@ async fn send_with(
     let header = signature(
         &current,
         previous.as_ref().map(|p| p.as_slice()),
-        Utc::now().timestamp(),
+        UtcInstant::now().timestamp(),
         &c.row.payload,
     );
     let response = client
@@ -370,7 +370,7 @@ mod tests {
     }
     #[test]
     fn rotation_overlap_expiry_is_exclusive() {
-        let until = Utc::now();
+        let until = UtcInstant::now();
         let d = Destination {
             enabled: true,
             deleted_at: None,
@@ -381,12 +381,18 @@ mod tests {
             enable_generation: 0,
         };
         assert_eq!(
-            active_previous(&d, until - chrono::Duration::microseconds(1)),
+            active_previous(
+                &d,
+                until - gateway_datetime_compat::SignedDuration::microseconds(1)
+            ),
             Some("env:OLD")
         );
         assert_eq!(active_previous(&d, until), None);
         assert_eq!(
-            active_previous(&d, until + chrono::Duration::microseconds(1)),
+            active_previous(
+                &d,
+                until + gateway_datetime_compat::SignedDuration::microseconds(1)
+            ),
             None
         );
     }

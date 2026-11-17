@@ -1,6 +1,7 @@
 //! Reconciliation: expired leases become unknown, and evidence-backed usage
 //! resolves an unknown reservation.
 use super::*;
+use gateway_datetime_compat::UtcInstant;
 /// Expired-lease reservations reconciled per transaction.
 const RECONCILE_BATCH: i64 = 50;
 /// Marks up to `limit` expired pending reservations unknown (their holds are
@@ -29,7 +30,7 @@ async fn reconcile_batch(store: &Store, batch: i64) -> Result<usize, InferenceEr
     {
         let mut tx = crate::db::begin(&store.pool).await.map_err(begin_storage)?;
         settlement_prefix(store, &mut tx).await?;
-        let due: Vec<(Uuid, Uuid, Uuid, DateTime<Utc>)> = sqlx::query_as("SELECT execution_id,workspace_id,api_key_id,admitted_at FROM governance_reservations WHERE state='pending' AND lease_expires_at<=clock_timestamp() ORDER BY lease_expires_at,execution_id LIMIT $1 FOR UPDATE SKIP LOCKED")
+        let due: Vec<(Uuid, Uuid, Uuid, UtcInstant)> = sqlx::query_as("SELECT execution_id,workspace_id,api_key_id,admitted_at FROM governance_reservations WHERE state='pending' AND lease_expires_at<=clock_timestamp() ORDER BY lease_expires_at,execution_id LIMIT $1 FOR UPDATE SKIP LOCKED")
             .bind(batch)
             .fetch_all(&mut *tx)
             .await

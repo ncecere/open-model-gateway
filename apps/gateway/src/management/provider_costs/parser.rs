@@ -1,6 +1,6 @@
 //! Anthropic Cost Report v1. No floating point and no provider connectivity.
 use super::*;
-use chrono::{DateTime, Duration, Utc};
+use gateway_datetime_compat::{SignedDuration as Duration, UtcInstant};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -66,8 +66,8 @@ struct Item {
 pub(super) struct Line {
     pub source_page: i32,
     pub source_pointer: String,
-    pub bucket_start: DateTime<Utc>,
-    pub bucket_end: DateTime<Utc>,
+    pub bucket_start: UtcInstant,
+    pub bucket_end: UtcInstant,
     pub dimensions: Value,
     pub original_amount: String,
     pub amount_microusd: String,
@@ -75,22 +75,20 @@ pub(super) struct Line {
     pub dimension_key: String,
 }
 pub(super) struct Parsed {
-    pub start: DateTime<Utc>,
-    pub end: DateTime<Utc>,
-    pub exported: DateTime<Utc>,
+    pub start: UtcInstant,
+    pub end: UtcInstant,
+    pub exported: UtcInstant,
     pub fingerprint: Vec<u8>,
     pub lines: Vec<Line>,
 }
 pub(in crate::management) fn bounded(s: &str, max: usize) -> bool {
     !s.is_empty() && crate::text::chars_at_most(s, max) && !s.chars().any(char::is_control)
 }
-pub(super) fn timestamp(s: &str) -> Result<DateTime<Utc>, ApiError> {
+pub(super) fn timestamp(s: &str) -> Result<UtcInstant, ApiError> {
     if s.len() > 40 {
         return Err(invalid());
     }
-    DateTime::parse_from_rfc3339(s)
-        .map(|d| d.with_timezone(&Utc))
-        .map_err(|_| invalid())
+    gateway_datetime_compat::http::parse_rfc3339(s).map_err(|_| invalid())
 }
 
 /// Exact decimal cents -> rounded integer micro-USD and exact signed residual
@@ -386,9 +384,9 @@ fn check_request(b: &Upload) -> Result<(), ApiError> {
 }
 
 struct Window {
-    start: DateTime<Utc>,
-    end: DateTime<Utc>,
-    exported: DateTime<Utc>,
+    start: UtcInstant,
+    end: UtcInstant,
+    exported: UtcInstant,
 }
 /// The requested window and the export time: whole UTC days, at most 31, not
 /// in the future, exported after the window ended.
@@ -399,12 +397,12 @@ fn window(b: &Upload) -> Result<Window, ApiError> {
     if start.timestamp().rem_euclid(86_400) != 0
         || start.timestamp_subsec_nanos() != 0
         || end <= start
-        || end > Utc::now()
+        || end > UtcInstant::now()
         || end - start > Duration::days(31)
         || end.timestamp().rem_euclid(86_400) != 0
         || end.timestamp_subsec_nanos() != 0
         || exported < end
-        || exported > Utc::now()
+        || exported > UtcInstant::now()
     {
         return Err(invalid());
     }
@@ -418,7 +416,7 @@ fn window(b: &Upload) -> Result<Window, ApiError> {
 /// What the walk over the pages has gathered so far.
 struct Walk {
     /// The start the next bucket must have (buckets are contiguous days).
-    expected: DateTime<Utc>,
+    expected: UtcInstant,
     seen_rows: BTreeSet<String>,
     cursors: BTreeSet<String>,
     lines: Vec<Line>,
@@ -432,7 +430,7 @@ impl Walk {
         b: &Upload,
         page_index: usize,
         raw: &serde_json::value::RawValue,
-        end: DateTime<Utc>,
+        end: UtcInstant,
     ) -> Result<(), ApiError> {
         bounded_page(raw.get())?;
         let page: Page = serde_json::from_str(raw.get()).map_err(|_| invalid())?;
@@ -464,7 +462,7 @@ impl Walk {
         page_index: usize,
         bucket_index: usize,
         bucket: &Bucket,
-        end: DateTime<Utc>,
+        end: UtcInstant,
     ) -> Result<(), ApiError> {
         let bs = timestamp(&bucket.starting_at)?;
         let be = timestamp(&bucket.ending_at)?;
@@ -485,7 +483,7 @@ impl Walk {
         bucket_index: usize,
         item_index: usize,
         item: &Item,
-        (bs, be): (DateTime<Utc>, DateTime<Utc>),
+        (bs, be): (UtcInstant, UtcInstant),
     ) -> Result<(), ApiError> {
         if self.lines.len() == MAX_LINES || item.currency != "USD" {
             return Err(invalid());

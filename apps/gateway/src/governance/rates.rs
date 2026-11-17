@@ -9,7 +9,7 @@
 //! reconciliation lag) are subtracted, exactly as the former scan ignored
 //! them. `verify_in` compares the counters with a full scan.
 use super::totals::Consumption;
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
@@ -84,7 +84,7 @@ pub(super) async fn read_limits(
     tx: &mut Transaction<'_, Postgres>,
     workspace: Uuid,
     lineage: Uuid,
-    at: DateTime<Utc>,
+    at: UtcInstant,
     policies: bool,
 ) -> Result<LimitState, sqlx::Error> {
     read_state(tx, workspace, lineage, at, policies, false).await
@@ -97,7 +97,7 @@ pub(crate) async fn read_counters(
     tx: &mut Transaction<'_, Postgres>,
     workspace: Uuid,
     lineage: Uuid,
-    at: DateTime<Utc>,
+    at: UtcInstant,
 ) -> Result<(Counters, Counters), sqlx::Error> {
     let state = read_state(tx, workspace, lineage, at, false, true).await?;
     let get = |key: Option<Uuid>| {
@@ -115,7 +115,7 @@ async fn read_state(
     tx: &mut Transaction<'_, Postgres>,
     workspace: Uuid,
     lineage: Uuid,
-    at: DateTime<Utc>,
+    at: UtcInstant,
     policies: bool,
     counters: bool,
 ) -> Result<LimitState, sqlx::Error> {
@@ -250,7 +250,7 @@ s AS (SELECT a.*,sc.kind,sc.id FROM a JOIN api_keys k ON k.id=a.api_key_id
 pub struct Mismatch {
     /// `minute` or `inflight`.
     pub counter: String,
-    pub minute_start: Option<DateTime<Utc>>,
+    pub minute_start: Option<UtcInstant>,
     pub scope_kind: String,
     pub scope_id: Uuid,
     /// `requests,unreserved,tokens` (minute) or `requests,jobs` (in-flight).
@@ -271,7 +271,7 @@ pub(crate) struct RateReport {
 pub(crate) async fn verify_in(
     tx: &mut Transaction<'_, Postgres>,
 ) -> Result<RateReport, sqlx::Error> {
-    let horizon: DateTime<Utc> = sqlx::query_scalar(
+    let horizon: UtcInstant = sqlx::query_scalar(
         "SELECT date_trunc('minute',clock_timestamp(),'UTC')-interval '5 minutes'",
     )
     .fetch_one(&mut **tx)
@@ -344,7 +344,7 @@ pub(crate) async fn scan_counters(
     tx: &mut Transaction<'_, Postgres>,
     workspace: Option<Uuid>,
     lineage: Option<Uuid>,
-    at: DateTime<Utc>,
+    at: UtcInstant,
 ) -> Result<Counters, sqlx::Error> {
     let row: (i64, i64, String, i64, i64) = sqlx::query_as(r#"WITH accounting AS (
       SELECT r.workspace_id,r.api_key_id,r.minute_start,r.state,r.lease_expires_at,r.reserved_tokens,r.input_tokens,r.output_tokens,r.billing_usage,e.workload_kind IN('videos','batches') OR e.batch_job_id IS NOT NULL AS job,j.id IS NOT NULL OR e.batch_job_id IS NOT NULL AS accepted,coalesce(j.state IN('completed','failed','cancelled','expired') OR j.cancel_requested_at IS NOT NULL,e.batch_job_id IS NOT NULL) AS job_done,false AS execution_only FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id LEFT JOIN async_jobs j ON j.execution_id=r.execution_id WHERE r.minute_start=date_trunc('minute',$3::timestamptz,'UTC') OR (r.state='pending' AND r.lease_expires_at>$3)

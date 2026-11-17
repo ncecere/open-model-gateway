@@ -449,7 +449,7 @@ async fn storage_limit_stacks_and_is_tighten_only(pool: PgPool) {
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn storage_usage_is_not_charged_and_private(pool: PgPool) {
     let f = fixture(&pool).await;
-    let hour: chrono::DateTime<chrono::Utc> =
+    let hour: gateway_datetime_compat::UtcInstant =
         sqlx::query_scalar("SELECT date_trunc('day', now(), 'UTC') + interval '1 hour'")
             .fetch_one(&pool)
             .await
@@ -462,11 +462,11 @@ async fn storage_usage_is_not_charged_and_private(pool: PgPool) {
     ] {
         sqlx::query("INSERT INTO storage_usage_hours(workspace_id,purpose,hour_start,byte_seconds,file_count) VALUES($1,$2,$3,$4,1)").bind(ws).bind(purpose).bind(hour).bind(bs).execute(&pool).await.unwrap();
     }
-    let today = chrono::Utc::now().date_naive();
+    let today = gateway_datetime_compat::UtcInstant::now().date_naive();
     let range = format!(
         "start_date={}&end_date={}",
         today,
-        today + chrono::TimeDelta::days(1)
+        today + gateway_datetime_compat::SignedDuration::days(1)
     );
     let ws_path = format!("/api/v1/workspaces/{}/usage/storage?{range}", f.team);
     let (status, v) = call(&f.s, &f.owner, "GET", &ws_path, json!({})).await;

@@ -304,7 +304,7 @@ pub(crate) async fn management_openapi_auth_fixtures(
     );
     assert!(sessions["data"][0]["last_seen_at"].is_string());
     observed.observe(&r);
-    let today = chrono::Utc::now().date_naive();
+    let today = gateway_datetime_compat::UtcInstant::now().date_naive();
     let r = open_get(
         &app,
         &format!("/api/v1/me/export?from={today}&to={today}"),
@@ -2151,7 +2151,7 @@ mod database {
         assert!(me(&with("7d", "off").await.unwrap()).await);
         assert_eq!(deadlines().await.1, None);
         // Sign-in times are kept on the user.
-        let (first, last): (Option<chrono::DateTime<chrono::Utc>>, Option<chrono::DateTime<chrono::Utc>>) =
+        let (first, last): (Option<gateway_datetime_compat::UtcInstant>, Option<gateway_datetime_compat::UtcInstant>) =
             sqlx::query_as("SELECT first_signed_in_at,last_signed_in_at FROM users u JOIN browser_sessions s ON s.user_id=u.id WHERE s.token_hash=$1")
                 .bind(&key).fetch_one(&pool).await.unwrap();
         assert!(first.is_some() && first == last);
@@ -2184,7 +2184,7 @@ mod database {
                 .unwrap();
             assert!(cookie.contains("Max-Age=5400"), "{cookie}");
         }
-        let idle: Option<chrono::DateTime<chrono::Utc>> =
+        let idle: Option<gateway_datetime_compat::UtcInstant> =
             sqlx::query_scalar("SELECT idle_expires_at FROM browser_sessions")
                 .fetch_one(&pool)
                 .await
@@ -2299,7 +2299,7 @@ mod database {
         );
         // Last-seen: written when older than five minutes, not on every request.
         let seen = || async {
-            sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+            sqlx::query_scalar::<_, gateway_datetime_compat::UtcInstant>(
                 "SELECT last_seen_at FROM browser_sessions WHERE token_hash=$1",
             )
             .bind(hash(&laptop.0))
@@ -2314,7 +2314,9 @@ mod database {
         sqlx::query("UPDATE browser_sessions SET last_seen_at=now()-interval '10 minutes' WHERE token_hash=$1").bind(hash(&laptop.0)).execute(&pool).await.unwrap();
         http_management(&app, &laptop, "GET", "/api/v1/me", Value::Null).await;
         assert!(
-            seen().await > chrono::Utc::now() - chrono::Duration::minutes(1),
+            seen().await
+                > gateway_datetime_compat::UtcInstant::now()
+                    - gateway_datetime_compat::SignedDuration::minutes(1),
             "stale: touched"
         );
         // The phone is signed out from the laptop; its cookie stops working.

@@ -19,6 +19,7 @@
 //! - [`close_batch`]: when a gateway-run batch ends, the envelope settles at
 //!   zero, releasing what no line used. Lines keep their own settlement or
 //!   retained unknown holds.
+use gateway_datetime_compat::UtcInstant;
 use std::collections::BTreeMap;
 
 use super::*;
@@ -268,7 +269,7 @@ async fn admit_batch_unobserved(
     job: &NewBatch<'_>,
 ) -> Result<Option<(BatchHold, JobRow)>, InferenceError> {
     let native = job.mode == BatchMode::Native;
-    if !(1..=MAX_POLL_WINDOW_SECONDS).contains(&job.poll_window.num_seconds())
+    if !(1..=MAX_POLL_WINDOW_SECONDS).contains(&job.poll_window.whole_seconds())
         || groups.is_empty()
         || (native && groups.len() != 1)
         || groups[0].deployment.id != record.deployment_id
@@ -325,7 +326,7 @@ async fn admit_batch_unobserved(
             pinned = Some((id, tier));
         }
     }
-    let now: DateTime<Utc> = store.admission_now(&mut tx).await.map_err(storage)?;
+    let now: UtcInstant = store.admission_now(&mut tx).await.map_err(storage)?;
     let deadline = now
         .checked_add_signed(job.poll_window)
         .ok_or(InferenceError::Configuration)?;
@@ -499,7 +500,7 @@ async fn admit_line_unobserved(
     {
         return Ok(None);
     }
-    let envelope: Option<(String, Option<i64>, Uuid, DateTime<Utc>)> = sqlx::query_as("SELECT r.state,r.held_microusd,r.api_key_id,r.admitted_at FROM governance_reservations r JOIN async_jobs j ON j.execution_id=r.execution_id WHERE r.execution_id=$1 AND r.workspace_id=$2 AND j.id=$3 AND j.batch_mode='gateway' FOR UPDATE OF r")
+    let envelope: Option<(String, Option<i64>, Uuid, UtcInstant)> = sqlx::query_as("SELECT r.state,r.held_microusd,r.api_key_id,r.admitted_at FROM governance_reservations r JOIN async_jobs j ON j.execution_id=r.execution_id WHERE r.execution_id=$1 AND r.workspace_id=$2 AND j.id=$3 AND j.batch_mode='gateway' FOR UPDATE OF r")
         .bind(batch.envelope).bind(workspace).bind(batch.fence.job).fetch_optional(&mut *tx).await.map_err(storage)?;
     let Some((state, available, envelope_key, envelope_at)) = envelope else {
         return Err(InferenceError::Configuration);
@@ -548,9 +549,11 @@ async fn admit_line_unobserved(
     let output = admission.max_output_tokens.unwrap_or(0);
     let (tokens, held) = line_bound(&p, output, workload.kind == WorkloadKind::Generation)?;
     let transfer = held.min(available.unwrap_or(0).max(0));
-    let now: DateTime<Utc> = store.admission_now(&mut tx).await.map_err(storage)?;
+    let now: UtcInstant = store.admission_now(&mut tx).await.map_err(storage)?;
     let lease = now
-        .checked_add_signed(chrono::TimeDelta::seconds(lease_seconds))
+        .checked_add_signed(gateway_datetime_compat::SignedDuration::seconds(
+            lease_seconds,
+        ))
         .ok_or(InferenceError::Configuration)?;
     // The line's buckets (now) and the envelope's (its admission time): the
     // insert and the envelope transfer below change both.
@@ -679,7 +682,7 @@ async fn close_batch_once(
     let mut admitted = None;
     if scoped(store) {
         // The envelope row, then its totals rows.
-        let row: Option<(Uuid, Uuid, DateTime<Utc>)> = sqlx::query_as("SELECT workspace_id,api_key_id,admitted_at FROM governance_reservations WHERE execution_id=$1 AND state='pending' FOR UPDATE")
+        let row: Option<(Uuid, Uuid, UtcInstant)> = sqlx::query_as("SELECT workspace_id,api_key_id,admitted_at FROM governance_reservations WHERE execution_id=$1 AND state='pending' FOR UPDATE")
             .bind(envelope)
             .fetch_optional(&mut *tx)
             .await

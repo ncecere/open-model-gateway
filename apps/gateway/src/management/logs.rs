@@ -9,7 +9,7 @@
 //!   Personal workspaces never appear as rows (their totals stay in Usage).
 use super::*;
 use crate::inference::{client, repository::FinishLabel};
-use chrono::{DateTime, TimeDelta, Utc};
+use gateway_datetime_compat::{SignedDuration as TimeDelta, UtcInstant};
 
 pub(super) const DEFAULT_LIMIT: i64 = 50;
 
@@ -34,8 +34,8 @@ pub(super) struct LogQuery {
     pub(super) limit: Option<i64>,
 }
 pub(super) struct Filters {
-    pub(super) start: DateTime<Utc>,
-    pub(super) end: DateTime<Utc>,
+    pub(super) start: UtcInstant,
+    pub(super) end: UtcInstant,
     model: Option<String>,
     key: Option<Uuid>,
     status: Option<Vec<String>>,
@@ -92,7 +92,7 @@ fn finish_reasons(s: &str) -> Result<Vec<String>, ApiError> {
 impl LogQuery {
     pub(super) fn filters(&self) -> Result<Filters, ApiError> {
         use super::requests::{midnight, strict_date};
-        let tomorrow = Utc::now()
+        let tomorrow = UtcInstant::now()
             .date_naive()
             .checked_add_signed(TimeDelta::days(1))
             .ok_or_else(invalid)?;
@@ -108,7 +108,7 @@ impl LogQuery {
             .map(strict_date)
             .transpose()?
             .unwrap_or(end - TimeDelta::days(30));
-        if !(1..=93).contains(&(end - start).num_days()) || end > tomorrow {
+        if !(1..=93).contains(&(end - start).whole_days()) || end > tomorrow {
             return Err(invalid());
         }
         if self.model.as_deref().is_some_and(|m| {
@@ -312,15 +312,15 @@ where
 const PG_MIN_UNIX_MICROS: i128 = -210_866_803_200_000_000;
 const PG_MAX_UNIX_MICROS: i128 = 9_224_318_015_999_999_999;
 
-fn cursor_timestamp(micros: &str) -> Result<DateTime<Utc>, ApiError> {
+fn cursor_timestamp(micros: &str) -> Result<UtcInstant, ApiError> {
     let micros: i64 = micros.parse().map_err(|_| invalid())?;
     if !(PG_MIN_UNIX_MICROS..=PG_MAX_UNIX_MICROS).contains(&i128::from(micros)) {
         return Err(invalid());
     }
-    DateTime::from_timestamp_micros(micros).ok_or_else(invalid)
+    UtcInstant::from_timestamp_micros(micros).ok_or_else(invalid)
 }
 
-pub(super) fn cursor_parts(c: &str) -> Result<(DateTime<Utc>, Uuid), ApiError> {
+pub(super) fn cursor_parts(c: &str) -> Result<(UtcInstant, Uuid), ApiError> {
     let (micros, id) = c.split_once('_').ok_or_else(invalid)?;
     Ok((
         cursor_timestamp(micros)?,
@@ -348,7 +348,7 @@ pub(super) fn with_trace_id(mut row: Value, root_request_id: Uuid) -> Value {
     row
 }
 
-fn page(rows: Vec<(Value, DateTime<Utc>, Uuid)>, limit: i64) -> Json<Value> {
+fn page(rows: Vec<(Value, UtcInstant, Uuid)>, limit: i64) -> Json<Value> {
     let next = (rows.len() > limit as usize).then(|| {
         let (_, t, id) = &rows[limit as usize - 1];
         format!("{}_{id}", t.timestamp_micros())
@@ -373,7 +373,7 @@ pub(super) async fn list_requests(
         listed_roots(&scope, false),
         f.workload_sql("workload_kind")
     );
-    let rows: Vec<(Value, DateTime<Utc>, Uuid)> = bind_filters(sqlx::query_as(&sql), &scope, &f)
+    let rows: Vec<(Value, UtcInstant, Uuid)> = bind_filters(sqlx::query_as(&sql), &scope, &f)
         .bind(cursor.map(|c| c.0))
         .bind(cursor.map(|c| c.1))
         .bind(limit + 1)
@@ -405,7 +405,7 @@ pub(super) async fn list_generations(
         scope.visible(),
         f.workload_sql("e.workload_kind")
     );
-    let rows: Vec<(Value, DateTime<Utc>, Uuid)> = bind_filters(sqlx::query_as(&sql), &scope, &f)
+    let rows: Vec<(Value, UtcInstant, Uuid)> = bind_filters(sqlx::query_as(&sql), &scope, &f)
         .bind(cursor.map(|c| c.0))
         .bind(cursor.map(|c| c.1))
         .bind(limit + 1)
@@ -427,7 +427,7 @@ fn sessions_sql(scope: &LogScope, f: &Filters) -> String {
             &format!("{FILTERED}{}", f.workload_sql("workload_kind")),
         )
 }
-fn session_cursor(c: &str) -> Result<(DateTime<Utc>, Uuid, String), ApiError> {
+fn session_cursor(c: &str) -> Result<(UtcInstant, Uuid, String), ApiError> {
     let mut parts = c.splitn(3, '_');
     let (Some(micros), Some(ws), Some(session)) = (parts.next(), parts.next(), parts.next()) else {
         return Err(invalid());
@@ -465,7 +465,7 @@ pub(super) async fn list_sessions(
         "{} SELECT {SESSION_ROW},last_at,workspace_id,session_id FROM s WHERE ($13::timestamptz IS NULL OR (last_at,workspace_id,session_id COLLATE \"C\")<($13,$14,$15::text COLLATE \"C\")) ORDER BY last_at DESC,workspace_id DESC,session_id COLLATE \"C\" DESC LIMIT $16",
         sessions_sql(&scope, &f)
     );
-    let rows: Vec<(Value, DateTime<Utc>, Uuid, String)> =
+    let rows: Vec<(Value, UtcInstant, Uuid, String)> =
         bind_filters(sqlx::query_as(&sql), &scope, &f)
             .bind(cursor.as_ref().map(|c| c.0))
             .bind(cursor.as_ref().map(|c| c.1))

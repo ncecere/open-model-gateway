@@ -15,7 +15,7 @@ use crate::{
     },
     store::Store,
 };
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 type Tx<'a> = Transaction<'a, Postgres>;
@@ -335,7 +335,7 @@ async fn admit_unobserved(
     let row=sqlx::query(&format!("SELECT d.id,p.provider,d.upstream_model,p.credential_ref,p.endpoint,p.region,m.supported_protocols,clock_timestamp() AS admission_now,(SELECT x.id FROM deployment_prices x WHERE x.deployment_id=d.id ORDER BY x.created_at DESC,x.id DESC LIMIT 1) AS latest_price_id FROM deployments d JOIN provider_connections p ON p.id=d.provider_connection_id JOIN models m ON m.id=d.model_id WHERE d.id=$2 AND m.public_name=$3 AND workspace_model_allowed($1,m.id) AND d.enabled AND p.enabled AND (NOT EXISTS(SELECT 1 FROM key_model_restrictions WHERE workspace_id=$1 AND governance_key_id=$4) OR EXISTS(SELECT 1 FROM key_model_selections WHERE workspace_id=$1 AND governance_key_id=$4 AND model_id=m.id)){}", catalog_share(store)))
         .bind(workspace).bind(record.deployment_id).bind(&record.model).bind(lineage).fetch_optional(&mut *tx).await.map_err(storage)?.ok_or(InferenceError::ModelUnavailable)?;
     let current = <Deployment as sqlx::FromRow<_>>::from_row(&row).map_err(storage)?;
-    let database_now: DateTime<Utc> = sqlx::Row::try_get(&row, "admission_now").map_err(storage)?;
+    let database_now: UtcInstant = sqlx::Row::try_get(&row, "admission_now").map_err(storage)?;
     let price = match read_price {
         Some(price) => price,
         None => {
@@ -388,7 +388,9 @@ async fn admit_unobserved(
     }
     let now = store.admission_override().unwrap_or(database_now);
     let lease = now
-        .checked_add_signed(chrono::TimeDelta::seconds(lease_seconds))
+        .checked_add_signed(gateway_datetime_compat::SignedDuration::seconds(
+            lease_seconds,
+        ))
         .ok_or(InferenceError::Configuration)?;
     let admission = admission?;
     if workload.kind == WorkloadKind::Generation {

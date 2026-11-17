@@ -10,7 +10,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 fn period() -> String {
-    let today = chrono::Utc::now().date_naive();
+    let today = gateway_datetime_compat::UtcInstant::now().date_naive();
     let tomorrow = today.succ_opt().unwrap();
     format!("start_date={today}&end_date={tomorrow}")
 }

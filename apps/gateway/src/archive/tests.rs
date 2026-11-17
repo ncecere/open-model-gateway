@@ -5,6 +5,8 @@
 use super::*;
 use crate::governance::tests::db::fixture;
 use crate::partitions::tests::seed_history;
+use crate::timestamp::TimestampFormat as _;
+use gateway_datetime_compat::UtcInstant;
 use sqlx::PgPool;
 
 /// Budget totals against the full scan plus archived contributions. (The
@@ -30,15 +32,15 @@ fn refusal(e: anyhow::Error) -> Refusal {
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn closed_months_archive_only_when_settled_rolled_and_past_retention(pool: PgPool) {
     let f = fixture(pool.clone()).await;
-    let upper: DateTime<Utc> = sqlx::query_scalar(
+    let upper: UtcInstant = sqlx::query_scalar(
         "SELECT legacy_upper FROM history_partitions WHERE parent='inference_executions'",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
     crate::partitions::ensure_at(&pool, 6, upper).await.unwrap();
-    let month = upper + Months::new(1);
-    let next = upper + Months::new(2);
+    let month = upper.checked_add_months(1).unwrap();
+    let next = upper.checked_add_months(2).unwrap();
     let label = month.format("%Y-%m").to_string();
     seed_history(
         &pool,
@@ -46,7 +48,7 @@ async fn closed_months_archive_only_when_settled_rolled_and_past_retention(pool:
         "a1-",
         1500,
         month,
-        (next - month).num_seconds() - 1,
+        (next - month).whole_seconds() - 1,
         true,
     )
     .await;
@@ -56,7 +58,7 @@ async fn closed_months_archive_only_when_settled_rolled_and_past_retention(pool:
         &f,
         "a0-",
         300,
-        upper - chrono::TimeDelta::days(20),
+        upper - gateway_datetime_compat::SignedDuration::days(20),
         86_400 * 10,
         true,
     )
@@ -69,11 +71,15 @@ async fn closed_months_archive_only_when_settled_rolled_and_past_retention(pool:
         drop,
         retention_months: 1,
     };
-    let later = next + Months::new(1);
+    let later = next.checked_add_months(1).unwrap();
     // Within retention (the month after it is still hot).
-    let e = archive_as_of(&pool, &req(false), next + chrono::TimeDelta::days(3))
-        .await
-        .unwrap_err();
+    let e = archive_as_of(
+        &pool,
+        &req(false),
+        next + gateway_datetime_compat::SignedDuration::days(3),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(refusal(e), Refusal::WithinRetention(label.clone(), 1));
     // Pending and unknown reservations keep their holds: refused.
     let e = archive_as_of(&pool, &req(false), later).await.unwrap_err();
@@ -91,7 +97,7 @@ async fn closed_months_archive_only_when_settled_rolled_and_past_retention(pool:
     // Hours without a clean rollup: refused (usage history would be lost).
     let e = archive_as_of(&pool, &req(false), later).await.unwrap_err();
     assert!(matches!(refusal(e), Refusal::RollupsIncomplete(n) if n > 0));
-    let hours: Vec<DateTime<Utc>> = sqlx::query_scalar(&format!("SELECT DISTINCT date_trunc('hour',started_at,'UTC') FROM inference_executions WHERE started_at>='{month}' AND started_at<'{next}' ORDER BY 1"))
+    let hours: Vec<UtcInstant> = sqlx::query_scalar(&format!("SELECT DISTINCT date_trunc('hour',started_at,'UTC') FROM inference_executions WHERE started_at>='{month}' AND started_at<'{next}' ORDER BY 1"))
         .fetch_all(&pool).await.unwrap();
     for h in &hours {
         crate::rollups::roll_hour(&f.store, *h, None).await.unwrap();
@@ -182,7 +188,7 @@ async fn closed_months_archive_only_when_settled_rolled_and_past_retention(pool:
         .await
         .unwrap();
     sqlx::query("INSERT INTO audit_events(id,actor_user_id,action,resource_type,metadata,created_at) VALUES($1,$2,'held.action','test','{}',$3)")
-        .bind(Uuid::new_v4()).bind(f.owner).bind(month + chrono::TimeDelta::days(2)).execute(&pool).await.unwrap();
+        .bind(Uuid::new_v4()).bind(f.owner).bind(month + gateway_datetime_compat::SignedDuration::days(2)).execute(&pool).await.unwrap();
     let e = archive_as_of(&pool, &audit, later).await.unwrap_err();
     assert_eq!(refusal(e), Refusal::Held(1));
     sqlx::query("UPDATE legal_holds SET released_at=now(),released_by_user_id=(SELECT id FROM users ORDER BY id LIMIT 1) WHERE id=$1")

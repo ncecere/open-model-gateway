@@ -41,7 +41,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use chrono::Utc;
+use gateway_datetime_compat::UtcInstant;
 use serde_json::{Value, json};
 use tokio::sync::{Semaphore, mpsc};
 
@@ -627,7 +627,9 @@ impl Runner {
     ) -> JobResult<()> {
         use crate::governance::batch::{Closed, close_gateway_batch};
         let store = &self.jobs.store;
-        let elapsed = (Utc::now() - job.created_at).num_milliseconds().max(0) as u64;
+        let elapsed = (UtcInstant::now() - job.created_at)
+            .whole_milliseconds()
+            .max(0) as u64;
         match close_gateway_batch(store, job.execution_id, elapsed, &state.fence).await? {
             Closed::Settled => {}
             Closed::NotPending => {

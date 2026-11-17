@@ -1,6 +1,7 @@
 //! S3 configuration validation and wire behaviour against a loopback mock:
 //! path-style URLs, no flexible checksums or aws-chunked bodies, one attempt,
 //! no redirects. Real MinIO/RustFS compatibility is in tests/filestore_s3.rs.
+use crate::timestamp::TimestampFormat as _;
 use std::sync::{Arc, Mutex};
 
 use axum::{
@@ -246,7 +247,7 @@ async fn mock(mode: &'static str) -> (String, Arc<Mutex<Vec<Seen>>>) {
                     .header("etag", "\"etag\"")
                     .header(
                         "date",
-                        (chrono::Utc::now() - chrono::Duration::hours(1))
+                        (gateway_datetime_compat::UtcInstant::now() - gateway_datetime_compat::SignedDuration::hours(1))
                             .format("%a, %d %b %Y %H:%M:%S GMT")
                             .to_string(),
                     )
@@ -347,10 +348,10 @@ async fn a_response_date_never_moves_the_signing_time() {
             .find(|(k, _)| k == "x-amz-date")
             .unwrap()
             .1;
-        let signed = chrono::NaiveDateTime::parse_from_str(signed, "%Y%m%dT%H%M%SZ")
-            .unwrap()
-            .and_utc();
-        let off = (chrono::Utc::now() - signed).num_seconds().abs();
+        let signed = crate::timestamp::parse_sigv4(signed).unwrap();
+        let off = (gateway_datetime_compat::UtcInstant::now() - signed)
+            .whole_seconds()
+            .abs();
         assert!(
             off < 300,
             "request {index} was signed {off} s away from this host's clock"

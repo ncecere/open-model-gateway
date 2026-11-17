@@ -1361,9 +1361,9 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
     )
     .await;
     // Each export is rate limited to three an hour per person: a fresh person per request.
-    let today = chrono::Utc::now().date_naive();
+    let today = gateway_datetime_compat::UtcInstant::now().date_naive();
     let (from, to) = (
-        (today - chrono::Days::new(1)).to_string(),
+        (today - gateway_datetime_compat::SignedDuration::days(1)).to_string(),
         today.to_string(),
     );
     query_vectors(

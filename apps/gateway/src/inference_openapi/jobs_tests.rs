@@ -669,8 +669,11 @@ mod legacy {
         let queued_id = client_id("video_", queued.id);
         let mut failed_observation = upstream_video(JobState::Failed, Some(8));
         failed_observation.error = Some(ErrorCode::parse("moderation_blocked"));
-        failed_observation.expires_at =
-            Some((chrono::Utc::now() + chrono::TimeDelta::hours(1)).timestamp());
+        failed_observation.expires_at = Some(
+            (gateway_datetime_compat::UtcInstant::now()
+                + gateway_datetime_compat::SignedDuration::hours(1))
+            .timestamp(),
+        );
         fake.push_video(failed_observation.clone());
         let failed = jobs
             .create_video(f.principal, video_request(), uuid::Uuid::new_v4())

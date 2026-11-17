@@ -1,6 +1,7 @@
 //! Admission entry points, reservation bounds and limit enforcement. The
 //! admission transaction itself (`admit_unobserved`) is in the parent module.
 use super::*;
+use gateway_datetime_compat::UtcInstant;
 fn generation(max_output_tokens: Option<u32>) -> WorkloadAdmission {
     WorkloadAdmission {
         kind: WorkloadKind::Generation,
@@ -263,7 +264,7 @@ pub(super) async fn enforce_limits(
     tx: &mut Tx<'_>,
     workspace: Uuid,
     lineage: Uuid,
-    now: DateTime<Utc>,
+    now: UtcInstant,
     mode: LimitMode,
     tokens: Option<i64>,
     held: Option<i64>,

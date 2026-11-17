@@ -503,13 +503,13 @@ async fn access_requests_review_old_transaction_cannot_backdate_membership_chang
     let mut old = crate::db::begin(&pool).await.unwrap();
     // Force PostgreSQL's transaction clock to precede submission. Existing
     // membership paths use now() for revoked_at, so that alone is not a fence.
-    let started: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT now()")
+    let started: gateway_datetime_compat::UtcInstant = sqlx::query_scalar("SELECT now()")
         .fetch_one(&mut *old)
         .await
         .unwrap();
     let (_, r) = submit(&f, &f.outsider, f.team, "old-transaction").await;
     let id = request_id(&r);
-    let submitted: chrono::DateTime<chrono::Utc> =
+    let submitted: gateway_datetime_compat::UtcInstant =
         sqlx::query_scalar("SELECT created_at FROM access_requests WHERE id=$1")
             .bind(id)
             .fetch_one(&pool)

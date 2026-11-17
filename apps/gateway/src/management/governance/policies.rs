@@ -39,7 +39,7 @@ fn management_openapi_slice3_policy_request_vectors() {
 }
 
 use crate::governance::{BudgetPeriod, budget_consumption};
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 use std::collections::BTreeMap;
 
 /// One budget per period; every entry is enforced over its own window.
@@ -861,7 +861,7 @@ pub(crate) struct Layers {
     pub(crate) override_present: bool,
     pub(crate) source: &'static str,
     pub(crate) kind: String,
-    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) created_at: UtcInstant,
 }
 pub(crate) async fn layers(
     tx: &mut Transaction<'_, Postgres>,
@@ -876,7 +876,7 @@ pub(crate) async fn layers_with(
     ws: Uuid,
     include_disabled: bool,
 ) -> Result<Layers, ApiError> {
-    let (kind, created_at): (String, DateTime<Utc>) = sqlx::query_as(
+    let (kind, created_at): (String, UtcInstant) = sqlx::query_as(
         "SELECT kind,created_at FROM workspaces WHERE id=$1 AND ($2 OR disabled_at IS NULL)",
     )
     .bind(ws)
@@ -940,7 +940,7 @@ pub(crate) async fn key_limits(
     get_layer(tx, &Scope::Key(ws, key)).await
 }
 /// One budget-window entry: `(layer, budgets, key lineage, usage visible, scope created_at)`.
-pub(crate) type WindowEntry<'a> = (&'a str, &'a Budgets, Option<Uuid>, bool, DateTime<Utc>);
+pub(crate) type WindowEntry<'a> = (&'a str, &'a Budgets, Option<Uuid>, bool, UtcInstant);
 /// Every applicable budget (layer x period) with its own current UTC window.
 /// Consumption (settled actual plus active holds by admission time) is
 /// included only where the caller may see that scope's activity: workspace-wide
@@ -951,7 +951,7 @@ pub(crate) async fn budget_windows(
     ws: Uuid,
     entries: &[WindowEntry<'_>],
 ) -> Result<Vec<Value>, ApiError> {
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+    let now: UtcInstant = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut **tx)
         .await?;
     use crate::governance::totals::{Scope as UsageScope, read_budget_report};
@@ -1026,7 +1026,7 @@ pub(crate) async fn lineage_created(
     tx: &mut Transaction<'_, Postgres>,
     ws: Uuid,
     lineage: Uuid,
-) -> Result<DateTime<Utc>, ApiError> {
+) -> Result<UtcInstant, ApiError> {
     Ok(sqlx::query_scalar(
         "SELECT min(created_at) FROM api_keys WHERE workspace_id=$1 AND governance_key_id=$2",
     )
@@ -1045,7 +1045,7 @@ pub(crate) async fn key_usage(
     let (period, limit) = k
         .legacy()
         .map_or((BudgetPeriod::Month, None), |(p, a)| (p, Some(a)));
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+    let now: UtcInstant = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut **tx)
         .await?;
     let (start, end) = period.window(now);

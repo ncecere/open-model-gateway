@@ -25,7 +25,7 @@
 //! installation row lock in admission and settlement) for one release.
 use std::cell::Cell;
 
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
@@ -223,7 +223,7 @@ pub(crate) async fn admission(
 pub(crate) struct Touch {
     pub workspace: Uuid,
     pub api_key: Uuid,
-    pub at: DateTime<Utc>,
+    pub at: UtcInstant,
 }
 
 /// Lock, in canonical order, every `budget_totals` row (and with `counters`
@@ -240,7 +240,7 @@ pub(crate) async fn rows(
     }
     let workspaces: Vec<Uuid> = touches.iter().map(|t| t.workspace).collect();
     let keys: Vec<Uuid> = touches.iter().map(|t| t.api_key).collect();
-    let ats: Vec<DateTime<Utc>> = touches.iter().map(|t| t.at).collect();
+    let ats: Vec<UtcInstant> = touches.iter().map(|t| t.at).collect();
     sqlx::query("SELECT omg_lock_scope_rows($1,$2,$3,$4)")
         .bind(&workspaces)
         .bind(&keys)

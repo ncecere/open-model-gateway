@@ -6,7 +6,7 @@
 //! installation storage price (micro-USD per GB-day, effective-dated and
 //! append-only) would apply to hours starting at or after its effective time;
 //! earlier hours stay "Not charged" and are never rewritten.
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 
 use crate::store::Store;
 
@@ -33,7 +33,7 @@ pub async fn record_hours_fenced(
     let max_hours = max_hours.clamp(1, 720);
     let mut tx = crate::db::begin(&db.pool).await?;
     crate::leases::fence(&mut tx, fence).await?;
-    let Some(through): Option<DateTime<Utc>> = sqlx::query_scalar(
+    let Some(through): Option<UtcInstant> = sqlx::query_scalar(
         "SELECT recorded_through FROM storage_usage_progress WHERE singleton FOR UPDATE SKIP LOCKED",
     )
     .fetch_optional(&mut *tx)
@@ -41,7 +41,7 @@ pub async fn record_hours_fenced(
     else {
         return Ok(0);
     };
-    let end: DateTime<Utc> = sqlx::query_scalar("SELECT least($1 + make_interval(hours => $2), date_trunc('hour', now() - make_interval(mins => $3), 'UTC'))")
+    let end: UtcInstant = sqlx::query_scalar("SELECT least($1 + make_interval(hours => $2), date_trunc('hour', now() - make_interval(mins => $3), 'UTC'))")
         .bind(through)
         .bind(max_hours)
         .bind(SETTLE_MINUTES)
@@ -60,7 +60,7 @@ pub async fn record_hours_fenced(
         .bind(end)
         .execute(&mut *tx)
         .await?;
-    let hours = (end - through).num_hours();
+    let hours = (end - through).whole_hours();
     tx.commit().await?;
     Ok(hours)
 }
