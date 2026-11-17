@@ -374,11 +374,14 @@ async fn admit_batch_unobserved(
         .await
         .map_err(storage)?;
     if let Err(error) = commit_batch(tx).await {
-        // A COMMIT failure can mean only its acknowledgement was lost. Do not
+        // A COMMIT error may follow a successful server commit. Do not
         // retry it or clean up resources that a committed job may reference.
         crate::db::accounting_failure::storage_error(&error);
         #[cfg(test)]
-        crate::db::diagnostics::observe_sqlx(crate::db::diagnostics::Stage::GovernanceStorage, &error);
+        crate::db::diagnostics::observe_sqlx(
+            crate::db::diagnostics::Stage::GovernanceStorage,
+            &error,
+        );
         return Ok(None);
     }
     Ok(Some((
@@ -398,7 +401,10 @@ async fn commit_batch(tx: Tx<'_>) -> Result<(), sqlx::Error> {
     tx.commit().await?;
     #[cfg(test)]
     if LOSE_COMMIT_ACK.try_with(|lose| *lose).unwrap_or(false) {
-        return Err(sqlx::Error::Io(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "commit acknowledgement lost")));
+        return Err(sqlx::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "commit acknowledgement lost",
+        )));
     }
     Ok(())
 }

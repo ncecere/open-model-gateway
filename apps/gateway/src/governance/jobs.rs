@@ -26,12 +26,22 @@ pub(crate) async fn accept_job<T>(
     insert: impl AsyncFnOnce(&mut sqlx::PgConnection) -> Result<T, InferenceError>,
 ) -> Result<T, InferenceError> {
     let _queued = gate(&store.lock_gates.settlement).await;
-    let mut tx = crate::db::begin(&store.pool).await.map_err(accepted_storage)?;
+    let mut tx = crate::db::begin(&store.pool)
+        .await
+        .map_err(accepted_storage)?;
     if !scoped(store) {
         // The same global settlement prefix, reported as an accepted-job
         // failure: the provider already has the work at this boundary.
-        sqlx::raw_sql("SELECT pg_advisory_xact_lock_shared(72419502); SELECT id FROM installation WHERE singleton FOR NO KEY UPDATE")
-            .execute(&mut *tx).await.map_err(accepted_storage)?;
+        sqlx::query("SELECT pg_advisory_xact_lock_shared(72419502)")
+            .execute(&mut *tx)
+            .await
+            .map_err(accepted_storage)?;
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM installation WHERE singleton FOR NO KEY UPDATE",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(accepted_storage)?;
     }
     let extended = sqlx::query("UPDATE governance_reservations SET lease_expires_at=greatest(lease_expires_at,$2) WHERE execution_id=$1 AND state='pending'")
         .bind(execution)

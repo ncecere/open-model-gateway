@@ -230,9 +230,11 @@ async fn load_user(
     id: Uuid,
     lock: bool,
 ) -> Result<Option<UserRow>, ScimError> {
+    // SCIM changes attributes, never the user key. Keep creator FK checks
+    // compatible while persistence waits for the user authority lock.
     let sql = format!(
         "{USER_SELECT} AND u.id=$1{}",
-        if lock { " FOR UPDATE OF u" } else { "" }
+        if lock { " FOR NO KEY UPDATE OF u" } else { "" }
     );
     Ok(sqlx::query_as::<_, UserRow>(&sql)
         .bind(id)
