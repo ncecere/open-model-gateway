@@ -7,6 +7,7 @@ import { DeploymentStatusActions } from "./deployment-preview";
 import { ActionProvider, Button, useApi } from "./ui";
 import { platformPath } from "../lib/api";
 import { PageHeader } from "./templates/page-header";
+import { PrevNext } from "./templates/prev-next";
 import { HEADER_COLLAPSE_QUERY } from "./templates/header-actions";
 import { RoutesTable, type RouteRow, type RouteSet } from "../pages/model-page";
 import { routeTiers } from "../lib/model-setup";
@@ -43,6 +44,21 @@ afterEach(() => { cleanup(); notifyManager.setScheduler(defaultScheduler); vi.un
 const menuFocused = () => waitFor(() => expect(document.activeElement?.closest('[role="menu"]')).not.toBeNull());
 
 describe("menu-originated deployment review focus", () => {
+  it.each([1440, 390])("keeps the focused header fallback mounted when route navigation arrives at %spx", width => {
+    viewport(width);
+    const header = (ready: boolean) => <DeploymentStatusActions record={record} name="Upstream">{actions => <PageHeader title="Route" actions={<>{ready && <PrevNext noun="route" />}{actions}</>} />}</DeploymentStatusActions>;
+    const { rerender } = render(header(false));
+    const fallback = screen.getByRole("button", { name: /^Review changes$/ });
+    fallback.focus();
+    for (const ready of [true, false]) {
+      rerender(header(ready));
+      expect(screen.queryByRole("navigation", { name: "Route navigation" }) !== null).toBe(ready);
+      expect(fallback.isConnected).toBe(true);
+      expect(screen.getByRole("button", { name: /^Review changes$/ })).toBe(fallback);
+      expect(document.activeElement).toBe(fallback);
+    }
+  });
+
   it.each([true, false])("keeps the focused route trigger mounted when enabled=%s changes its tier", initiallyEnabled => {
     const client = testClient();
     const table = (enabled: boolean) => <QueryClientProvider client={client}><ActionProvider><RoutesTable set={routeSet(enabled)} model={model} workload="generation" writable /></ActionProvider></QueryClientProvider>;

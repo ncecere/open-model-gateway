@@ -91,13 +91,31 @@ for (const width of [1440, 390]) {
 
   test(`retiring restores the connected header fallback after refresh at ${width}px`, async ({ browser }) => {
     const { context, page } = await signIn(browser, "operator");
+    let releaseNavigation!: () => void;
+    const navigationRead = new Promise<void>(resolve => { releaseNavigation = resolve; });
     try {
       await page.setViewportSize({ width, height: 900 });
       const name = `header-${width}`, fixture = await seed(page, name);
+      // The route-list read adds PrevNext before the status actions. Deliver
+      // it after retaining/focusing the fallback, as a slow initial read can.
+      await page.route(url => url.pathname === "/api/v1/platform/deployments", async route => {
+        if (route.request().method() !== "GET") { await route.continue(); return; }
+        const response = await route.fetch();
+        await navigationRead;
+        await route.fulfill({ response });
+      });
       await page.goto(`/admin/deployments/${fixture.deployment}`);
       const reviewButton = page.getByRole("button", { name: "Review changes", exact: true });
       await expect(reviewButton).toBeVisible();
       const mountedFallback = await reviewButton.elementHandle();
+      await reviewButton.focus();
+      const navigation = page.getByRole("navigation", { name: "Route navigation", exact: true });
+      await expect(navigation).toHaveCount(0);
+      releaseNavigation();
+      await expect(navigation).toBeVisible();
+      expect(await mountedFallback!.evaluate(node => node.isConnected)).toBe(true);
+      expect(await reviewButton.evaluate((node, original) => node === original, mountedFallback)).toBe(true);
+      await expect(reviewButton).toBeFocused();
       const menu = page.getByRole("button", { name: width === 390 ? "More actions" : /^Actions for /, exact: true });
       await activate(page, menu);
       const retire = page.getByRole("menuitem", { name: "Retire resource…", exact: true });
@@ -109,6 +127,10 @@ for (const width of [1440, 390]) {
       await expect(menu).toHaveCount(0);
       await expect(reviewButton).toBeFocused();
       expect(await mountedFallback!.evaluate(node => node.isConnected)).toBe(true);
-    } finally { await context.close(); }
+    } finally {
+      releaseNavigation();
+      await page.unrouteAll({ behavior: "wait" });
+      await context.close();
+    }
   });
 }
