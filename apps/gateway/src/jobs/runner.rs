@@ -281,6 +281,14 @@ impl Runner {
         if state.lost.load(Ordering::SeqCst) {
             return Ok(());
         }
+        // No line can be admitted against an envelope that is not pending, so
+        // none is attempted: the batch ends failed with that reason instead of
+        // every line failing as a provider configuration error. The envelope
+        // is left as it is, for reconciliation.
+        if !store::reservation_pending(store, job.execution_id).await? {
+            tracing::warn!(job_id = %job.id, "batch budget hold unavailable; remaining lines will not run");
+            state.hold_unavailable.store(true, Ordering::SeqCst);
+        }
         let line = self.line_run(job, engine, endpoint, &state);
         let (records, receiver) = mpsc::channel::<Record>(64);
         let writer = tokio::spawn(write_segments(
@@ -432,7 +440,7 @@ impl Runner {
             None => JobState::Completed,
             Some(Stop::Cancelled) => JobState::Cancelled,
             Some(Stop::Expired) => JobState::Expired,
-            Some(Stop::Budget) => JobState::Failed,
+            Some(Stop::Budget | Stop::HoldUnavailable) => JobState::Failed,
             // Never a terminal state: see `run_claimed`.
             Some(Stop::Lost) => return Ok(()),
         };
@@ -501,6 +509,7 @@ impl Runner {
                 Some(Stop::Cancelled) => NotRun::Cancelled,
                 Some(Stop::Expired) => NotRun::Expired,
                 Some(Stop::Budget) => NotRun::BudgetExceeded,
+                Some(Stop::HoldUnavailable) => NotRun::HoldUnavailable,
                 Some(Stop::Lost) | None => NotRun::Failed,
             };
             let mut reader = LineReader::stored(files, work, job.workspace_id, WORK_LINE_BYTES)
@@ -561,7 +570,11 @@ impl Runner {
                 store,
                 &Finished {
                     state: final_state,
-                    error_code: (stop == Some(Stop::Budget)).then_some("budget_exceeded"),
+                    error_code: match stop {
+                        Some(Stop::Budget) => Some("budget_exceeded"),
+                        Some(Stop::HoldUnavailable) => Some("hold_unavailable"),
+                        _ => None,
+                    },
                     output_file,
                     error_file,
                     counts: job.request_total.map(|total| RequestCounts {

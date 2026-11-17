@@ -230,9 +230,11 @@ async fn load_user(
     id: Uuid,
     lock: bool,
 ) -> Result<Option<UserRow>, ScimError> {
+    // SCIM changes attributes, never the user key. Keep creator FK checks
+    // compatible while persistence waits for the user authority lock.
     let sql = format!(
         "{USER_SELECT} AND u.id=$1{}",
-        if lock { " FOR UPDATE OF u" } else { "" }
+        if lock { " FOR NO KEY UPDATE OF u" } else { "" }
     );
     Ok(sqlx::query_as::<_, UserRow>(&sql)
         .bind(id)
@@ -474,4 +476,9 @@ pub(super) async fn delete_user(
     persist_user(&mut tx, id, Some(&before), row.enabled, &draft).await?;
     finish(&state.store, tx, guard, "user", id).await?;
     Ok(no_content())
+}
+
+#[cfg(all(test, feature = "integration-tests"))]
+pub(crate) async fn lock_user_for_test(tx: &mut Transaction<'_, Postgres>, id: Uuid) {
+    assert!(load_user(tx, id, true).await.unwrap().is_some());
 }

@@ -122,10 +122,6 @@ const EXEMPT: &[(&str, &str)] = &[
         "request",
     ),
     (
-        "jobs/batch.rs :: impl Jobs::create_batch :: error :: execution_id=%request_id",
-        "request",
-    ),
-    (
         "jobs/video.rs :: impl Jobs::create_video :: error :: execution_id=%request_id",
         "request",
     ),
