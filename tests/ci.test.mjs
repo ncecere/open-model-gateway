@@ -14,7 +14,7 @@ const loadWorkflow = () => {
   assert.deepEqual([...doc.errors, ...doc.warnings], []);
   return doc.toJS({ maxAliasCount: 100 });
 };
-const dependencies = ["gateway-lint", "gateway-tests", "gateway-special"];
+const dependencies = ["gateway-lint", "gateway-tests", "gateway-special", "sdk-compat"];
 const runs = job => job.steps.filter(s => s.run).map(s => s.run);
 // A required job's steps must run as written: a step or job that is skipped, allowed to
 // fail, or run by a no-op interpreter or in another directory (`defaults.run`) could
@@ -459,4 +459,20 @@ process.stdout.write(output);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+
+test("vendored SDK tests keep every target and all-feature/doc checks in the required graph", () => {
+  const job = loadWorkflow().jobs["sdk-compat"];
+  required(job);
+  assert.deepEqual(job.strategy, { "fail-fast": false, matrix: { package: ["oauth2", "openidconnect"] } });
+  assert.deepEqual(runs(job), [
+    "cp Cargo.lock vendor/${{ matrix.package }}/Cargo.lock",
+    "cargo fmt --manifest-path vendor/${{ matrix.package }}/Cargo.toml -- --check",
+    "cargo test --manifest-path vendor/${{ matrix.package }}/Cargo.toml --all-targets",
+    "cargo test --manifest-path vendor/${{ matrix.package }}/Cargo.toml --all-features --all-targets",
+    "cargo test --manifest-path vendor/${{ matrix.package }}/Cargo.toml --all-features --doc",
+    "cargo clippy --manifest-path vendor/${{ matrix.package }}/Cargo.toml --all-targets -- -D warnings",
+    "cargo clippy --manifest-path vendor/${{ matrix.package }}/Cargo.toml --all-features --all-targets -- -D warnings",
+  ]);
 });

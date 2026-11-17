@@ -17,7 +17,8 @@
 //! leased `history_verify` job ([`run_job`], hourly) scans the window since
 //! its previous run and raises the built-in `history_orphans` installation
 //! incident on any finding. Only a full, clean `history verify` resolves it.
-use chrono::{DateTime, Duration, Utc};
+use crate::timestamp::TimestampFormat as _;
+use gateway_datetime_compat::{SignedDuration as Duration, UtcInstant};
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
@@ -36,7 +37,7 @@ pub const SAMPLES: usize = 5;
 #[derive(Clone, Debug, Serialize)]
 pub struct VerifyReport {
     /// Lower bound of the scanned window (`None`: all history).
-    pub since: Option<DateTime<Utc>>,
+    pub since: Option<UtcInstant>,
     pub executions_checked: i64,
     pub reservations_checked: i64,
     pub finding_count: i64,
@@ -113,10 +114,7 @@ type ExecutionCounts = (
 
 /// Verify history in one snapshot (`REPEATABLE READ`, read-only) from
 /// `since` (`None`: everything).
-pub async fn verify(
-    pool: &PgPool,
-    since: Option<DateTime<Utc>>,
-) -> Result<VerifyReport, sqlx::Error> {
+pub async fn verify(pool: &PgPool, since: Option<UtcInstant>) -> Result<VerifyReport, sqlx::Error> {
     let mut tx = crate::db::begin_with_setup(
         pool,
         "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
@@ -130,7 +128,7 @@ pub async fn verify(
 /// [`verify`] on the store's primary pool (`history verify`).
 pub async fn verify_store(
     store: &crate::store::Store,
-    since: Option<DateTime<Utc>>,
+    since: Option<UtcInstant>,
 ) -> Result<VerifyReport, sqlx::Error> {
     verify(&store.pool, since).await
 }
@@ -149,7 +147,7 @@ pub async fn record_cli_result(
 /// [`verify`] inside a caller's transaction.
 pub async fn verify_in(
     tx: &mut Transaction<'_, Postgres>,
-    since: Option<DateTime<Utc>>,
+    since: Option<UtcInstant>,
 ) -> Result<VerifyReport, sqlx::Error> {
     let started = std::time::Instant::now();
     // -infinity: every partition (no pruning).
@@ -269,7 +267,7 @@ pub async fn run_job(
     store: &crate::store::Store,
     fence: Option<&crate::leases::Fence>,
 ) -> Result<VerifyReport, sqlx::Error> {
-    let (now, previous): (DateTime<Utc>, Option<DateTime<Utc>>) = sqlx::query_as(
+    let (now, previous): (UtcInstant, Option<UtcInstant>) = sqlx::query_as(
         "SELECT clock_timestamp(),(SELECT last_completed_at FROM work_leases WHERE name='history_verify')",
     )
     .fetch_one(&store.pool)

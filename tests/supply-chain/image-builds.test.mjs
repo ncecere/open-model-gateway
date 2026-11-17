@@ -126,8 +126,8 @@ jobs:
       - run: |
           echo "\${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u x --password-stdin
           docker pull busybox
-          docker tag busybox ghcr.io/ncecere/open-model-gateway:latest-release
-          docker push ghcr.io/ncecere/open-model-gateway:latest-release
+          docker tag busybox ghcr.io/bitop-dev/open-model-gateway:latest-release
+          docker push ghcr.io/bitop-dev/open-model-gateway:latest-release
 `;
 const retag = () => toData(parseStrict(RETAG, ".github/workflows/retag.yml"));
 
@@ -156,17 +156,17 @@ test("a job that can write contents must be pinned", () => {
 
 const PUBLISHING_RUNS = [
   'echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u x --password-stdin',
-  "docker push ghcr.io/ncecere/open-model-gateway:latest-release",
-  "docker image push ghcr.io/ncecere/open-model-gateway:x",
-  "docker tag busybox ghcr.io/ncecere/open-model-gateway:latest-release",
-  'docker buildx imagetools create --tag ghcr.io/ncecere/open-model-gateway:x "${SRC}"',
-  "oras push ghcr.io/ncecere/x:y file",
-  "oras copy ghcr.io/a/b:c ghcr.io/ncecere/x:y",
-  "cosign sign --yes ghcr.io/ncecere/x@sha256:abc",
-  "cosign attest --yes --predicate p.json ghcr.io/ncecere/x@sha256:abc",
+  "docker push ghcr.io/bitop-dev/open-model-gateway:latest-release",
+  "docker image push ghcr.io/bitop-dev/open-model-gateway:x",
+  "docker tag busybox ghcr.io/bitop-dev/open-model-gateway:latest-release",
+  'docker buildx imagetools create --tag ghcr.io/bitop-dev/open-model-gateway:x "${SRC}"',
+  "oras push ghcr.io/bitop-dev/x:y file",
+  "oras copy ghcr.io/a/b:c ghcr.io/bitop-dev/x:y",
+  "cosign sign --yes ghcr.io/bitop-dev/x@sha256:abc",
+  "cosign attest --yes --predicate p.json ghcr.io/bitop-dev/x@sha256:abc",
   "gh release create v9.9.9 dist/x",
   "gh release upload v9.9.9 dist/x",
-  "skopeo copy docker://busybox docker://ghcr.io/ncecere/x:y",
+  "skopeo copy docker://busybox docker://ghcr.io/bitop-dev/x:y",
 ];
 for (const run of PUBLISHING_RUNS) {
   test(`a job that is not pinned may not publish: ${run.slice(0, 50)}`, () => {

@@ -342,6 +342,19 @@ fn embedded_error_protocol(value: &Value, messages: bool) -> Result<()> {
     })
 }
 
+fn stream_embedded_error(value: &Value, messages: bool) -> Result<()> {
+    if empty(&value["error"]) {
+        return Ok(());
+    }
+    Err(super::stream_error::classify(&value["error"], |code| {
+        if messages && matches!(code, 400 | 413 | 422) {
+            super::framing::generation_error(code, Some(value), super::framing::classified_error)
+        } else {
+            status_error(code)
+        }
+    }))
+}
+
 async fn read(response: reqwest::Response) -> Result<Vec<u8>> {
     read_limit(response, BODY_LIMIT).await
 }
@@ -446,7 +459,13 @@ fn normalize_frame(
     if data == b"[DONE]" {
         return Ok((data.to_vec(), None));
     }
-    let (mut value, cost) = parse_protocol(data, messages)?;
+    let mut value: Value =
+        serde_json::from_slice(data).map_err(|_| InferenceError::InvalidUpstream)?;
+    if !value.is_object() {
+        return Err(InferenceError::InvalidUpstream);
+    }
+    stream_embedded_error(&value, messages)?;
+    let cost = provider_cost(data)?;
     normalize_choices(&mut value)?;
     if let Some(previous) = finish.as_deref()
         && !value["usage"].is_null()
@@ -504,7 +523,7 @@ fn decode_chat_stream(response: reqwest::Response, messages: bool) -> EventStrea
             }
         }
         // Only [DONE] proves completion.
-        Err(InferenceError::InvalidUpstream)?;
+        Err(super::framing::TRANSPORT)?;
     })
 }
 

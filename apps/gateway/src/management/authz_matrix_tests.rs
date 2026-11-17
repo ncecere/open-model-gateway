@@ -8,6 +8,10 @@ use sha2::{Digest, Sha256};
 
 #[path = "authz_admin_token_tests.rs"]
 mod admin_token_tests;
+#[path = "batch_envelope_http_tests.rs"]
+mod batch_envelope_http_tests;
+#[path = "free_price_http_tests.rs"]
+mod free_price_http_tests;
 #[path = "authz_middleware_tests.rs"]
 mod isolated;
 #[path = "key_issuance_contention_tests.rs"]

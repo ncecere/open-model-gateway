@@ -92,7 +92,7 @@ test("three environments fit the 8 CPU limit and 4 CPU request quotas", () => {
 
 test("fixtures: every rule is enforced", () => {
   const mutations = [
-    ["a floating image", d => { d.spec.template.spec.containers[0].image = "ghcr.io/ncecere/open-model-gateway:v0.16.0"; }],
+    ["a floating image", d => { d.spec.template.spec.containers[0].image = "ghcr.io/bitop-dev/open-model-gateway:v0.16.0"; }],
     ["an unpinned node image", d => { d.spec.template.spec.initContainers[0].image = "mirror.gcr.io/library/node:22"; }],
     ["another node digest", d => { d.spec.template.spec.initContainers[0].image = `mirror.gcr.io/library/node:22.23.4-bookworm-slim@sha256:${"a".repeat(64)}`; }],
     ["root", d => { d.spec.template.spec.securityContext.runAsNonRoot = false; }],

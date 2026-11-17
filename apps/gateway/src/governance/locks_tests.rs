@@ -12,6 +12,7 @@ use crate::{
     governance::tests::db::{Fixture, done, fixture, request},
     inference::error::LimitScope,
 };
+use gateway_datetime_compat::UtcInstant;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use sqlx::PgPool;
 use std::time::Duration;
@@ -243,7 +244,7 @@ async fn same_workspace_budget_never_overspent_under_concurrent_admission(pool: 
 async fn race<F, Fut>(f: &Fixture, principal: Principal, mutate: F, expected: InferenceError)
 where
     F: FnOnce(PgPool) -> Fut,
-    Fut: std::future::Future<Output = DateTime<Utc>>,
+    Fut: std::future::Future<Output = UtcInstant>,
 {
     let _wide = WIDE.acquire().await.unwrap();
     let pool = f.store.pool.clone();
@@ -268,7 +269,7 @@ where
     }
     eprintln!("race: {} of 60 admitted before the change", admitted.len());
     for id in &admitted {
-        let at: DateTime<Utc> = sqlx::query_scalar(
+        let at: UtcInstant = sqlx::query_scalar(
             "SELECT admitted_at FROM governance_reservations WHERE execution_id=$1",
         )
         .bind(id)
@@ -296,7 +297,7 @@ where
 /// Run `sql` (returning `clock_timestamp()`) like a management change:
 /// shared catalog lock (exclusive with `catalog`), installation row, change.
 /// No explicit scope locks: the 0027 triggers take them.
-async fn management(pool: PgPool, catalog: bool, sql: &'static str, id: Uuid) -> DateTime<Utc> {
+async fn management(pool: PgPool, catalog: bool, sql: &'static str, id: Uuid) -> UtcInstant {
     let mut tx = pool.begin().await.unwrap();
     sqlx::query(if catalog {
         "SELECT pg_advisory_xact_lock(72419502)"
@@ -310,7 +311,7 @@ async fn management(pool: PgPool, catalog: bool, sql: &'static str, id: Uuid) ->
         .execute(&mut *tx)
         .await
         .unwrap();
-    let at: DateTime<Utc> = sqlx::query_scalar(sql)
+    let at: UtcInstant = sqlx::query_scalar(sql)
         .bind(id)
         .fetch_one(&mut *tx)
         .await
@@ -422,7 +423,7 @@ async fn settlement_and_reconciliation_race_exactly_once(pool: PgPool) {
     f.price(1_000_000).await;
     // Admit in the past so every lease has already expired.
     let past = wide(&pool, 8).await;
-    let at: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()-interval '10 minutes'")
+    let at: UtcInstant = sqlx::query_scalar("SELECT clock_timestamp()-interval '10 minutes'")
         .fetch_one(&pool)
         .await
         .unwrap();

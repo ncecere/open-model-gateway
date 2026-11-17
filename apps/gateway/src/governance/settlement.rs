@@ -1,11 +1,12 @@
 //! Settlement of one attempt: the reservation row, usage evidence, valuation
 //! under the pinned price, and the ledger entry.
 use super::*;
+use gateway_datetime_compat::UtcInstant;
 #[derive(sqlx::FromRow)]
 pub(super) struct Reservation {
     pub(super) workspace_id: Uuid,
     pub(super) api_key_id: Uuid,
-    pub(super) admitted_at: DateTime<Utc>,
+    pub(super) admitted_at: UtcInstant,
     pub(super) deployment_id: Uuid,
     pub(super) price_id: Option<Uuid>,
     pub(super) state: String,
@@ -365,7 +366,7 @@ pub(super) async fn pinned_value(
 pub(super) async fn ledger(
     tx: &mut Tx<'_>,
     id: Uuid,
-    admitted_at: Option<DateTime<Utc>>,
+    admitted_at: Option<UtcInstant>,
     kind: &str,
     amount: Option<i64>,
     usage: Usage,
@@ -422,8 +423,8 @@ async fn pinned_v3_lines(
 /// A failed attempt settles at a known zero only when all of these hold: the
 /// provider rejected the request before processing (`upstream_rejected`: a 4xx
 /// validation, moderation or filtered/missing-model response), no response
-/// stream had been returned yet (once the provider accepted the request and
-/// answered, a later rejection says nothing about what it processed), it
+/// stream had been returned and no provider job had been accepted (a later
+/// rejection says nothing about what the provider processed), it
 /// reported no usage at all (no token, meter or nonzero provider-cost
 /// evidence), and every meter of the pinned v3 price is explicitly free or not
 /// applicable. Anything else (other failures, partial usage,
@@ -432,10 +433,10 @@ async fn free_rejection(
     tx: &mut Tx<'_>,
     r: &Reservation,
     record: &ExecutionFinish,
-    stream_returned: bool,
+    processing_accepted: bool,
 ) -> Result<bool, InferenceError> {
     let u = record.usage;
-    if stream_returned
+    if processing_accepted
         || record.outcome != Outcome::Failed
         || !matches!(
             record.error,
@@ -463,19 +464,41 @@ pub async fn finish(store: &Store, record: &ExecutionFinish) -> Result<(), Infer
     )
     .await
 }
+/// Finish a job whose upstream id proves provider acceptance. A later failure
+/// cannot establish a pre-processing rejection, irrespective of its error class.
+pub(crate) async fn finish_accepted_job(
+    store: &Store,
+    record: &ExecutionFinish,
+) -> Result<(), InferenceError> {
+    finish_with_acceptance(
+        store,
+        record,
+        &crate::inference::repository::AttemptTelemetry::default(),
+        true,
+    )
+    .await
+}
 /// [`finish`] plus attempt telemetry (finish reason, timings, reasoning
 /// tokens), written in the same transaction as the terminal state. Telemetry
-/// is metadata only and never affects accounting or idempotency.
+/// is metadata except for the returned-stream marker used by `free_rejection`.
 pub async fn finish_with_telemetry(
     store: &Store,
     record: &ExecutionFinish,
     telemetry: &crate::inference::repository::AttemptTelemetry,
 ) -> Result<(), InferenceError> {
+    finish_with_acceptance(store, record, telemetry, false).await
+}
+async fn finish_with_acceptance(
+    store: &Store,
+    record: &ExecutionFinish,
+    telemetry: &crate::inference::repository::AttemptTelemetry,
+    job_accepted: bool,
+) -> Result<(), InferenceError> {
     use crate::metrics::{AttemptObservation, METRICS, PhaseTimer, Settlement};
     let mut timer = PhaseTimer::start();
     let result = locks::retry_deadlocks!(
         "settlement",
-        finish_unobserved(store, record, telemetry, &mut timer).await
+        finish_unobserved(store, record, telemetry, job_accepted, &mut timer).await
     );
     METRICS.observe_settlement_phases(
         timer,
@@ -540,6 +563,7 @@ async fn finish_unobserved(
     store: &Store,
     record: &ExecutionFinish,
     telemetry: &crate::inference::repository::AttemptTelemetry,
+    job_accepted: bool,
     timer: &mut crate::metrics::PhaseTimer,
 ) -> Result<Finished, InferenceError> {
     let telemetry = telemetry.for_outcome(record.outcome);
@@ -569,12 +593,24 @@ async fn finish_unobserved(
     let mut usage = workload_usage(&r, record.usage, InferenceError::Storage)?;
     // A free price's pre-processing rejection processed no tokens: record the
     // semantic zeros a settled row requires (see `free_rejection`).
-    let free = free_rejection(&mut tx, &r, record, telemetry.stream_returned).await?;
+    let free = free_rejection(
+        &mut tx,
+        &r,
+        record,
+        job_accepted || telemetry.stream_returned,
+    )
+    .await?;
     if free {
         usage.input_tokens.get_or_insert(0);
         usage.output_tokens.get_or_insert(0);
     }
-    let (input_na, output_na) = not_applicable_tokens(&mut tx, &r).await?;
+    // An accepted job's failed state does not prove token counts. Even a price
+    // marking tokens inapplicable must not turn missing evidence into zeros.
+    let (input_na, output_na) = if job_accepted && record.outcome == Outcome::Failed {
+        (false, false)
+    } else {
+        not_applicable_tokens(&mut tx, &r).await?
+    };
     if input_na && usage.input_tokens.is_none() && usage.billing.is_none() {
         usage.input_tokens = Some(0);
     }

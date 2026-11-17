@@ -2,6 +2,7 @@
 //! No provider calls, secret resolution or webhook worker; test deliveries use
 //! saved configuration and local SMTP/audit receivers only.
 use super::*;
+use crate::timestamp::TimestampFormat as _;
 use openapi::responses::{Captured, PositiveFixtures, capture_http};
 use sha2::{Digest, Sha256};
 
@@ -908,9 +909,10 @@ async fn management_openapi_slice5_fixtures(pool: PgPool) {
     let hook = id(&created);
     let path = format!("{prefix}/{hook}");
     let template = format!("{prefix}/{{id}}");
-    let until = (chrono::Utc::now() + chrono::Duration::hours(1))
-        .format("%Y-%m-%d %H:%M:%SZ")
-        .to_string();
+    let until = (gateway_datetime_compat::UtcInstant::now()
+        + gateway_datetime_compat::SignedDuration::hours(1))
+    .format("%Y-%m-%d %H:%M:%SZ")
+    .to_string();
     good(&g,&mut observed,&admin,"PATCH",&path,&template,json!({"enabled":true,"previous_secret_ref":"env:HOOK_PREVIOUS","previous_secret_until":until})).await;
     for (actor, privileged) in [(&admin, true), (&auditor, false)] {
         for (p, t) in [(&prefix, &prefix), (&path, &template)] {

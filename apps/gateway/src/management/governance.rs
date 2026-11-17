@@ -4,6 +4,8 @@ use crate::{
     billing::{CachePricing, CostComponents},
     inference::{error::InferenceError, types::Usage},
 };
+mod batch_envelopes;
+mod free_price;
 mod holds;
 mod policies;
 #[cfg(test)]
@@ -54,6 +56,14 @@ pub(super) fn routes() -> Router<Store> {
 }
 pub(super) fn platform_routes() -> Router<Store> {
     Router::new()
+        .route(
+            "/api/v1/platform/reservations/resolve-batch-envelopes",
+            post(batch_envelopes::resolve),
+        )
+        .route(
+            "/api/v1/platform/reservations/resolve-free-price",
+            post(free_price::resolve),
+        )
         .route("/api/v1/platform/holds", get(holds::platform))
         .route(
             "/api/v1/platform/installation/policy",

@@ -1,6 +1,6 @@
 //! Temporary day-window corruption for the executed OpenAPI fixtures.
 use crate::governance::{BudgetPeriod, totals::Scope};
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 use sqlx::PgPool;
 
 /// These throwaway scopes have exactly one day row. Preserve its original
@@ -8,14 +8,14 @@ use sqlx::PgPool;
 /// even when settlement happened on the preceding UTC day (#434).
 pub(super) struct CorruptedDayBudget {
     scope: Scope,
-    original: (String, String, DateTime<Utc>),
-    pinned_start: DateTime<Utc>,
+    original: (String, String, UtcInstant),
+    pinned_start: UtcInstant,
 }
 
 impl CorruptedDayBudget {
     pub(super) async fn new(pool: &PgPool, scope: Scope) -> Self {
         let (kind, id) = scope.key();
-        let mut rows: Vec<(String, String, DateTime<Utc>)> = sqlx::query_as(
+        let mut rows: Vec<(String, String, UtcInstant)> = sqlx::query_as(
             "SELECT settled_microusd::text,held_microusd::text,period_start FROM budget_totals WHERE scope_kind=$1 AND scope_id=$2 AND period='day'",
         )
         .bind(kind)
@@ -28,7 +28,7 @@ impl CorruptedDayBudget {
             "fixture scope has exactly one day totals row"
         );
         let original = rows.pop().unwrap();
-        let pinned_start = BudgetPeriod::Day.bucket_start(Utc::now());
+        let pinned_start = BudgetPeriod::Day.bucket_start(UtcInstant::now());
         let changed = sqlx::query(
             "UPDATE budget_totals SET settled_microusd=-1,held_microusd=0,period_start=$4 WHERE scope_kind=$1 AND scope_id=$2 AND period='day' AND period_start=$3",
         )
@@ -74,18 +74,19 @@ async fn day_budget_corruption_pins_current_bucket_and_restores_original(pool: P
         Scope::KeyLineage(uuid::Uuid::new_v4()),
     ] {
         let (kind, id) = scope.key();
-        let seeded_at = Utc::now();
-        let yesterday = BudgetPeriod::Day.bucket_start(seeded_at) - chrono::Duration::days(1);
+        let seeded_at = UtcInstant::now();
+        let yesterday = BudgetPeriod::Day.bucket_start(seeded_at)
+            - gateway_datetime_compat::SignedDuration::days(1);
         let month_start = BudgetPeriod::Month.bucket_start(seeded_at);
         sqlx::query("INSERT INTO budget_totals(scope_kind,scope_id,period,period_start,settled_microusd,held_microusd) VALUES($1,$2,'day',$3,7,3),($1,$2,'month',$4,11,5)")
             .bind(kind).bind(id).bind(yesterday)
             .bind(month_start)
             .execute(&pool).await.unwrap();
-        let before = BudgetPeriod::Day.bucket_start(Utc::now());
+        let before = BudgetPeriod::Day.bucket_start(UtcInstant::now());
         let corruption = CorruptedDayBudget::new(&pool, scope).await;
-        let after = BudgetPeriod::Day.bucket_start(Utc::now());
+        let after = BudgetPeriod::Day.bucket_start(UtcInstant::now());
         let read = || {
-            sqlx::query_as::<_, (String, String, DateTime<Utc>)>(
+            sqlx::query_as::<_, (String, String, UtcInstant)>(
             "SELECT settled_microusd::text,held_microusd::text,period_start FROM budget_totals WHERE scope_kind=$1 AND scope_id=$2 AND period='day'",
         ).bind(kind).bind(id)
         };

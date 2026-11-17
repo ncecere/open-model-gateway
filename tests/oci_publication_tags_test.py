@@ -6,7 +6,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / ".github/scripts/publication-tags.py"
-IMAGE = "ghcr.io/ncecere/open-model-gateway"
+IMAGE = "ghcr.io/bitop-dev/open-model-gateway"
 SHA = "71e8cf24ac4378e5827a5106b2e46cc4a24abc64"
 
 
@@ -44,8 +44,9 @@ class PublicationTagsTests(unittest.TestCase):
                       ref="refs/tags/v01.02.003")
 
     def test_wrong_repository(self):
+        self.refused([f"ghcr.io/ncecere/open-model-gateway:sha-{SHA[:7]}"])
         self.refused([f"{IMAGE}-other:sha-{SHA[:7]}"])
-        self.refused([f"evil.invalid/ncecere/open-model-gateway:sha-{SHA[:7]}"])
+        self.refused([f"evil.invalid/bitop-dev/open-model-gateway:sha-{SHA[:7]}"])
 
     def test_main_cannot_request_latest_or_user_release(self):
         for tag in ("latest", "latest-release", "v1.0.0"):

@@ -1,25 +1,26 @@
 //! Frozen aggregate comparison against bounded raw history, never hourly
 //! rollups or today's public aliases. No per-request allocation or prorating.
 use super::*;
-use chrono::Duration;
+use gateway_datetime_compat::SignedDuration as Duration;
+use gateway_datetime_compat::UtcInstant;
 use std::collections::{BTreeMap, BTreeSet};
 
 type ActualKey = (
-    DateTime<Utc>,
+    UtcInstant,
     Option<String>,
     Option<String>,
     Option<String>,
     String,
 );
-type EstimateKey = (DateTime<Utc>, Uuid, Option<String>, Option<String>);
-type IndexKey = (DateTime<Utc>, Uuid, Option<String>, Option<String>);
-type ScopeKey = (DateTime<Utc>, Uuid, Option<Uuid>);
-type ClaimKey = (DateTime<Utc>, Uuid, Option<Uuid>, Option<String>, String);
+type EstimateKey = (UtcInstant, Uuid, Option<String>, Option<String>);
+type IndexKey = (UtcInstant, Uuid, Option<String>, Option<String>);
+type ScopeKey = (UtcInstant, Uuid, Option<Uuid>);
+type ClaimKey = (UtcInstant, Uuid, Option<Uuid>, Option<String>, String);
 type ObservationIndex<'a> = BTreeMap<IndexKey, Vec<(usize, &'a Observation)>>;
 #[derive(Deserialize)]
 struct Observation {
-    day: DateTime<Utc>,
-    started_at: DateTime<Utc>,
+    day: UtcInstant,
+    started_at: UtcInstant,
     workspace_id: Uuid,
     workspace_kind: String,
     connection_id: Uuid,
@@ -111,8 +112,8 @@ fn model_matches(binding: &Binding, model: &str, o: &Observation) -> bool {
 async fn load_observations(
     tx: &mut Transaction<'_, Postgres>,
     mapping_id: Uuid,
-    start: DateTime<Utc>,
-    end: DateTime<Utc>,
+    start: UtcInstant,
+    end: UtcInstant,
 ) -> Result<(Value, Vec<Observation>), ApiError> {
     // The evidence, observation timestamp, archive status and raw rows come
     // from ONE statement snapshot, so concurrent settlement/archive cannot
@@ -151,7 +152,7 @@ async fn load_actuals(
     tx: &mut Transaction<'_, Postgres>,
     import_id: Uuid,
 ) -> Result<(BTreeMap<ActualKey, Actual>, BTreeSet<String>), ApiError> {
-    let lines:Vec<(DateTime<Utc>,Value,String)>=sqlx::query_as("SELECT bucket_start,dimensions,amount_microusd::text FROM provider_cost_lines WHERE import_id=$1 ORDER BY line_number")
+    let lines:Vec<(UtcInstant,Value,String)>=sqlx::query_as("SELECT bucket_start,dimensions,amount_microusd::text FROM provider_cost_lines WHERE import_id=$1 ORDER BY line_number")
         .bind(import_id).fetch_all(&mut **tx).await?;
     let mut actuals: BTreeMap<ActualKey, Actual> = BTreeMap::new();
     let mut supplied_categories = BTreeSet::new();
@@ -603,8 +604,8 @@ pub(super) async fn snapshot(
     tx: &mut Transaction<'_, Postgres>,
     import_id: Uuid,
     mapping_id: Uuid,
-    start: DateTime<Utc>,
-    end: DateTime<Utc>,
+    start: UtcInstant,
+    end: UtcInstant,
     bindings: &[Binding],
 ) -> Result<Value, ApiError> {
     let (raw, observations) = load_observations(tx, mapping_id, start, end).await?;

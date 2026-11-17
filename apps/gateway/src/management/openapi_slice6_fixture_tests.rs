@@ -2129,10 +2129,10 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
 
     // HTTP boundary vectors of every read that takes query parameters ...
     // The window (1 to 93 days, ending by tomorrow) holds whichever bound is omitted.
-    let today = chrono::Utc::now().date_naive();
+    let today = gateway_datetime_compat::UtcInstant::now().date_naive();
     let (start_date, end_date) = (
-        (today - chrono::Duration::days(1)).to_string(),
-        (today + chrono::Duration::days(1)).to_string(),
+        (today - gateway_datetime_compat::SignedDuration::days(1)).to_string(),
+        (today + gateway_datetime_compat::SignedDuration::days(1)).to_string(),
     );
     let (log_key_text, root_prefix) = (log_key.to_string(), a.to_string()[..8].to_owned());
     let logs: [(&str, &str); 12] = [

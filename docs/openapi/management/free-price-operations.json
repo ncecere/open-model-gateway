@@ -1,0 +1,84 @@
+{
+  "operations": {
+    "POST /api/v1/platform/reservations/resolve-free-price": {
+      "access": "PlatformWrite",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "description": "Explicit browser-session Platform Admin action. Preview a bounded page, then apply with expected_count, reason and the same numeric offset. Rechecks pinned pricing and live authority; missing usage remains NULL. Only counts and a numeric next_offset leave the route, including personal workspaces. No automatic resolution. Nonzero holds, priced/unknown/missing rates, missing variant defaults, realtime, running executions/jobs and unpinned batch envelopes are excluded. Preview is advisory; applying selects again and refuses a changed page count. Follow the apply response next_offset because resolved candidates are removed; null means the selected scan reached its end.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FreePriceResolutionInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Count only, or atomically resolved at zero cost",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FreePriceResolutionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Eligible page count changed; preview again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid JSON shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Storage or pinned pricing unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

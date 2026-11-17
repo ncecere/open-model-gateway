@@ -37,7 +37,7 @@ struct AffectedWorkspace {
 /// All inputs to the pure evaluator, observed in one primary snapshot.
 struct PreviewSnapshot {
     change: DeploymentChange,
-    observed_at: chrono::DateTime<chrono::Utc>,
+    observed_at: gateway_datetime_compat::UtcInstant,
     dependency_versions: Value,
     other_serving_routes: i64,
     workspaces: Vec<AffectedWorkspace>,
@@ -48,7 +48,7 @@ impl PreviewSnapshot {
         tx: &mut Transaction<'_, Postgres>,
         change: DeploymentChange,
     ) -> Result<Self, ApiError> {
-        let (observed_at, dependency_versions) = sqlx::query_as::<_, (chrono::DateTime<chrono::Utc>, Value)>(
+        let (observed_at, dependency_versions) = sqlx::query_as::<_, (gateway_datetime_compat::UtcInstant, Value)>(
             "SELECT transaction_timestamp(),(SELECT jsonb_object_agg(topic,version::text) FROM config_versions WHERE topic IN ('catalog','access'))",
         ).fetch_one(&mut **tx).await?;
         let other_serving_routes = sqlx::query_scalar(&format!(
@@ -222,7 +222,7 @@ async fn source(
     tx: &mut Transaction<'_, Postgres>,
     deployment: Uuid,
     change: Uuid,
-) -> Result<(bool, i64, chrono::DateTime<chrono::Utc>), ManagementError> {
+) -> Result<(bool, i64, gateway_datetime_compat::UtcInstant), ManagementError> {
     if let Some(row) = sqlx::query_as(
         "SELECT after_enabled,revision,created_at FROM configuration_changes WHERE id=$1 AND deployment_id=$2",
     )

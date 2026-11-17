@@ -19,7 +19,7 @@ from unittest import mock
 from oci_layout_test import fixture, blob_path
 
 ROOT = Path(__file__).resolve().parents[1]
-IMAGE = "ghcr.io/ncecere/open-model-gateway"
+IMAGE = "ghcr.io/bitop-dev/open-model-gateway"
 COMMIT = "9b1fc815f6b7fba743f08b9b5c5846639cc11d3c"
 TOKEN = "fixture-private-token"
 
@@ -234,7 +234,7 @@ if kind == 'login':
                 self.assertFalse({"GITHUB_TOKEN", "GITHUB_ACTOR"} & {call.args[0] for call in reads.call_args_list})
 
     def test_repositories_refs_urls_platforms_extra_args_and_abbreviations_are_rejected(self):
-        for image in (IMAGE + ":tag", IMAGE + "@sha256:" + "f" * 64, "https://" + IMAGE, IMAGE + "/child", "ghcr.io/other/repo", "--help"):
+        for image in ("ghcr.io/ncecere/open-model-gateway", "ghcr.io/ncecere/open-model-gateway-loadtest", IMAGE + ":tag", IMAGE + "@sha256:" + "f" * 64, "https://" + IMAGE, IMAGE + "/child", "ghcr.io/other/repo", "--help"):
             self.refused(self.args(image=image))
         self.refused(self.args(platform="linux/s390x"))
         self.refused(self.args(root="sha256:" + "A" * 64))

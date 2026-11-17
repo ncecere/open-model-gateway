@@ -788,7 +788,7 @@ async fn hourly_usage_is_append_only_byte_seconds(pool: PgPool) {
         )
         .await
         .unwrap();
-    let base: chrono::DateTime<chrono::Utc> =
+    let base: gateway_datetime_compat::UtcInstant =
         sqlx::query_scalar("SELECT date_trunc('hour', now(), 'UTC') - interval '5 hours'")
             .fetch_one(&pool)
             .await
@@ -799,7 +799,7 @@ async fn hourly_usage_is_append_only_byte_seconds(pool: PgPool) {
         .await
         .unwrap();
     sqlx::query("UPDATE storage_usage_progress SET recorded_through=$1")
-        .bind(base - chrono::TimeDelta::hours(1))
+        .bind(base - gateway_datetime_compat::SignedDuration::hours(1))
         .execute(&pool)
         .await
         .unwrap();
@@ -819,8 +819,8 @@ async fn hourly_usage_is_append_only_byte_seconds(pool: PgPool) {
         .unwrap();
     sqlx::query("UPDATE stored_files SET committed_at=$2,created_at=$2,deleted_at=$3 WHERE id=$1")
         .bind(b.id)
-        .bind(base + chrono::TimeDelta::minutes(30))
-        .bind(base + chrono::TimeDelta::minutes(120))
+        .bind(base + gateway_datetime_compat::SignedDuration::minutes(30))
+        .bind(base + gateway_datetime_compat::SignedDuration::minutes(120))
         .execute(&pool)
         .await
         .unwrap();
@@ -830,7 +830,7 @@ async fn hourly_usage_is_append_only_byte_seconds(pool: PgPool) {
         .unwrap();
     let hours = record_hours(&f.store, 48).await.unwrap();
     assert!(hours >= 4, "{hours}");
-    let rows: Vec<(String, chrono::DateTime<chrono::Utc>, String, i32)> = sqlx::query_as("SELECT purpose,hour_start,byte_seconds::text,file_count FROM storage_usage_hours WHERE workspace_id=$1 ORDER BY purpose,hour_start").bind(ws).fetch_all(&pool).await.unwrap();
+    let rows: Vec<(String, gateway_datetime_compat::UtcInstant, String, i32)> = sqlx::query_as("SELECT purpose,hour_start,byte_seconds::text,file_count FROM storage_usage_hours WHERE workspace_id=$1 ORDER BY purpose,hour_start").bind(ws).fetch_all(&pool).await.unwrap();
     let batch: Vec<_> = rows
         .iter()
         .filter(|r| r.0 == "batch_input")
@@ -839,8 +839,14 @@ async fn hourly_usage_is_append_only_byte_seconds(pool: PgPool) {
     assert_eq!(
         batch,
         vec![
-            (chrono::TimeDelta::zero(), "18000".to_owned()),
-            (chrono::TimeDelta::hours(1), "36000".to_owned())
+            (
+                gateway_datetime_compat::SignedDuration::ZERO,
+                "18000".to_owned()
+            ),
+            (
+                gateway_datetime_compat::SignedDuration::hours(1),
+                "36000".to_owned()
+            )
         ]
     );
     let user: Vec<_> = rows

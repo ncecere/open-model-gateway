@@ -907,7 +907,7 @@ async fn a_soft_lost_run_leaves_the_batch_open_and_a_second_runner_completes_it(
         (1..3).contains(&started),
         "unstarted lines stay pending: {started}"
     );
-    let lease: Option<chrono::DateTime<chrono::Utc>> =
+    let lease: Option<gateway_datetime_compat::UtcInstant> =
         sqlx::query_scalar("SELECT runner_lease_until FROM async_jobs WHERE id=$1")
             .bind(job.id)
             .fetch_one(&w.f.store.pool)

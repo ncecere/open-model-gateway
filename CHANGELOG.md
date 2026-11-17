@@ -6,7 +6,11 @@ The project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). 
 
 ## [Unreleased]
 
-Changes after v0.17.0: [unreleased notes](docs/releases/unreleased.md).
+Changes after v0.18.0: [unreleased notes](docs/releases/unreleased.md).
+
+## [0.18.0]
+
+A minor release: fenced gateway batch runners (#638), settlement that completes after client disconnect (#639), atomic job admission (#640), accepted-job failures retaining unknown usage (#616), explicit audited free-price and gateway-envelope resolution (#657, #661), returned-stream error/transport health classification and Bedrock backpressure timing (#614, #622, #666), deployment-preview focus (#588), and a maintained datetime/SDK dependency graph (#674). Also journey, property, formal-model and source-rule verification. **Drain and apply migrations 0081–0083 plus runtime grants**; schema is **0083**. Rollback after migration requires restoring the pre-upgrade backup. [Notes and upgrade](docs/releases/v0.18.0.md).
 
 ## [0.17.0]
 
@@ -122,28 +126,29 @@ Alerts, key safety, model compare, SCIM, JWKS refresh, metrics and backup toolin
 
 The single-enterprise rebuild: Team, Project and personal workspaces, OIDC platform roles, catalogs, multimodal workloads across five provider families, immutable micro-USD accounting, logs and Admin settings. Migrations `0001` to `0010`. Notes: [`docs/releases/v0.1.0.md`](docs/releases/v0.1.0.md).
 
-[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.17.0...HEAD
-[0.17.0]: https://github.com/ncecere/open-model-gateway/compare/v0.16.0...v0.17.0
-[0.16.0]: https://github.com/ncecere/open-model-gateway/compare/v0.15.1...v0.16.0
-[0.15.1]: https://github.com/ncecere/open-model-gateway/compare/v0.15.0...v0.15.1
-[0.15.0]: https://github.com/ncecere/open-model-gateway/compare/v0.14.1...v0.15.0
-[0.14.1]: https://github.com/ncecere/open-model-gateway/compare/v0.14.0...v0.14.1
-[0.14.0]: https://github.com/ncecere/open-model-gateway/compare/v0.13.0...v0.14.0
-[0.13.0]: https://github.com/ncecere/open-model-gateway/compare/v0.12.0...v0.13.0
-[0.12.0]: https://github.com/ncecere/open-model-gateway/compare/v0.11.0...v0.12.0
-[0.11.0]: https://github.com/ncecere/open-model-gateway/compare/v0.10.1...v0.11.0
-[0.10.1]: https://github.com/ncecere/open-model-gateway/compare/v0.10.0...v0.10.1
-[0.10.0]: https://github.com/ncecere/open-model-gateway/compare/v0.9.3...v0.10.0
-[0.9.3]: https://github.com/ncecere/open-model-gateway/compare/v0.9.2...v0.9.3
-[0.9.2]: https://github.com/ncecere/open-model-gateway/compare/v0.9.1...v0.9.2
-[0.9.1]: https://github.com/ncecere/open-model-gateway/compare/v0.9.0...v0.9.1
-[0.9.0]: https://github.com/ncecere/open-model-gateway/compare/v0.8.0...v0.9.0
-[0.8.0]: https://github.com/ncecere/open-model-gateway/compare/v0.7.2...v0.8.0
-[0.7.2]: https://github.com/ncecere/open-model-gateway/compare/v0.7.1...v0.7.2
-[0.7.1]: https://github.com/ncecere/open-model-gateway/compare/v0.7.0...v0.7.1
-[0.4.0]: https://github.com/ncecere/open-model-gateway/compare/v0.3.2...v0.4.0
-[0.3.2]: https://github.com/ncecere/open-model-gateway/compare/v0.3.1...v0.3.2
-[0.3.1]: https://github.com/ncecere/open-model-gateway/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/ncecere/open-model-gateway/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/ncecere/open-model-gateway/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/ncecere/open-model-gateway/releases/tag/v0.1.0
+[Unreleased]: https://github.com/bitop-dev/open-model-gateway/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/bitop-dev/open-model-gateway/compare/v0.17.0...v0.18.0
+[0.17.0]: https://github.com/bitop-dev/open-model-gateway/compare/v0.16.0...v0.17.0
+[0.16.0]: https://github.com/bitop-dev/open-model-gateway/compare/v0.15.1...v0.16.0
+[0.15.1]: https://github.com/bitop-dev/open-model-gateway/compare/v0.15.0...v0.15.1
+[0.15.0]: https://github.com/bitop-dev/open-model-gateway/compare/v0.14.1...v0.15.0
+[0.14.1]: https://github.com/bitop-dev/open-model-gateway/compare/v0.14.0...v0.14.1
+[0.14.0]: https://github.com/bitop-dev/open-model-gateway/compare/v0.13.0...v0.14.0
+[0.13.0]: https://github.com/bitop-dev/open-model-gateway/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/bitop-dev/open-model-gateway/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/bitop-dev/open-model-gateway/compare/v0.10.1...v0.11.0
+[0.10.1]: https://github.com/bitop-dev/open-model-gateway/compare/v0.10.0...v0.10.1
+[0.10.0]: https://github.com/bitop-dev/open-model-gateway/compare/v0.9.3...v0.10.0
+[0.9.3]: https://github.com/bitop-dev/open-model-gateway/compare/v0.9.2...v0.9.3
+[0.9.2]: https://github.com/bitop-dev/open-model-gateway/compare/v0.9.1...v0.9.2
+[0.9.1]: https://github.com/bitop-dev/open-model-gateway/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/bitop-dev/open-model-gateway/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/bitop-dev/open-model-gateway/compare/v0.7.2...v0.8.0
+[0.7.2]: https://github.com/bitop-dev/open-model-gateway/compare/v0.7.1...v0.7.2
+[0.7.1]: https://github.com/bitop-dev/open-model-gateway/compare/v0.7.0...v0.7.1
+[0.4.0]: https://github.com/bitop-dev/open-model-gateway/compare/v0.3.2...v0.4.0
+[0.3.2]: https://github.com/bitop-dev/open-model-gateway/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/bitop-dev/open-model-gateway/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/bitop-dev/open-model-gateway/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/bitop-dev/open-model-gateway/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/bitop-dev/open-model-gateway/releases/tag/v0.1.0

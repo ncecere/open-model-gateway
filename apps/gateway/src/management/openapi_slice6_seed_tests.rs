@@ -2,7 +2,7 @@
 //! write them (admission, settlement, realtime close, retention compaction).
 //! Only valid state: every CHECK, trigger and foreign key of the schema applies.
 use super::*;
-use chrono::{DateTime, Duration, Utc};
+use gateway_datetime_compat::{SignedDuration as Duration, UtcInstant};
 
 /// All seven keys present (a complete provider usage report).
 pub(super) const BILLING_FULL: &str = r#"{"total_input_tokens":"10","uncached_input_tokens":"7","cache_read_input_tokens":"3","cache_write_input_tokens":"0","cache_write_default_input_tokens":"0","cache_write_5m_input_tokens":"0","cache_write_1h_input_tokens":"0"}"#;
@@ -128,8 +128,8 @@ impl Ex<'_> {
 /// The attempt exactly as the engine, settlement and compaction leave it.
 pub(super) async fn exec(pool: &PgPool, e: Ex<'_>) -> Uuid {
     let id = if e.n == 1 { e.root } else { Uuid::new_v4() };
-    let started: DateTime<Utc> =
-        Utc::now() - Duration::minutes(e.ago) + Duration::seconds(e.n.into());
+    let started: UtcInstant =
+        UtcInstant::now() - Duration::minutes(e.ago) + Duration::seconds(e.n.into());
     let completed = e.completed.then(|| started + Duration::milliseconds(250));
     // Retention compaction clears these four and records when (maintenance.rs).
     let (error, elapsed, session, app) = if e.redacted {

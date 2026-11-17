@@ -54,6 +54,10 @@ struct Script {
     coarse_unavailable_once: bool,
     /// Encoded native records of the last submission.
     submitted: Vec<Value>,
+    submission_error: Option<InferenceError>,
+    unique_upstream_ids: bool,
+    early_accept: bool,
+    encode_error: Option<InferenceError>,
     submissions: Vec<Vec<Value>>,
     batches: std::collections::VecDeque<UpstreamBatch>,
     /// Result lines a native batch returns (fake format).
@@ -315,6 +319,9 @@ impl ProviderAdapter for Fake {
         custom_id: &str,
         request: &BatchRequest,
     ) -> Result<Vec<u8>, InferenceError> {
+        if let Some(error) = self.script.lock().unwrap().encode_error {
+            return Err(error);
+        }
         let text = match request {
             BatchRequest::Chat(r) => r.messages[0].content.clone().unwrap_or_default(),
             BatchRequest::Embeddings(r) => r.input.join(","),
@@ -333,6 +340,9 @@ impl ProviderAdapter for Fake {
         _: BatchEndpoint,
         mut records: ByteStream,
     ) -> Result<UpstreamBatch, InferenceError> {
+        if self.script.lock().unwrap().early_accept {
+            return Ok(upstream(BatchStatus::Validating));
+        }
         let mut seen = Vec::new();
         while let Some(r) = records.next().await {
             seen.push(serde_json::from_slice::<Value>(&r?).unwrap());
@@ -341,7 +351,14 @@ impl ProviderAdapter for Fake {
         s.calls.push("submit");
         s.submissions.push(seen.clone());
         s.submitted = seen;
-        Ok(upstream(BatchStatus::Validating))
+        if let Some(error) = s.submission_error {
+            return Err(error);
+        }
+        let mut accepted = upstream(BatchStatus::Validating);
+        if s.unique_upstream_ids {
+            accepted.id = UpstreamId::parse(&format!("batch_{}", Uuid::new_v4().simple())).unwrap();
+        }
+        Ok(accepted)
     }
     async fn retrieve_batch(
         &self,
@@ -3205,3 +3222,97 @@ async fn memoized_refusal_classification_stays_per_line(pool: PgPool) {
 
 mod envelope;
 mod fence;
+
+/// Streaming classification must not change the non-stream classes that drive
+/// explicit line retries: OpenAI invalid output is not retryable; OpenRouter's
+/// pre-existing unavailable class is. Neither becomes Busy.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn openai_non_stream_200_errors_preserve_batch_retry_semantics(pool: PgPool) {
+    non_stream_200_batch_error(pool, crate::providers::stream_class_tests::Kind::OpenAi).await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn openrouter_non_stream_200_errors_preserve_batch_retry_semantics(pool: PgPool) {
+    non_stream_200_batch_error(pool, crate::providers::stream_class_tests::Kind::OpenRouter).await;
+}
+
+async fn non_stream_200_batch_error(
+    pool: PgPool,
+    kind: crate::providers::stream_class_tests::Kind,
+) {
+    use crate::providers::stream_class_tests::{Kind, Step, response, serve};
+    use std::sync::atomic::Ordering;
+    let mut w = world(pool.clone(), false, false, 1).await;
+    sqlx::query("UPDATE provider_connections SET provider=$1,credential_ref=$2 WHERE id=(SELECT provider_connection_id FROM deployments WHERE id=$3)")
+            .bind(kind.provider()).bind(kind.credential()).bind(w.f.deployment)
+            .execute(&w.f.store.pool).await.unwrap();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = calls.clone();
+    let app = axum::Router::new().fallback(move || {
+        seen.fetch_add(1, Ordering::SeqCst);
+        async {
+            response(
+                200,
+                "application/json",
+                vec![Step::Bytes(
+                    br#"{"error":{"code":"rate_limit_exceeded"}}"#.to_vec(),
+                )],
+            )
+        }
+    });
+    let (base, _mock) = serve(app).await;
+    let mut registry = ProviderRegistry::default();
+    registry.register(kind.adapter(&base)).unwrap();
+    let engine = Engine::new(
+        Arc::new(w.f.store.clone()),
+        registry.clone(),
+        EngineLimits::default(),
+    )
+    .unwrap();
+    let runtime = FileStoreRuntime::memory();
+    w.files = crate::filestore::FileStorage::new(w.f.store.clone(), runtime.clone());
+    w.jobs = Jobs::with(w.f.store.clone(), registry, JobLimits::default())
+        .with_files(Some(runtime))
+        .with_engine(engine);
+    let file = w
+        .upload(&w.f.principal, &[chat_line("a", "company/smart", "hi")])
+        .await;
+    let job = w
+        .create(
+            w.f.principal,
+            &file,
+            BatchEndpoint::ChatCompletions,
+            Some(json!({"omg_mode":"gateway","omg_retries":"1"})),
+        )
+        .await
+        .unwrap();
+    Runner::new(w.jobs.clone()).run_next().await.unwrap();
+    let attempts: Vec<(i16, String, Option<String>)> =
+        sqlx::query_as("SELECT attempts,state,error_code FROM batch_lines WHERE job_id=$1")
+            .bind(job.id)
+            .fetch_all(&w.f.store.pool)
+            .await
+            .unwrap();
+    let (n, code) = if kind == Kind::OpenAi {
+        (1, "invalid_upstream_response")
+    } else {
+        (2, "upstream_unavailable")
+    };
+    assert_eq!(
+        attempts,
+        [(n, "failed".into(), Some(code.into()))],
+        "{kind:?}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), n as usize, "{kind:?}");
+    let executions: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM inference_executions WHERE batch_job_id=$1 AND error_code=$2",
+    )
+    .bind(job.id)
+    .bind(code)
+    .fetch_one(&w.f.store.pool)
+    .await
+    .unwrap();
+    assert_eq!(executions, i64::from(n));
+}
+
+mod accepted_failure_tests;

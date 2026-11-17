@@ -1841,9 +1841,9 @@ async fn slice2_fixtures(pool: PgPool) -> (Vec<String>, PositiveFixtures) {
     )
     .await;
     // Every filter at once, valid for the older session (the cursor is the newer page's).
-    let today = chrono::Utc::now().date_naive();
-    let start = (today - chrono::TimeDelta::days(1)).to_string();
-    let end = (today + chrono::TimeDelta::days(1)).to_string();
+    let today = gateway_datetime_compat::UtcInstant::now().date_naive();
+    let start = (today - gateway_datetime_compat::SignedDuration::days(1)).to_string();
+    let end = (today + gateway_datetime_compat::SignedDuration::days(1)).to_string();
     let prefix = unknown.to_string()[..8].to_owned();
     let key_text = key_id.to_string();
     let filters: Vec<(&str, String)> = vec![

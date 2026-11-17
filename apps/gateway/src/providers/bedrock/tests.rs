@@ -6,6 +6,11 @@ mod stream_decode_tests;
 #[cfg(feature = "integration-tests")]
 #[path = "stream_error_tests.rs"]
 mod stream_error_tests;
+#[path = "stream_transport_tests.rs"]
+mod stream_transport_tests;
+#[path = "timeout_tests.rs"]
+mod timeout_tests;
+use crate::timestamp::TimestampFormat as _;
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -17,6 +22,44 @@ use std::{
     convert::Infallible,
     sync::{Arc, Mutex as StdMutex},
 };
+
+impl BedrockAdapter {
+    pub(super) fn for_test_clients(
+        base: &str,
+        timeouts: transport::Timeouts,
+        http: aws_smithy_runtime_api::client::http::SharedHttpClient,
+        streaming_http: aws_smithy_runtime_api::client::http::SharedHttpClient,
+    ) -> Self {
+        let mut adapter = Self::new().unwrap();
+        adapter.timeouts = timeouts;
+        adapter.http = http;
+        adapter.streaming_http = streaming_http;
+        let config = aws_sdk_bedrockruntime::Config::builder()
+            .behavior_version(BehaviorVersion::v2026_01_12())
+            .region(Region::new("us-east-1"))
+            .credentials_provider(aws_sdk_bedrockruntime::config::Credentials::new(
+                "AKIDLOCALTEST",
+                "local-not-a-secret",
+                Some("local-session-token".into()),
+                None,
+                "local-test",
+            ))
+            .endpoint_url(base)
+            .http_client(adapter.http.clone())
+            .timeout_config(adapter.operation_timeouts())
+            .stalled_stream_protection(
+                aws_sdk_bedrockruntime::config::StalledStreamProtectionConfig::enabled()
+                    .grace_period(timeouts.read.min(Duration::from_secs(5)))
+                    .build(),
+            )
+            .retry_config(RetryConfig::standard().with_max_attempts(1))
+            .build();
+        Self {
+            test_client: Some(Client::from_conf(config)),
+            ..adapter
+        }
+    }
+}
 
 struct Captured {
     headers: HeaderMap,
@@ -905,9 +948,10 @@ async fn a_response_date_never_moves_the_signing_time() {
                 // A server (or anyone on the path) whose clock reads an hour behind.
                 .header(
                     "date",
-                    (chrono::Utc::now() - chrono::Duration::hours(1))
-                        .format("%a, %d %b %Y %H:%M:%S GMT")
-                        .to_string(),
+                    (gateway_datetime_compat::UtcInstant::now()
+                        - gateway_datetime_compat::SignedDuration::hours(1))
+                    .format("%a, %d %b %Y %H:%M:%S GMT")
+                    .to_string(),
                 )
                 .body(Body::from(serde_json::to_vec(&complete(false)).unwrap()))
                 .unwrap()
@@ -945,10 +989,10 @@ async fn a_response_date_never_moves_the_signing_time() {
     let dates = dates.lock().unwrap().clone();
     assert_eq!(dates.len(), 3);
     for (index, signed) in dates.iter().enumerate() {
-        let signed = chrono::NaiveDateTime::parse_from_str(signed, "%Y%m%dT%H%M%SZ")
-            .unwrap()
-            .and_utc();
-        let off = (chrono::Utc::now() - signed).num_seconds().abs();
+        let signed = crate::timestamp::parse_sigv4(signed).unwrap();
+        let off = (gateway_datetime_compat::UtcInstant::now() - signed)
+            .whole_seconds()
+            .abs();
         assert!(
             off < 300,
             "request {index} was signed {off} s away from this host's clock"

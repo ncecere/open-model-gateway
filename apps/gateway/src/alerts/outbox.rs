@@ -1,6 +1,7 @@
 //! Durable recipient queue. All database transactions end before SMTP I/O.
 //! A lease fences database results, not the relay: a crash after acceptance can
 //! duplicate mail. Fingerprints are pseudonymous and must never be formatted.
+use gateway_datetime_compat::UtcInstant;
 use std::collections::{HashMap, HashSet};
 
 use sha2::{Digest, Sha256};
@@ -243,7 +244,7 @@ async fn claim_with_origin(
     let (recent_buckets, turns) = last_served_order(store);
     // Use one database instant for both selection steps. Later lease and live
     // authorization checks retain their existing clock/statement semantics.
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+    let now: UtcInstant = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut *tx)
         .await?;
     // Loose/distinct index walk: one seek per pending bucket, never a full

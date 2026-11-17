@@ -1,4 +1,4 @@
-fn at(s: &str) -> chrono::DateTime<chrono::Utc> {
+fn at(s: &str) -> gateway_datetime_compat::UtcInstant {
     s.parse().unwrap()
 }
 use crate::scheduled_reports::calendar::Calendar;
@@ -46,7 +46,7 @@ mod db {
         CANDIDATE_BATCH, SELECT_CANDIDATES_AFTER, SELECT_CANDIDATES_FIRST, SELECT_ELIGIBLE,
         begin_dispatch,
     };
-    use chrono::{DateTime, Utc};
+    use gateway_datetime_compat::UtcInstant;
     use serde_json::Value;
     use sqlx::PgPool;
     use uuid::Uuid;
@@ -87,11 +87,11 @@ mod db {
                 .unwrap(),
             "10s"
         );
-        let cutoff: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        let cutoff: UtcInstant = sqlx::query_scalar("SELECT clock_timestamp()")
             .fetch_one(&mut *tx)
             .await
             .unwrap();
-        let page: Vec<(DateTime<Utc>, Uuid)> = sqlx::query_as(SELECT_CANDIDATES_FIRST)
+        let page: Vec<(UtcInstant, Uuid)> = sqlx::query_as(SELECT_CANDIDATES_FIRST)
             .bind(cutoff)
             .bind(CANDIDATE_BATCH)
             .fetch_all(&mut *tx)
@@ -124,7 +124,7 @@ mod db {
                 .bind(CANDIDATE_BATCH);
             let plan = if after {
                 query
-                    .bind(cutoff - chrono::TimeDelta::days(2))
+                    .bind(cutoff - gateway_datetime_compat::SignedDuration::days(2))
                     .bind(Uuid::nil())
                     .fetch_one(&mut *tx)
                     .await

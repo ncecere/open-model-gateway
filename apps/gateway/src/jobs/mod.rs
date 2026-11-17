@@ -31,12 +31,13 @@ mod store;
 pub mod types;
 pub mod video;
 
+use gateway_datetime_compat::UtcInstant;
 use std::{
     sync::{Arc, OnceLock},
     time::Duration,
 };
 
-use chrono::{TimeDelta, Utc};
+use gateway_datetime_compat::SignedDuration as TimeDelta;
 use uuid::Uuid;
 
 use crate::{
@@ -417,18 +418,24 @@ impl Jobs {
         }
         let pending = store::reservation_pending(&self.store, job.execution_id).await?;
         if pending {
-            let elapsed = (Utc::now() - job.created_at).num_milliseconds().max(0) as u64;
-            crate::governance::finish(
-                &self.store,
-                &ExecutionFinish {
-                    id: job.execution_id,
-                    outcome: finish.outcome,
-                    error: finish.error,
-                    usage: finish.usage,
-                    elapsed_ms: elapsed,
-                },
-            )
-            .await?;
+            let elapsed = (UtcInstant::now() - job.created_at)
+                .whole_milliseconds()
+                .max(0) as u64;
+            let record = ExecutionFinish {
+                id: job.execution_id,
+                outcome: finish.outcome,
+                error: finish.error,
+                usage: finish.usage,
+                elapsed_ms: elapsed,
+            };
+            // The durable upstream id proves acceptance for videos and native/
+            // legacy batches. Submission errors have no id and may still be
+            // explicit pre-processing rejections; preserve that distinction.
+            if job.upstream_id.is_some() {
+                crate::governance::finish_accepted_job(&self.store, &record).await?;
+            } else {
+                crate::governance::finish(&self.store, &record).await?;
+            }
         } else {
             tracing::warn!(job_id = %job.id, "job reservation no longer pending; settlement left to reconciliation");
         }

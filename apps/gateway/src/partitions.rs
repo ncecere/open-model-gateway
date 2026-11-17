@@ -17,7 +17,7 @@
 //!
 //! Archival of closed months is a separate operator command
 //! ([`crate::archive`]).
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 use serde::Serialize;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
@@ -47,7 +47,7 @@ pub fn ahead_from_env() -> anyhow::Result<i32> {
 pub struct Coverage {
     pub parent: String,
     /// End of the contiguous partitions starting at the current month.
-    pub covered_until: DateTime<Utc>,
+    pub covered_until: UtcInstant,
     /// Whole future months covered after the current one (-1: the current
     /// month itself has no partition).
     pub months_ahead: i64,
@@ -70,10 +70,7 @@ const COVERAGE: &str = "SELECT c.parent,c.covered_until,
  FROM omg_partition_coverage($1) c";
 
 /// Coverage of every partitioned history table at `at` (`None`: now).
-pub async fn coverage(
-    pool: &PgPool,
-    at: Option<DateTime<Utc>>,
-) -> Result<Vec<Coverage>, sqlx::Error> {
+pub async fn coverage(pool: &PgPool, at: Option<UtcInstant>) -> Result<Vec<Coverage>, sqlx::Error> {
     let at = match at {
         Some(at) => at,
         None => {
@@ -102,7 +99,7 @@ pub async fn ensure(pool: &PgPool, ahead: i32) -> Result<EnsureReport, sqlx::Err
 pub async fn ensure_at(
     pool: &PgPool,
     ahead: i32,
-    at: DateTime<Utc>,
+    at: UtcInstant,
 ) -> Result<EnsureReport, sqlx::Error> {
     let created = sqlx::query_as::<_, (String, String)>(
         "SELECT parent,partition FROM omg_ensure_partitions($1,$2)",
@@ -117,7 +114,7 @@ pub async fn ensure_at(
 async fn report(
     pool: &PgPool,
     created: Result<Vec<(String, String)>, sqlx::Error>,
-    at: Option<DateTime<Utc>>,
+    at: Option<UtcInstant>,
 ) -> Result<EnsureReport, sqlx::Error> {
     let (created, error) = match created {
         Ok(c) => (c, None),

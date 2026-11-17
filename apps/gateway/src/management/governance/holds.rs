@@ -2,7 +2,7 @@
 //! an upper bound. No reservation, ledger or totals writes belong here.
 use super::*;
 use axum::extract::RawQuery;
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 use std::collections::HashMap;
 
 pub(super) const AGED: &str = "unknown_since <= observed_at - interval '24 hours'";
@@ -17,20 +17,18 @@ pub(super) struct Scope {
 // page authorizes afresh and applies the full SQL predicate before aggregates.
 // No process-local state: any replica can continue the same position.
 const CURSOR_MAX_LEN: usize = 20 + 1 + 36; // signed i64 microseconds + '_' + UUID
-fn cursor(since: DateTime<Utc>, id: Uuid) -> String {
+fn cursor(since: UtcInstant, id: Uuid) -> String {
     format!("{}_{}", since.timestamp_micros(), id)
 }
 /// PostgreSQL `timestamptz` spans 4713 BC (Julian day 0, proleptic Gregorian
 /// -4713-11-24) to before 294277 AD. chrono is wider on the early side, and
 /// binding an unrepresentable instant fails in the server (a 503, not a 400).
-fn pg_timestamptz_representable(t: DateTime<Utc>) -> bool {
-    use chrono::{Datelike, NaiveDate};
-    let min = NaiveDate::from_ymd_opt(-4713, 11, 24)
-        .and_then(|d| d.and_hms_opt(0, 0, 0))
-        .map(|t| t.and_utc());
+fn pg_timestamptz_representable(t: UtcInstant) -> bool {
+    use gateway_datetime_compat::CalendarDate;
+    let min = CalendarDate::from_ymd_opt(-4713, 11, 24).and_then(|d| d.midnight().ok());
     min.is_some_and(|min| t >= min) && t.year() <= 294_276
 }
-fn position(value: &str) -> Result<(DateTime<Utc>, Uuid), ApiError> {
+fn position(value: &str) -> Result<(UtcInstant, Uuid), ApiError> {
     if value.is_empty() || value.len() > CURSOR_MAX_LEN {
         return Err(invalid());
     }
@@ -231,7 +229,7 @@ mod tests {
     fn cursor_position_has_exact_bounded_format() {
         let id = Uuid::new_v4();
         for micros in [-1, 0, 1_700_000_000_123_456] {
-            let since = DateTime::from_timestamp_micros(micros).unwrap();
+            let since = UtcInstant::from_timestamp_micros(micros).unwrap();
             assert_eq!(position(&cursor(since, id)).unwrap(), (since, id));
         }
         let nil = Uuid::nil();
@@ -256,29 +254,28 @@ mod tests {
     }
     #[test]
     fn cursor_rejects_timestamps_postgres_cannot_store() {
-        use chrono::NaiveDate;
+        use gateway_datetime_compat::CalendarDate;
         let id = Uuid::new_v4();
         let at = |year| {
-            NaiveDate::from_ymd_opt(year, 11, 24)
+            CalendarDate::from_ymd_opt(year, 11, 24)
                 .unwrap()
-                .and_hms_opt(0, 0, 0)
+                .midnight()
                 .unwrap()
-                .and_utc()
         };
         // timestamptz starts at Julian day 0 (4713 BC); one microsecond
         // earlier is rejected by the server when bound as $6.
         let min = at(-4713);
         assert_eq!(position(&cursor(min, id)).unwrap(), (min, id));
         for early in [
-            min - chrono::Duration::microseconds(1),
+            min - gateway_datetime_compat::SignedDuration::microseconds(1),
             at(-4714),
             at(-100_000),
-            DateTime::<Utc>::MIN_UTC,
+            UtcInstant::MIN_UTC,
         ] {
             assert!(position(&cursor(early, id)).is_err(), "{early}");
         }
         // chrono ends at year 262142, below PostgreSQL's 294276 AD limit.
-        assert!(position(&cursor(DateTime::<Utc>::MAX_UTC, id)).is_ok());
+        assert!(position(&cursor(UtcInstant::MAX_UTC, id)).is_ok());
     }
     #[test]
     fn parameters_are_strict() {

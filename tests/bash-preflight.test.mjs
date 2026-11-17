@@ -482,7 +482,7 @@ test("no test file starts bash on its own (#380)", () => {
     assert.deepEqual(startsAShell(name, text, ALLOWED[name]), [], `${name} may start a shell that was not checked`);
     if (/\b(?:runBash|bashPath)\b/.test(text)) users.push(name);
   }
-  assert.deepEqual(users.sort(), ["oci-tool.test.mjs", "supply-chain.test.mjs", "supply-chain/secret-scan-run.test.mjs"]);
+  assert.deepEqual(users.sort(), ["oci-tool.test.mjs", "supply-chain.test.mjs", "supply-chain/secret-scan-run.test.mjs", "supply-chain/transfer.test.mjs"]);
   // The rule itself: each way round the old check is refused, and ordinary lines are not.
   for (const line of [
     'spawnSync("env", ["bash", "-c", script]);',

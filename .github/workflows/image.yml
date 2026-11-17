@@ -1,4 +1,4 @@
-# Builds, tests, scans, signs and publishes ghcr.io/ncecere/open-model-gateway,
+# Builds, tests, scans, signs and publishes ghcr.io/bitop-dev/open-model-gateway,
 # and creates the GitHub Release for v* tags.
 #
 # Called by ci.yml after the gateway, web and browser jobs pass, on pushes to
@@ -59,7 +59,7 @@ permissions:
   contents: read
 
 env:
-  IMAGE: ghcr.io/ncecere/open-model-gateway
+  IMAGE: ghcr.io/bitop-dev/open-model-gateway
 
 jobs:
   # Opt-in branch-only acceptance of the candidate on an already-built dev index.
@@ -84,7 +84,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "${EVENT}" = workflow_dispatch && "${PROBE}" = true ]]
-          [[ "${GITHUB_REPOSITORY}" = ncecere/open-model-gateway && "${IMAGE}" = ghcr.io/ncecere/open-model-gateway ]]
+          [[ "${GITHUB_REPOSITORY}" = bitop-dev/open-model-gateway && "${IMAGE}" = ghcr.io/bitop-dev/open-model-gateway ]]
           [[ "${REF_TYPE}" = branch && "${GITHUB_REF}" = refs/heads/?* && "${GITHUB_REF}" != refs/heads/main ]]
           [[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ && "${GITHUB_WORKFLOW_SHA}" = "${GITHUB_SHA}" ]]
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -166,7 +166,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "${EVENT}" = workflow_dispatch && "${PROBE}" = true ]]
-          [[ "${GITHUB_REPOSITORY}" = ncecere/open-model-gateway && "${IMAGE}" = ghcr.io/ncecere/open-model-gateway ]]
+          [[ "${GITHUB_REPOSITORY}" = bitop-dev/open-model-gateway && "${IMAGE}" = ghcr.io/bitop-dev/open-model-gateway ]]
           [[ "${REF_TYPE}" = branch && "${GITHUB_REF}" = refs/heads/?* && "${GITHUB_REF}" != refs/heads/main ]]
           [[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ && "${GITHUB_WORKFLOW_SHA}" = "${GITHUB_SHA}" ]]
           [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ && "${CHILD}" =~ ^sha256:[0-9a-f]{64}$ && "${CHILD}" != "${DIGEST}" ]]
@@ -222,7 +222,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "${EVENT}" = workflow_dispatch && "${PROBE}" = true ]]
-          [[ "${GITHUB_REPOSITORY}" = ncecere/open-model-gateway && "${IMAGE}" = ghcr.io/ncecere/open-model-gateway ]]
+          [[ "${GITHUB_REPOSITORY}" = bitop-dev/open-model-gateway && "${IMAGE}" = ghcr.io/bitop-dev/open-model-gateway ]]
           [[ "${REF_TYPE}" = branch && "${GITHUB_REF}" = refs/heads/?* && "${GITHUB_REF}" != refs/heads/main ]]
           [[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ && "${GITHUB_WORKFLOW_SHA}" = "${GITHUB_SHA}" ]]
           [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ && "${CHILD}" =~ ^sha256:[0-9a-f]{64}$ && "${CHILD}" != "${DIGEST}" ]]
@@ -451,7 +451,7 @@ jobs:
       artifact_id: ${{ needs.build.outputs.artifact_id_linux_amd64 }}
       root_digest: ${{ needs.build.outputs.digest_linux_amd64 }}
       platform: linux/amd64
-      image_repository: ghcr.io/ncecere/open-model-gateway
+      image_repository: ghcr.io/bitop-dev/open-model-gateway
       source_revision: ${{ github.sha }}
 
   import-arm64:
@@ -464,7 +464,7 @@ jobs:
       artifact_id: ${{ needs.build.outputs.artifact_id_linux_arm64 }}
       root_digest: ${{ needs.build.outputs.digest_linux_arm64 }}
       platform: linux/arm64
-      image_repository: ghcr.io/ncecere/open-model-gateway
+      image_repository: ghcr.io/bitop-dev/open-model-gateway
       source_revision: ${{ github.sha }}
 
   # Tests the pushed digest of each architecture on a native runner with a

@@ -695,6 +695,20 @@ async fn every_json_management_write_rejects_unknown_fields_after_valid_control(
         &f.admin,
         json!({"input_tokens":"1","output_tokens":"1","billing_usage":null,"evidence":"configuration control"})
     );
+    case!(
+        "governance::batch_envelopes::resolve",
+        "POST",
+        format!("{platform}/reservations/resolve-batch-envelopes"),
+        &f.admin,
+        json!({"apply":true,"deployment_id":deployment,"expected_count":"0","reason":"configuration control"})
+    );
+    case!(
+        "governance::free_price::resolve",
+        "POST",
+        format!("{platform}/reservations/resolve-free-price"),
+        &f.admin,
+        json!({"apply":true,"deployment_id":deployment,"expected_count":"0","reason":"configuration control"})
+    );
     let cost_upload = super::provider_cost_tests::upload();
     let (status, cost_import) = call(
         &f.s,

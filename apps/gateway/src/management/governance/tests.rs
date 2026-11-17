@@ -1,4 +1,5 @@
 use super::*;
+use gateway_datetime_compat::UtcInstant;
 #[test]
 fn strict_exact_money_and_required_nullable_fields() {
     for s in ["", "-1", "+1", "1.0", "1e6", "9223372036854775808"] {
@@ -38,6 +39,12 @@ fn holds_exact_route_and_token_policies() {
 }
 #[cfg(feature = "integration-tests")]
 mod db {
+    #[path = "batch_envelope_paging_tests.rs"]
+    mod batch_envelope_paging_tests;
+    #[path = "batch_envelope_tests.rs"]
+    mod batch_envelope_tests;
+    #[path = "free_price_tests.rs"]
+    mod free_price_tests;
     #[path = "reconcile_usage_tests.rs"]
     mod reconcile_usage_tests;
     use super::*;
@@ -49,7 +56,7 @@ mod db {
         body::{Body, to_bytes},
         http::{Request, header},
     };
-    use chrono::{Datelike, Utc};
+
     use sqlx::PgPool;
     use tower::ServiceExt;
     fn user(id: Uuid, admin: bool) -> BrowserPrincipal {
@@ -67,11 +74,12 @@ mod db {
         json!({"input_microusd_per_million":"1000000","output_microusd_per_million":"1000000","input_token_limit":100,"output_token_limit":50,"pricing_version":2,"cache_pricing":rates()})
     }
     fn range() -> String {
-        let date = Utc::now().date_naive();
+        let date = UtcInstant::now().date_naive();
         format!(
             "start_date={}&end_date={}",
             date.with_day(1).unwrap(),
-            date.checked_add_signed(chrono::TimeDelta::days(1)).unwrap()
+            date.checked_add_signed(gateway_datetime_compat::SignedDuration::days(1))
+                .unwrap()
         )
     }
     async fn response(
@@ -895,10 +903,11 @@ mod db {
         .execute(&f.store.pool)
         .await
         .unwrap();
-        let date = Utc::now().date_naive();
+        let date = UtcInstant::now().date_naive();
         let query = format!(
             "start_date={date}&end_date={}&compare=previous_period&model=m000",
-            date.checked_add_signed(chrono::TimeDelta::days(1)).unwrap()
+            date.checked_add_signed(gateway_datetime_compat::SignedDuration::days(1))
+                .unwrap()
         );
         let path = format!(
             "/api/v1/workspaces/{}/cost-report?{query}",
@@ -928,7 +937,8 @@ mod db {
         let current = format!(
             "/api/v1/workspaces/{}/cost-report?start_date={date}&end_date={}",
             f.team.workspace_id,
-            date.checked_add_signed(chrono::TimeDelta::days(1)).unwrap()
+            date.checked_add_signed(gateway_datetime_compat::SignedDuration::days(1))
+                .unwrap()
         );
         let (_, v) = call(&f, &user(f.owner, true), "GET", &current, Value::Null).await;
         assert_eq!(v["totals"]["attempts"], "105");
@@ -1515,7 +1525,7 @@ mod db {
         let hidden = policies::budget_windows(
             &mut tx,
             ws,
-            &[("platform", &budgets, None, false, Utc::now())],
+            &[("platform", &budgets, None, false, UtcInstant::now())],
         )
         .await
         .unwrap();
@@ -1525,7 +1535,7 @@ mod db {
             policies::budget_windows(
                 &mut tx,
                 ws,
-                &[("platform", &budgets, None, true, Utc::now())]
+                &[("platform", &budgets, None, true, UtcInstant::now())]
             )
             .await
             .is_err(),

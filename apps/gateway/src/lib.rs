@@ -74,5 +74,7 @@ pub mod startup;
 pub mod store;
 pub mod telemetry;
 pub(crate) mod text;
+#[doc(hidden)]
+pub mod timestamp;
 pub mod visibility;
 pub mod web;

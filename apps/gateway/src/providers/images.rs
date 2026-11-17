@@ -135,9 +135,11 @@ pub(crate) fn decode(
 ) -> Result<ImageResponse> {
     usage.meters = Some(meters(value["data"].as_array().map(|a| a.len() as u64)));
     usage.output_image_variant = variant.and_then(MeterVariant::new);
-    let created = value["created"]
-        .as_u64()
-        .unwrap_or_else(|| chrono::Utc::now().timestamp().max(0) as u64);
+    let created = value["created"].as_u64().unwrap_or_else(|| {
+        gateway_datetime_compat::UtcInstant::now()
+            .timestamp()
+            .max(0) as u64
+    });
     let result = format
         .and_then(|format| images(value, request, format))
         .map(|images| ImageResponse {

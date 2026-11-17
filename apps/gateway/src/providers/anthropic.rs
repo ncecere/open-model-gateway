@@ -408,6 +408,20 @@ enum BlockKind {
     Thinking,
     Redacted,
 }
+/// An `error` event is classified as the same error is as an HTTP response
+/// (`super::stream_error`): the status its documented `type` stands for, then
+/// this adapter's response path: `status` for a chat or Responses client, and
+/// for a Messages client `generation_error` with the `prompt is too long`
+/// refinement (`anthropic_error`), exactly as `anthropic_generation_status`.
+fn stream_error(event: &Value, messages: bool) -> InferenceError {
+    super::stream_error::classify(&event["error"], |code| {
+        if messages {
+            generation_error(code, Some(event), anthropic_error)
+        } else {
+            status_error(code)
+        }
+    })
+}
 impl State {
     fn push(&mut self, value: Value) -> Result<Vec<ChatEvent>> {
         if self.done {
@@ -415,11 +429,7 @@ impl State {
         }
         let mut events = vec![];
         if value["type"] == "error" {
-            return Err(if self.messages {
-                super::framing::anthropic_error(&value).unwrap_or(InferenceError::InvalidUpstream)
-            } else {
-                InferenceError::InvalidUpstream
-            });
+            return Err(stream_error(&value, self.messages));
         }
         match value["type"].as_str() {
             Some("ping") => {}

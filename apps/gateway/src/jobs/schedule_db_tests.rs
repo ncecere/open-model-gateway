@@ -7,7 +7,8 @@
 //! metrics readings (fail closed), time windows and the stall alert, fair
 //! sharing across workspaces, expiry with partial results and hold release,
 //! and restart resume with two runners (exactly once).
-use chrono::DateTime;
+use crate::timestamp::TimestampFormat as _;
+use gateway_datetime_compat::UtcInstant;
 use std::sync::{
     Mutex,
     atomic::{AtomicU64, AtomicUsize, Ordering::SeqCst},
@@ -515,7 +516,7 @@ async fn server_metrics_busy_or_unreadable_pause_the_route(pool: PgPool) {
 async fn time_windows_hold_lines_and_waiting_is_not_a_stall(pool: PgPool) {
     let w = world(pool).await;
     let at = |offset: i64| {
-        (Utc::now() + chrono::TimeDelta::minutes(offset))
+        (UtcInstant::now() + gateway_datetime_compat::SignedDuration::minutes(offset))
             .format("%H:%M")
             .to_string()
     };
@@ -543,7 +544,7 @@ async fn time_windows_hold_lines_and_waiting_is_not_a_stall(pool: PgPool) {
     let run = tokio::spawn(async move { runner.run_next().await.unwrap() });
     eventually!(w.reason(&job).await.as_deref() == Some("outside_window"));
     assert_eq!(w.status().await["paused_reason"], "outside_window");
-    let waited: Option<DateTime<Utc>> =
+    let waited: Option<UtcInstant> =
         sqlx::query_scalar("SELECT last_waited_at FROM async_jobs WHERE id=$1")
             .bind(job.id)
             .fetch_one(&w.f.store.pool)
@@ -796,15 +797,15 @@ async fn longer_completion_windows_run_gateway_side(pool: PgPool) {
     assert_eq!(v["completion_window"], "72h");
     assert_eq!(
         v["expires_at"],
-        json!((job.created_at + chrono::TimeDelta::hours(72)).timestamp())
+        json!((job.created_at + gateway_datetime_compat::SignedDuration::hours(72)).timestamp())
     );
     // The envelope is held for the whole window (plus finalization).
-    let lease: DateTime<Utc> = sqlx::query_scalar(
+    let lease: UtcInstant = sqlx::query_scalar(
         "SELECT lease_expires_at FROM governance_reservations WHERE execution_id=$1",
     )
     .bind(job.execution_id)
     .fetch_one(&w.f.store.pool)
     .await
     .unwrap();
-    assert!(lease > job.created_at + chrono::TimeDelta::hours(74));
+    assert!(lease > job.created_at + gateway_datetime_compat::SignedDuration::hours(74));
 }

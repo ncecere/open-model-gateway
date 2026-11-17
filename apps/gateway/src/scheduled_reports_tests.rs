@@ -1,7 +1,7 @@
 //! Scheduled-report contracts: run database tests with disposable PostgreSQL.
 use crate::scheduled_reports::calendar::Calendar;
-use chrono::{DateTime, Utc};
-fn at(s: &str) -> DateTime<Utc> {
+use gateway_datetime_compat::UtcInstant;
+fn at(s: &str) -> UtcInstant {
     s.parse().unwrap()
 }
 
@@ -65,7 +65,7 @@ mod db {
     use serde_json::Value;
     use sqlx::PgPool;
     use uuid::Uuid;
-    fn scheduling_now() -> DateTime<Utc> {
+    fn scheduling_now() -> UtcInstant {
         // Generation fixtures require the latest complete period's delivery to be due.
         at("2026-10-27T12:00:00Z")
     }
@@ -119,11 +119,7 @@ mod db {
     async fn cursor(
         pool: &PgPool,
         id: Uuid,
-    ) -> (
-        Option<DateTime<Utc>>,
-        Option<DateTime<Utc>>,
-        Option<DateTime<Utc>>,
-    ) {
+    ) -> (Option<UtcInstant>, Option<UtcInstant>, Option<UtcInstant>) {
         sqlx::query_as(
             "SELECT next_run_at,next_period_end,last_period_end FROM report_schedules WHERE id=$1",
         )
@@ -172,7 +168,7 @@ mod db {
         );
         assert_eq!(a.unwrap() + b.unwrap(), 1);
         assert_eq!(count(&pool).await, 1);
-        let occurrence: (DateTime<Utc>, DateTime<Utc>, i64) = sqlx::query_as(
+        let occurrence: (UtcInstant, UtcInstant, i64) = sqlx::query_as(
             "SELECT period_start,period_end,skipped_intervals FROM report_runs WHERE schedule_id=$1",
         )
         .bind(id)
@@ -210,7 +206,7 @@ mod db {
     ) {
         let (s, f, id, _) = setup(&pool).await;
         let _claim = claim(&s, &f, id).await.unwrap().unwrap();
-        let (token, expires, live): (Uuid, DateTime<Utc>, bool) = sqlx::query_as(
+        let (token, expires, live): (Uuid, UtcInstant, bool) = sqlx::query_as(
             "SELECT token,expires_at,expires_at>clock_timestamp() AND expires_at<=clock_timestamp()+interval '30 seconds' FROM report_generation_claims WHERE schedule_id=$1",
         )
         .bind(id)
@@ -218,7 +214,8 @@ mod db {
         .await
         .unwrap();
         assert!(live, "claim TTL is anchored to real database time");
-        let advanced = expires.max(scheduling_now()) + chrono::TimeDelta::days(14);
+        let advanced =
+            expires.max(scheduling_now()) + gateway_datetime_compat::SignedDuration::days(14);
         assert!(advanced > expires);
         assert!(
             scheduled_reports::claim_at(&s, &f, id, advanced)
@@ -230,7 +227,7 @@ mod db {
             scheduled_reports::tick_at(&s, &f, advanced).await.unwrap(),
             0
         );
-        let unchanged: (Uuid, DateTime<Utc>) = sqlx::query_as(
+        let unchanged: (Uuid, UtcInstant) = sqlx::query_as(
             "SELECT token,expires_at FROM report_generation_claims WHERE schedule_id=$1",
         )
         .bind(id)
@@ -295,13 +292,16 @@ mod db {
         ));
         tick(&s, &f).await.unwrap();
         assert_eq!(count(&pool).await, 1);
-        let (start,end,revision,skipped,epoch,expires):(DateTime<Utc>,DateTime<Utc>,i64,i64,i64,bool) = sqlx::query_as("SELECT period_start,period_end,configuration_revision,skipped_intervals,lease_epoch,expires_at=created_at+interval '90 days' FROM report_runs WHERE schedule_id=$1").bind(id).fetch_one(&pool).await.unwrap();
-        assert_eq!(end - start, chrono::TimeDelta::days(7));
+        let (start,end,revision,skipped,epoch,expires):(UtcInstant,UtcInstant,i64,i64,i64,bool) = sqlx::query_as("SELECT period_start,period_end,configuration_revision,skipped_intervals,lease_epoch,expires_at=created_at+interval '90 days' FROM report_runs WHERE schedule_id=$1").bind(id).fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            end - start,
+            gateway_datetime_compat::SignedDuration::days(7)
+        );
         assert!(skipped >= 3);
         assert_eq!(revision, 1);
         assert_eq!(epoch, f.epoch);
         assert!(expires);
-        let cursor: DateTime<Utc> =
+        let cursor: UtcInstant =
             sqlx::query_scalar("SELECT last_period_end FROM report_schedules WHERE id=$1")
                 .bind(id)
                 .fetch_one(&pool)

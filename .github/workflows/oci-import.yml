@@ -109,7 +109,7 @@ jobs:
           [[ "${ROOT_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
           case "${PLATFORM}" in linux/amd64|linux/arm64) ;; *) exit 1 ;; esac
-          case "${IMAGE}" in ghcr.io/ncecere/open-model-gateway|ghcr.io/ncecere/open-model-gateway-loadtest) ;; *) exit 1 ;; esac
+          case "${IMAGE}" in ghcr.io/bitop-dev/open-model-gateway|ghcr.io/bitop-dev/open-model-gateway-loadtest) ;; *) exit 1 ;; esac
           umask 077
           image_dir=$(mktemp -d "${RUNNER_TEMP}/oci-image.XXXXXXXX")
           echo "IMAGE_DIR=${image_dir}" >> "$GITHUB_ENV"
@@ -188,7 +188,7 @@ jobs:
           [[ "${ROOT_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
           case "${PLATFORM}" in linux/amd64|linux/arm64) ;; *) exit 1 ;; esac
-          case "${IMAGE}" in ghcr.io/ncecere/open-model-gateway|ghcr.io/ncecere/open-model-gateway-loadtest) ;; *) exit 1 ;; esac
+          case "${IMAGE}" in ghcr.io/bitop-dev/open-model-gateway|ghcr.io/bitop-dev/open-model-gateway-loadtest) ;; *) exit 1 ;; esac
           umask 077
           image_dir=$(mktemp -d "${RUNNER_TEMP}/oci-image.XXXXXXXX")
           tool_dir=$(mktemp -d "${RUNNER_TEMP}/oci-tool.XXXXXXXX")

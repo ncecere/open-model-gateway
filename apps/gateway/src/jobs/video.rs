@@ -1,6 +1,6 @@
 //! Video jobs: create (admission + upstream create), refresh/settle, list,
 //! content pass-through and delete. Rendering uses gateway ids only.
-use chrono::Utc;
+use gateway_datetime_compat::UtcInstant;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -53,8 +53,8 @@ pub(crate) fn settlement(job: &JobRow, v: &UpstreamVideo) -> Option<Settlement> 
                 },
             })
         }
-        // The provider failed the job; without usage the hold is kept unless
-        // the price is entirely free.
+        // The provider accepted and then failed the job: usage stays unknown
+        // and the hold is kept even when the price is entirely free.
         JobState::Failed => Some(Settlement {
             outcome: Outcome::Failed,
             error: Some(InferenceError::UpstreamRejected),
@@ -65,7 +65,7 @@ pub(crate) fn settlement(job: &JobRow, v: &UpstreamVideo) -> Option<Settlement> 
 }
 
 pub fn render(job: &JobRow) -> Value {
-    let unix = |t: Option<chrono::DateTime<Utc>>| t.map(|t| t.timestamp());
+    let unix = |t: Option<gateway_datetime_compat::UtcInstant>| t.map(|t| t.timestamp());
     let state = job.job_state();
     json!({
         "id": client_id(JobKind::Video.prefix(), job.id),
@@ -124,7 +124,7 @@ impl Jobs {
             Err(e) => return Err(attempt.fail(e).await.into()),
         };
         attempt.accepted();
-        let deadline = Utc::now() + VIDEO_POLL_WINDOW;
+        let deadline = UtcInstant::now() + VIDEO_POLL_WINDOW;
         let new = store::NewJob {
             id: Uuid::new_v4(),
             kind: JobKind::Video,

@@ -304,8 +304,17 @@ async fn price_v3(pool: &PgPool, deployment: Uuid, audio: bool) -> Uuid {
 fn billing_full() -> Value {
     json!({"total_input_tokens":"100","uncached_input_tokens":"40","cache_read_input_tokens":"60","cache_write_input_tokens":"0","cache_write_default_input_tokens":"0","cache_write_5m_input_tokens":"0","cache_write_1h_input_tokens":"0"})
 }
-fn upload_window(start: chrono::NaiveDate, first_amount: &str, supersedes: Option<Uuid>) -> Value {
-    let day = |n: i64| format!("{}T00:00:00Z", start + chrono::TimeDelta::days(n));
+fn upload_window(
+    start: gateway_datetime_compat::CalendarDate,
+    first_amount: &str,
+    supersedes: Option<Uuid>,
+) -> Value {
+    let day = |n: i64| {
+        format!(
+            "{}T00:00:00Z",
+            start + gateway_datetime_compat::SignedDuration::days(n)
+        )
+    };
     let item = |amount: &str, dims: [Option<&str>; 9]| {
         let [
             workspace,
@@ -341,10 +350,15 @@ fn window_mapping(
     deployment: Uuid,
     team: Uuid,
     personal: Uuid,
-    start: chrono::NaiveDate,
+    start: gateway_datetime_compat::CalendarDate,
     supersedes: Uuid,
 ) -> Value {
-    let day = |n: i64| format!("{}T00:00:00Z", start + chrono::TimeDelta::days(n));
+    let day = |n: i64| {
+        format!(
+            "{}T00:00:00Z",
+            start + gateway_datetime_compat::SignedDuration::days(n)
+        )
+    };
     json!({"account_id":"organization_placeholder","supersedes":supersedes,"evidence_reference":"finance:binding-window","bindings":[
         {"provider_workspace_id":"wrkspc_placeholder","connection_id":connection,"deployment_id":deployment,"workspace_id":team,
          "effective_start":day(0),"effective_end":day(1),"exclusive":true,"non_omg_traffic":false,"attested":true,
@@ -494,9 +508,9 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
         .build()
         .unwrap();
     let mut seen = PositiveFixtures::default();
-    let now = chrono::Utc::now().date_naive();
-    let start = (now - chrono::TimeDelta::days(7)).to_string();
-    let end = (now + chrono::TimeDelta::days(1)).to_string();
+    let now = gateway_datetime_compat::UtcInstant::now().date_naive();
+    let start = (now - gateway_datetime_compat::SignedDuration::days(7)).to_string();
+    let end = (now + gateway_datetime_compat::SignedDuration::days(1)).to_string();
     let range = format!("start_date={start}&end_date={end}");
     let wsbase = format!("/api/v1/workspaces/{}", f.team);
     let projbase = format!("/api/v1/workspaces/{}", f.project);
@@ -787,7 +801,7 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
     }
     // Provider-window history (12..9 days ago, UTC noon): day A is clean team
     // usage, day C has attempts the import does not claim, day D is personal.
-    let window_start = now - chrono::TimeDelta::days(12);
+    let window_start = now - gateway_datetime_compat::SignedDuration::days(12);
     let (window_v2, window_total) = components([4, 1, 0, 0, 0, 2], None, None);
     for (at, ws, key_id, pr, res) in [
         (
@@ -1017,7 +1031,7 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
     .await;
     // A window holding only the personal workspace's unsettled attempts: its
     // collapsed key row has no spend share and no blended rate.
-    let recent = (now - chrono::TimeDelta::days(5)).to_string();
+    let recent = (now - gateway_datetime_compat::SignedDuration::days(5)).to_string();
     let v = observe(
         &mut seen,
         &client,
@@ -1734,7 +1748,10 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
     )
     .await;
     let mut upload = provider_cost_tests::upload();
-    let from = format!("{}T00:00:00Z", now - chrono::TimeDelta::days(1));
+    let from = format!(
+        "{}T00:00:00Z",
+        now - gateway_datetime_compat::SignedDuration::days(1)
+    );
     let until = format!("{now}T00:00:00Z");
     upload["request"]["starting_at"] = json!(from);
     upload["request"]["ending_at"] = json!(until);

@@ -4,7 +4,7 @@ import os
 import re
 import sys
 
-IMAGE = "ghcr.io/ncecere/open-model-gateway"
+IMAGE = "ghcr.io/bitop-dev/open-model-gateway"
 VERSION = re.compile(r"refs/tags/(v([0-9]+)\.([0-9]+)\.[0-9]+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?")
 
 

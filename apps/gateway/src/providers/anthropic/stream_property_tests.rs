@@ -11,7 +11,7 @@
 //!   `stop_reason`; `Usage` and `Done` by the `message_stop` that follows it.
 //!   After `Done` every later frame is refused with `InvalidUpstream` (`State`
 //!   has a `done` flag). Frames running out before `message_stop` is
-//!   `framing::frames`' final `InvalidUpstream`, never a success, and the parser
+//!   `framing::frames`' final `UpstreamUnavailable`, never a success, and the parser
 //!   fabricates nothing for a truncated stream.
 //! * Usage is merged from what was reported: the start event's `output_tokens`
 //!   is preliminary and never used (absent output stays unknown, not zero), a
@@ -577,18 +577,26 @@ fn check_any(
     let seen = &events[..consumed];
     match outcome {
         Outcome::Error(e) => {
-            let classified = *e != InferenceError::InvalidUpstream;
-            if classified {
-                prop_assert!(
-                    messages && kind_of(&events[consumed - 1]) == "error",
-                    "{e:?}"
-                );
-                prop_assert!(matches!(
+            if kind_of(&events[consumed - 1]) == "error" {
+                // An upstream `error` event is classified like the same error
+                // as an HTTP response: the classes of `framing::status_error`,
+                // and for a Messages client the overload and context refinements.
+                let http = matches!(
                     e,
-                    InferenceError::ContextLength
-                        | InferenceError::Overloaded
-                        | InferenceError::Busy
-                ));
+                    InferenceError::Busy
+                        | InferenceError::Timeout
+                        | InferenceError::Configuration
+                        | InferenceError::UpstreamRejected
+                        | InferenceError::UpstreamUnavailable
+                        | InferenceError::InvalidUpstream
+                );
+                let messages_only = matches!(
+                    e,
+                    InferenceError::ContextLength | InferenceError::Overloaded
+                );
+                prop_assert!(http || (messages && messages_only), "{e:?}");
+            } else {
+                prop_assert_eq!(*e, InferenceError::InvalidUpstream);
             }
         }
         Outcome::Eof => prop_assert!(!got.iter().any(|e| matches!(e, Ev::Usage(_) | Ev::Done))),
@@ -872,48 +880,106 @@ fn block_and_tool_limits_refuse_the_next_unit() {
     }
 }
 
-/// Upstream `error` events: a Messages stream classifies the three documented
-/// envelopes, everything else (and every non-Messages stream) is the one
-/// class; the upstream's text is never reflected.
+/// Upstream `error` events are classified like the same error as an HTTP
+/// response (`framing::status` for a chat or Responses client, and for a
+/// Messages client `anthropic_generation_status`'s overload and context
+/// refinements), using the shared code/type precedence. An unrecognised error
+/// is an unavailable provider, never a client fault, and the upstream's text is
+/// never reflected.
 #[test]
-fn error_events_are_classified_without_reflecting_text() {
+fn error_events_are_classified_like_the_http_response() {
+    use InferenceError as E;
+    // (error object, chat or Responses client, Messages client)
     let cases = [
         (
             json!({"type": "overloaded_error", "message": "secret"}),
-            InferenceError::Overloaded,
+            E::UpstreamUnavailable,
+            E::Overloaded,
         ),
         (
             json!({"type": "rate_limit_error", "message": "secret"}),
-            InferenceError::Busy,
-        ),
-        (
-            json!({"type": "invalid_request_error", "message": "prompt is too long: 250000 tokens"}),
-            InferenceError::ContextLength,
-        ),
-        (
-            json!({"type": "invalid_request_error", "message": "Client said prompt is too long"}),
-            InferenceError::InvalidUpstream,
+            E::Busy,
+            E::Busy,
         ),
         (
             json!({"type": "api_error", "message": "secret"}),
-            InferenceError::InvalidUpstream,
+            E::UpstreamUnavailable,
+            E::UpstreamUnavailable,
         ),
         (
-            json!({"message": "secret"}),
-            InferenceError::InvalidUpstream,
+            json!({"type": "timeout_error", "message": "secret"}),
+            E::UpstreamUnavailable,
+            E::UpstreamUnavailable,
         ),
-        (json!("overloaded_error"), InferenceError::InvalidUpstream),
+        (
+            json!({"type": "invalid_request_error", "message": "secret"}),
+            E::UpstreamRejected,
+            E::UpstreamRejected,
+        ),
+        (
+            json!({"type": "invalid_request_error", "message": "prompt is too long: 250000 tokens"}),
+            E::UpstreamRejected,
+            E::ContextLength,
+        ),
+        (
+            json!({"type": "invalid_request_error", "message": "Client said prompt is too long"}),
+            E::UpstreamRejected,
+            E::UpstreamRejected,
+        ),
+        (
+            json!({"type": "request_too_large", "message": "secret"}),
+            E::UpstreamRejected,
+            E::UpstreamRejected,
+        ),
+        (
+            json!({"type": "billing_error", "message": "secret"}),
+            E::UpstreamRejected,
+            E::UpstreamRejected,
+        ),
+        (
+            json!({"type": "not_found_error", "message": "secret"}),
+            E::UpstreamRejected,
+            E::UpstreamRejected,
+        ),
+        (
+            json!({"type": "authentication_error", "message": "secret"}),
+            E::Configuration,
+            E::Configuration,
+        ),
+        (
+            json!({"type": "permission_error", "message": "secret"}),
+            E::Configuration,
+            E::Configuration,
+        ),
+        // Unrecognised: an unavailable provider, whatever the text says.
+        (
+            json!({"type": "something_new", "message": "prompt is too long"}),
+            E::UpstreamUnavailable,
+            E::UpstreamUnavailable,
+        ),
+        (
+            json!({"type": "Overloaded_Error"}),
+            E::UpstreamUnavailable,
+            E::UpstreamUnavailable,
+        ),
+        (
+            json!({"message": "overloaded_error"}),
+            E::UpstreamUnavailable,
+            E::UpstreamUnavailable,
+        ),
+        (json!({}), E::UpstreamUnavailable, E::UpstreamUnavailable),
+        (
+            json!("overloaded_error"),
+            E::UpstreamUnavailable,
+            E::UpstreamUnavailable,
+        ),
     ];
-    for (error, class) in cases {
+    for (error, chat, messages) in cases {
         let event = json!({"type": "error", "error": error});
         let (_, outcome, _, _) = run(true, None, std::slice::from_ref(&event));
-        assert_eq!(outcome, Outcome::Error(class), "{event}");
+        assert_eq!(outcome, Outcome::Error(messages), "messages {event}");
         let (_, outcome, _, _) = run(false, None, std::slice::from_ref(&event));
-        assert_eq!(
-            outcome,
-            Outcome::Error(InferenceError::InvalidUpstream),
-            "{event}"
-        );
+        assert_eq!(outcome, Outcome::Error(chat), "chat {event}");
     }
 }
 

@@ -4,6 +4,7 @@
 //! adds the acceptance of a job (its lease extension and record in one
 //! transaction) and a read-only bound preview.
 use super::*;
+use gateway_datetime_compat::UtcInstant;
 
 /// Record an accepted job: extend the lease of its still-pending reservation
 /// to `until` (never shortens) and run `insert` (the job row), in one
@@ -22,7 +23,7 @@ use super::*;
 pub(crate) async fn accept_job<T>(
     store: &Store,
     execution: Uuid,
-    until: DateTime<Utc>,
+    until: UtcInstant,
     insert: impl AsyncFnOnce(&mut sqlx::PgConnection) -> Result<T, InferenceError>,
 ) -> Result<T, InferenceError> {
     let _queued = gate(&store.lock_gates.settlement).await;

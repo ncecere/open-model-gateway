@@ -8,6 +8,7 @@ use crate::{
     governance::tests::db::{Fixture, done, fixture, request},
     inference::error::LimitScope,
 };
+use gateway_datetime_compat::UtcInstant;
 use rand::{RngExt, SeedableRng, rngs::StdRng, seq::IndexedRandom};
 use sqlx::{PgPool, migrate::Migrator};
 
@@ -19,7 +20,7 @@ async fn budget_report_exact_holds_unknown_union_and_missing_buckets(pool: PgPoo
     f.price(1_000_000).await;
     let ws = f.principal.workspace_id;
     let mut tx = pool.begin().await.unwrap();
-    let now = Utc::now();
+    let now = UtcInstant::now();
     let windows: Vec<_> = BudgetPeriod::ALL
         .into_iter()
         .map(|p| (Scope::Workspace(ws), p))
@@ -114,7 +115,6 @@ async fn budget_report_exact_holds_unknown_union_and_missing_buckets(pool: PgPoo
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn budget_report_boundaries_large_amounts_and_rotation_lineage(pool: PgPool) {
-    use chrono::TimeZone;
     let f = fixture(pool.clone()).await;
     let ws = f.principal.workspace_id;
     let key = f.principal.key_id;
@@ -123,18 +123,24 @@ async fn budget_report_boundaries_large_amounts_and_rotation_lineage(pool: PgPoo
         .bind(rotated).bind(ws).bind(f.owner).bind(key).execute(&pool).await.unwrap();
     // Monday, first of month, and an ISO week straddling the year.
     for at in [
-        Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
-        Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap(),
+        crate::timestamp::from_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
+        crate::timestamp::from_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap(),
     ] {
         for period in BudgetPeriod::ALL {
             let mut tx = pool.begin().await.unwrap();
             let times = if period == BudgetPeriod::Lifetime {
                 // Lifetime never resets: both old and rotated credentials count.
-                [(at - chrono::TimeDelta::days(400), key), (at, rotated)]
+                [
+                    (at - gateway_datetime_compat::SignedDuration::days(400), key),
+                    (at, rotated),
+                ]
             } else {
                 let start = period.bucket_start(at);
                 [
-                    (start - chrono::TimeDelta::microseconds(1), key),
+                    (
+                        start - gateway_datetime_compat::SignedDuration::microseconds(1),
+                        key,
+                    ),
                     (start, rotated),
                 ]
             };
@@ -173,7 +179,7 @@ async fn budget_report_boundaries_large_amounts_and_rotation_lineage(pool: PgPoo
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn budget_report_rejects_corrupt_or_unrepresentable_totals(pool: PgPool) {
     let f = fixture(pool.clone()).await;
-    let at = Utc::now();
+    let at = UtcInstant::now();
     let windows = [
         (
             Scope::Workspace(f.principal.workspace_id),
@@ -271,7 +277,7 @@ async fn assert_consistent(pool: &PgPool, context: &str) {
     let mut tx = pool.begin().await.unwrap();
     let report = totals::verify_in(&mut tx).await.unwrap();
     assert!(report.consistent(), "{context}: {report:#?}");
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+    let now: UtcInstant = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut *tx)
         .await
         .unwrap();

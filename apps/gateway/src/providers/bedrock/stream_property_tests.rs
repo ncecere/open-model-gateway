@@ -2,14 +2,18 @@
 //!
 //! The contract these tests state, read from the code and from `decode`'s loop:
 //!
-//! * `push` never panics, and its only error is `InvalidUpstream`.
+//! * `push` never panics, and its only error is `InvalidUpstream`: a frame
+//!   that arrived whole and decodes but means nothing here is the provider's
+//!   protocol violation. Transport failures (reset, truncation, a corrupt
+//!   frame) never reach the parser: they are classified where they arise, from
+//!   `decode`'s receive error.
 //! * Termination. `Finish` comes from the one `messageStop` that follows
 //!   `messageStart` with every block closed and a stop reason that agrees with
 //!   the tool calls; `Usage` from the one `metadata` after it. Bedrock has no
 //!   in-band `Done`: `decode` yields `Done` only when the frames end cleanly and
 //!   `State::end` accepts, which needs start, stop and metadata. Any other end
-//!   is `InvalidUpstream`, never a success, and the parser fabricates nothing
-//!   for a truncated stream. A second `messageStop`, `metadata`, a block after
+//!   is a truncation, `UpstreamUnavailable`, never a success, and the parser
+//!   fabricates nothing for a truncated stream. A second `messageStop`, `metadata`, a block after
 //!   the stop or a second start is refused.
 //! * Usage is exactly what `metadata` reported (negative and over-range counts
 //!   are refused), never a fabricated zero. Only the directly reported fields
@@ -401,8 +405,8 @@ fn build(spec: &Spec) -> Built {
 
 /// Feed events to the parser the way `decode` does: every push in order, the
 /// first error ends the stream, and when the frames run out `Done` is yielded
-/// only if `end()` accepts (otherwise the stream ends in `InvalidUpstream`,
-/// reported as `Eof`).
+/// only if `end()` accepts (otherwise the stream is truncated and ends in
+/// `UpstreamUnavailable`, reported as `Eof`).
 fn run(events: &[W], limit: Option<usize>) -> (Vec<Ev>, Outcome, usize) {
     let mut state = State {
         limit,
@@ -418,10 +422,13 @@ fn run(events: &[W], limit: Option<usize>) -> (Vec<Ev>, Outcome, usize) {
             })),
         }
     }
-    let outcome = if state.end().is_ok() {
-        Outcome::Done
-    } else {
-        Outcome::Eof
+    let outcome = match state.end() {
+        Ok(()) => Outcome::Done,
+        Err(e) => {
+            // Frames that ran out before the terminal sequence: a truncation.
+            assert_eq!(e, InferenceError::UpstreamUnavailable);
+            Outcome::Eof
+        }
     };
     (out, outcome, events.len())
 }

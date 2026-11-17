@@ -14,9 +14,12 @@ image:
   # The default tag follows the chart's appVersion. Pin `digest` to the
   # verified digest from the release notes' "Verifying the images" section
   # before a real rollout.
+  # v0.18.0 is historical and remains in the original registry account.
+  # At the next release, change repository to ghcr.io/bitop-dev/open-model-gateway
+  # together with tag/appVersion; old tags were not copied to the organization.
   repository: ghcr.io/ncecere/open-model-gateway
   digest: ""
-  tag: v0.17.0
+  tag: v0.18.0
   pullPolicy: IfNotPresent
   pullSecrets: []
 

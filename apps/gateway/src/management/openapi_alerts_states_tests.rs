@@ -262,7 +262,7 @@ fn window(period: &str) -> (Value, Value) {
     }
     let (start, end) = crate::governance::BudgetPeriod::parse(period)
         .unwrap()
-        .window(chrono::Utc::now());
+        .window(gateway_datetime_compat::UtcInstant::now());
     (json!(start), json!(end))
 }
 /// `alerts::budget_condition` details for one layer.
@@ -333,14 +333,14 @@ fn batch_stalled_details(counted: bool) -> Value {
 /// table is listed because its coverage is below two months.
 fn partitions_details(error: Option<&str>, months_ahead: i64) -> Value {
     json!({
-        "tables":[{"table":"inference_executions", "covered_until":chrono::Utc::now(), "months_ahead":months_ahead}],
+        "tables":[{"table":"inference_executions", "covered_until":gateway_datetime_compat::UtcInstant::now(), "months_ahead":months_ahead}],
         "creation_error":error,
         "action":"run `open-model-gateway partitions ensure` with the schema owner",
     })
 }
 /// `history::reconcile_alert` details: a full scan with findings that carry
 /// examples and one that does not, then a bounded scan.
-fn history_details(since: Option<chrono::DateTime<chrono::Utc>>) -> Value {
+fn history_details(since: Option<gateway_datetime_compat::UtcInstant>) -> Value {
     json!({
         "since":since,
         "findings":[
@@ -644,7 +644,8 @@ pub(super) async fn platform_events(
     .await;
     let mut s = sent_pair(
         Seed::builtin("history_orphans").details(history_details(Some(
-            chrono::Utc::now() - chrono::Duration::days(2),
+            gateway_datetime_compat::UtcInstant::now()
+                - gateway_datetime_compat::SignedDuration::days(2),
         ))),
     );
     s.resolution = Some("cleared");
@@ -809,7 +810,7 @@ pub(super) async fn workspace_events(
     // Key-expiry reminders come from their real producer (the owner's key of
     // this Team expires within a day); each is written with its fired email.
     let mut tx = crate::db::begin(pool).await.unwrap();
-    let now: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+    let now: gateway_datetime_compat::UtcInstant = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut *tx)
         .await
         .unwrap();
@@ -887,9 +888,10 @@ pub(super) async fn webhooks(
     .await;
     assert_eq!(busy_created["enabled"], false);
     let busy = id(&busy_created);
-    let until = (chrono::Utc::now() + chrono::Duration::hours(1))
-        .format("%Y-%m-%d %H:%M:%SZ")
-        .to_string();
+    let until = (gateway_datetime_compat::UtcInstant::now()
+        + gateway_datetime_compat::SignedDuration::hours(1))
+    .format("%Y-%m-%d %H:%M:%SZ")
+    .to_string();
     let busy_path = format!("{prefix}/{busy}");
     good(g, observed, admin, "PATCH", &busy_path, &template, json!({"enabled":true,"previous_secret_ref":"env:HOOK_PREVIOUS","previous_secret_until":until})).await;
     // Installation incidents with email deliveries enqueue one webhook per enabled

@@ -1082,6 +1082,48 @@ BEGIN
  -- disable, catalog, entitlement, policy and settings changes) bump each
  -- topic exactly once, as runtime, when the deferred triggers fire (at commit;
  -- forced here); versions never move back; topics are fixed.
+ -- 0082: the explicit marker permits zero cost without invented token counts.
+ BEGIN UPDATE governance_reservations SET free_price_resolved=true WHERE execution_id=e;
+  RAISE EXCEPTION 'nonzero hold marked free'; EXCEPTION WHEN check_violation THEN NULL; END;
+ DECLARE zero_execution uuid:=gen_random_uuid(); zero_price uuid:=gen_random_uuid(); BEGIN
+  INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version) VALUES(zero_price,d,0,0,100,10,1);
+  INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,started_at) VALUES(zero_execution,ws,k,d,'rollback','openai_compatible',true,'failed',zero_execution,now());
+  INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,price_id,admitted_at,minute_start,month_start,lease_expires_at,state,held_microusd) VALUES(zero_execution,ws,k,d,zero_price,now(),date_trunc('minute',now()),date_trunc('month',now()),now(),'unknown',0);
+  BEGIN UPDATE governance_reservations SET state='settled',actual_microusd=0 WHERE execution_id=zero_execution;
+   RAISE EXCEPTION 'unmarked NULL usage settlement allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  UPDATE governance_reservations SET state='settled',actual_microusd=0,free_price_resolved=true WHERE execution_id=zero_execution;
+  IF EXISTS(SELECT FROM governance_reservations WHERE execution_id=zero_execution AND (input_tokens IS NOT NULL OR output_tokens IS NOT NULL)) THEN RAISE EXCEPTION 'free resolution fabricated tokens'; END IF;
+  INSERT INTO monetary_ledger(id,execution_id,admitted_at,kind,amount_microusd,input_tokens,output_tokens,evidence) SELECT gen_random_uuid(),execution_id,admitted_at,'reconciliation',0,input_tokens,output_tokens,'free-price:'||u||':rollback probe' FROM governance_reservations WHERE execution_id=zero_execution;
+  INSERT INTO audit_events(id,workspace_id,actor_user_id,action,resource_type,resource_id,metadata) VALUES(gen_random_uuid(),ws,u,'usage.free_price_resolved','workspace',ws,'{"reason":"rollback probe","resolved_count":"1"}');
+ END;
+ -- 0083: only terminal gateway envelopes can retain NULL usage at zero.
+ BEGIN UPDATE governance_reservations SET state='settled',actual_microusd=0,batch_envelope_resolved=true WHERE execution_id=e;
+  RAISE EXCEPTION 'ordinary execution marked envelope'; EXCEPTION WHEN check_violation THEN NULL; END;
+ DECLARE envelope uuid:=gen_random_uuid(); input_file uuid:=gen_random_uuid(); BEGIN
+  INSERT INTO stored_files(id,object_key,purpose,workspace_id,created_by_api_key_id,backend,encryption_key_id) VALUES(input_file,'batch_input/'||ws||'/'||input_file,'batch_input',ws,k,'memory','memory');
+  INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,started_at,workload_kind) VALUES(envelope,ws,k,d,'rollback','openai_compatible',false,'failed',envelope,now(),'batches');
+  INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,held_microusd) VALUES(envelope,ws,k,d,now(),date_trunc('minute',now()),date_trunc('month',now()),now(),'unknown',100);
+  INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,poll_deadline_at,batch_endpoint,batch_mode,input_file_id,work_file_id) VALUES(envelope,'batch',ws,k,d,envelope,'rollback','openai_compatible',now()+interval '1 hour','/v1/chat/completions','gateway',input_file,input_file);
+  BEGIN UPDATE governance_reservations SET state='settled',actual_microusd=0,batch_envelope_resolved=true WHERE execution_id=envelope;
+   RAISE EXCEPTION 'nonterminal envelope resolved'; EXCEPTION WHEN check_violation THEN NULL; END;
+  UPDATE async_jobs SET state='failed',completed_at=now() WHERE id=envelope;
+  -- The operator's job lock precedes reservation and totals locks.
+  PERFORM id FROM async_jobs WHERE id=envelope FOR UPDATE;
+  PERFORM DISTINCT e.batch_job_id FROM inference_executions e JOIN async_jobs j ON j.id=e.batch_job_id WHERE e.batch_job_id=envelope AND (e.workspace_id<>j.workspace_id OR NOT EXISTS(SELECT 1 FROM governance_reservations r WHERE r.execution_id=e.id AND r.admitted_at=e.started_at));
+  PERFORM execution_id FROM governance_reservations WHERE execution_id=envelope FOR UPDATE;
+  PERFORM omg_lock_scope_rows(ARRAY[ws],ARRAY[k],ARRAY[now()],false);
+  BEGIN UPDATE governance_reservations SET state='settled',actual_microusd=1,batch_envelope_resolved=true WHERE execution_id=envelope;
+   RAISE EXCEPTION 'nonzero envelope resolution allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,held_microusd,actual_microusd,batch_envelope_resolved) SELECT execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,'settled',held_microusd,0,true FROM governance_reservations WHERE execution_id=envelope;
+   RAISE EXCEPTION 'resolved history inserted'; EXCEPTION WHEN check_violation THEN NULL; END;
+  UPDATE governance_reservations SET state='settled',actual_microusd=0,batch_envelope_resolved=true WHERE execution_id=envelope;
+  BEGIN UPDATE governance_reservations SET batch_envelope_resolved=false WHERE execution_id=envelope;
+   RAISE EXCEPTION 'envelope marker erased'; EXCEPTION WHEN check_violation THEN NULL; END;
+  IF EXISTS(SELECT FROM governance_reservations WHERE execution_id=envelope AND (input_tokens IS NOT NULL OR output_tokens IS NOT NULL OR free_price_resolved)) THEN RAISE EXCEPTION 'envelope fabricated usage or free-price proof'; END IF;
+  UPDATE async_jobs SET settled_at=clock_timestamp() WHERE id=envelope AND settled_at IS NULL;
+  INSERT INTO monetary_ledger(id,execution_id,admitted_at,kind,amount_microusd,input_tokens,output_tokens,billing_usage,cost_components,meter_usage,output_image_variant,provider_cost_microusd,evidence) SELECT gen_random_uuid(),execution_id,admitted_at,'reconciliation',0,input_tokens,output_tokens,billing_usage,cost_components,meter_usage,output_image_variant,provider_cost_microusd,'batch-lines=0;rollback probe' FROM governance_reservations WHERE execution_id=envelope;
+  INSERT INTO audit_events(id,workspace_id,actor_user_id,action,resource_type,resource_id,metadata) VALUES(gen_random_uuid(),ws,u,'usage.batch_envelope_resolved','workspace',ws,'{"reason":"rollback probe","resolved_count":"1","envelope_held_microusd":"100","line_settled_microusd":"0","line_held_microusd":"0","line_pending_count":"0","line_unknown_count":"0","line_unbounded_count":"0"}');
+ END;
  SET CONSTRAINTS ALL IMMEDIATE;
  IF (SELECT bool_or((versions_before->>topic)::bigint+1<>version) FROM config_versions) THEN RAISE EXCEPTION 'configuration versions not bumped once per transaction'; END IF;
  BEGIN UPDATE config_versions SET version=0 WHERE topic='keys'; RAISE EXCEPTION 'configuration version rollback allowed'; EXCEPTION WHEN check_violation THEN NULL; END;

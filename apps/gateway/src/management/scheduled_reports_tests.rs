@@ -325,7 +325,7 @@ async fn scheduled_reports_historical_cost_center_scope_and_recipient_cap(pool: 
         assert_eq!(v["scope_kind"], kind);
         assert_eq!(v["cost_center_id"], cc.to_string());
         let next = v["next_run_at"].as_str().expect("calendar initialized");
-        assert!(next.parse::<chrono::DateTime<chrono::Utc>>().is_ok());
+        assert!(next.parse::<gateway_datetime_compat::UtcInstant>().is_ok());
     }
     let mut body = input(&[f.owner.user_id]);
     body["cost_center_id"] = json!(cc);

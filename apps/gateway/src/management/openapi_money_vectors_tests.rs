@@ -51,9 +51,9 @@ impl Vx<'_> {
 }
 
 /// A binding instant exactly as the handler's serde reads it
-/// (`provider_costs.rs` Binding: `DateTime<Utc>`); anything else is a decode
+/// (`provider_costs.rs` Binding: `UtcInstant`); anything else is a decode
 /// refusal, not a relation.
-fn instant(value: &Value) -> Option<chrono::DateTime<chrono::Utc>> {
+fn instant(value: &Value) -> Option<gateway_datetime_compat::UtcInstant> {
     serde_json::from_value(value.clone()).ok()
 }
 /// create_mapping()'s relations between elements, recomputed from the body:
@@ -793,9 +793,14 @@ impl Vx<'_> {
     /// (object, positional non-exclusive, positional exclusive) and both forms
     /// of model mapping in each, on its own days so no run overlaps another.
     fn mapping_valid(&self, positional: bool, run: usize) -> Value {
-        let first =
-            chrono::Utc::now().date_naive() - chrono::TimeDelta::days(200 + 10 * run as i64);
-        let day = |n: i64| format!("{}T00:00:00Z", first + chrono::TimeDelta::days(n));
+        let first = gateway_datetime_compat::UtcInstant::now().date_naive()
+            - gateway_datetime_compat::SignedDuration::days(200 + 10 * run as i64);
+        let day = |n: i64| {
+            format!(
+                "{}T00:00:00Z",
+                first + gateway_datetime_compat::SignedDuration::days(n)
+            )
+        };
         let models = |n: usize| {
             let first = json!({"provider_model":format!("provider-model-{run}-{n}"),"upstream_model":"upstream-model"});
             let second = json!({"provider_model":format!("provider-model-{run}-{}", n + 1),"upstream_model":"upstream-model"});
@@ -953,7 +958,7 @@ fn mapping_view(input: &Value) -> Value {
 /// midnight with 19 fractional-second digits. Every value the vectors start from
 /// is at the limit, so the at-limit and one-past-the-limit vectors are the value
 /// itself and the value plus one character.
-fn instant40(day: chrono::NaiveDate) -> String {
+fn instant40(day: gateway_datetime_compat::CalendarDate) -> String {
     format!("{day}T00:00:00.0000000000000000000Z")
 }
 /// An upload carrying every wire form of every nesting level: three pages (an
@@ -963,7 +968,8 @@ fn instant40(day: chrono::NaiveDate) -> String {
 /// wire form of the upload itself and of its request parameters. Every instant
 /// is 40 characters and every amount 64 (the handler's limits).
 fn upload_valid(root: bool, request: bool, run: usize) -> Value {
-    let first = chrono::Utc::now().date_naive() - chrono::TimeDelta::days(300 + 10 * run as i64);
+    let first = gateway_datetime_compat::UtcInstant::now().date_naive()
+        - gateway_datetime_compat::SignedDuration::days(300 + 10 * run as i64);
     let line = |n: usize| {
         json!({"amount":format!("{}1.25", "0".repeat(60)),"currency":"USD","workspace_id":"wrkspc-vector",
             "description":format!("Vector line {run}-{n}"),"model":"claude-vector","service_tier":"standard",
@@ -971,8 +977,8 @@ fn upload_valid(root: bool, request: bool, run: usize) -> Value {
             "inference_geo":"global","speed":"standard"})
     };
     let bucket = |n: i64| {
-        let object = json!({"starting_at":instant40(first + chrono::TimeDelta::days(n)),
-            "ending_at":instant40(first + chrono::TimeDelta::days(n + 1)),
+        let object = json!({"starting_at":instant40(first + gateway_datetime_compat::SignedDuration::days(n)),
+            "ending_at":instant40(first + gateway_datetime_compat::SignedDuration::days(n + 1)),
             "results":[line(2 * n as usize), seq(&line(2 * n as usize + 1), ITEM)]});
         if n % 2 == 0 {
             object
@@ -989,10 +995,10 @@ fn upload_valid(root: bool, request: bool, run: usize) -> Value {
             object
         }
     };
-    let parameters = json!({"starting_at":instant40(first),"ending_at":instant40(first + chrono::TimeDelta::days(6)),
+    let parameters = json!({"starting_at":instant40(first),"ending_at":instant40(first + gateway_datetime_compat::SignedDuration::days(6)),
         "bucket_width":"1d","group_by":["workspace_id","description"],"limit":31});
     let upload = json!({"account_id":format!("vector-account-{run}"),"evidence_reference":"finance:vector-export",
-        "exported_at":instant40(first + chrono::TimeDelta::days(6)),"supersedes":null,
+        "exported_at":instant40(first + gateway_datetime_compat::SignedDuration::days(6)),"supersedes":null,
         "request":if request { seq(&parameters, PARAMETERS) } else { parameters },
         // Only the last page has has_more:false, so its wire form alternates
         // between runs: odd runs send it as an object (its `then` arm), even
