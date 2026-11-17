@@ -29,7 +29,8 @@ pub(crate) enum Stage {
     /// The reads before admission: the eligible deployments and the routing
     /// plan (connection, `BEGIN` and statements alike).
     RouteLookup,
-    /// The three-second deadline of a settlement the request waited for.
+    /// The three-second deadline of a settlement write that has started,
+    /// whether or not the request is still waiting for it.
     ExplicitSettlement,
     /// The three-second deadline of the detached settlement of a cancelled
     /// request (its client is gone; no response carries the failure).
@@ -48,9 +49,10 @@ pub(crate) enum Stage {
     /// of [`Self::JobSettlement`].
     JobStorage,
     /// A job statement that fails after admission and leaves the reservation
-    /// with nothing but reconciliation to settle it: the batch record after
-    /// admission, the video job record after the provider accepted it, and a
-    /// native batch's upstream id after submission.
+    /// with nothing but reconciliation to settle it: the video job record
+    /// after the provider accepted it, and a native batch's upstream id after
+    /// submission. (A batch record is written in its admission transaction,
+    /// which rolls back whole.)
     JobSettlement,
     /// A database failure of a maintenance run (`maintenance.rs`): the
     /// settings refresh, the scope-lock wait flush and the leased jobs.

@@ -1,6 +1,6 @@
 //! Job and job-file rows (migration 0016). Every client lookup is scoped by
 //! the principal's workspace. Metadata only.
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use sqlx::FromRow;
 use uuid::Uuid;
 
@@ -12,10 +12,11 @@ use crate::{
 };
 
 /// Every statement here is counted once when it fails (#497), at the
-/// `job_storage` stage, or at `job_settlement` for the three whose failure
-/// leaves an admitted reservation to reconciliation (the job records written
-/// after admission and a native batch's upstream id); the error is passed on
-/// unchanged.
+/// `job_storage` stage, or at `job_settlement` for the two whose failure
+/// leaves an admitted reservation to reconciliation (the video job record
+/// written after the provider accepted it, and a native batch's upstream id);
+/// the error is passed on unchanged. A batch record is written in its
+/// admission transaction, so its failure holds nothing.
 pub(super) use crate::db::accounting_failure::{job_settlement, job_storage};
 type Result<T> = std::result::Result<T, sqlx::Error>;
 
@@ -137,12 +138,15 @@ pub(crate) struct NewJob<'a> {
     pub video_size: Option<&'a str>,
     pub batch_endpoint: Option<&'a str>,
 }
-pub(crate) async fn insert_job(store: &Store, job: &NewJob<'_>) -> Result<JobRow> {
+/// The video job record, on the connection of the transaction that also
+/// extends its reservation's lease (`governance::jobs::accept_job`).
+pub(crate) async fn insert_job(conn: &mut sqlx::PgConnection, job: &NewJob<'_>) -> Result<JobRow> {
     sqlx::query_as(&format!("INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,upstream_id,poll_deadline_at,video_seconds,video_size,batch_endpoint) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING {JOB_COLUMNS}"))
         .bind(job.id).bind(job.kind.as_str()).bind(job.workspace_id).bind(job.api_key_id).bind(job.deployment_id).bind(job.execution_id).bind(job.public_model).bind(job.provider).bind(job.upstream_id.as_str()).bind(job.poll_deadline_at).bind(job.video_seconds).bind(job.video_size).bind(job.batch_endpoint)
-        .fetch_one(&store.pool).await.map_err(job_settlement)
+        .fetch_one(conn).await.map_err(job_settlement)
 }
-/// A new engine batch (0021): created before any upstream work.
+/// A new engine batch (0021): created before any upstream work, in the
+/// transaction that admits its envelope reservation.
 pub(crate) struct NewBatch<'a> {
     pub id: Uuid,
     pub workspace_id: Uuid,
@@ -152,20 +156,28 @@ pub(crate) struct NewBatch<'a> {
     pub execution_id: Uuid,
     pub public_model: &'a str,
     pub provider: &'a str,
-    pub poll_deadline_at: DateTime<Utc>,
+    /// How long the batch is polled or run, from its admission instant: its
+    /// deadline, and with the lease grace the end of its envelope's lease.
+    pub poll_window: TimeDelta,
     pub endpoint: BatchEndpoint,
     pub mode: BatchMode,
     pub input_file_id: Uuid,
     pub work_file_id: Uuid,
-    pub price_tier: Option<&'a str>,
     pub retry_limit: i16,
     pub requests: i32,
     pub window_hours: i16,
 }
-pub(crate) async fn insert_batch(store: &Store, b: &NewBatch<'_>) -> Result<JobRow> {
+/// The batch record, in the admission transaction (`price_tier`: native
+/// batches only; `poll_deadline_at`: the admission instant plus the window).
+pub(crate) async fn insert_batch(
+    conn: &mut sqlx::PgConnection,
+    b: &NewBatch<'_>,
+    price_tier: Option<&str>,
+    poll_deadline_at: DateTime<Utc>,
+) -> Result<JobRow> {
     sqlx::query_as(&format!("INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,upstream_id,poll_deadline_at,batch_endpoint,batch_mode,user_id,input_file_id,work_file_id,price_tier,retry_limit,request_total,request_completed,request_failed,upstream_status,completion_window_hours) VALUES($1,'batch',$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,$11,$12,$13,$14,$15,$16,0,0,'validating',$17) RETURNING {JOB_COLUMNS}"))
-        .bind(b.id).bind(b.workspace_id).bind(b.api_key_id).bind(b.deployment_id).bind(b.execution_id).bind(b.public_model).bind(b.provider).bind(b.poll_deadline_at).bind(b.endpoint.as_str()).bind(b.mode.as_str()).bind(b.user_id).bind(b.input_file_id).bind(b.work_file_id).bind(b.price_tier).bind(b.retry_limit).bind(b.requests).bind(b.window_hours)
-        .fetch_one(&store.pool).await.map_err(job_settlement)
+        .bind(b.id).bind(b.workspace_id).bind(b.api_key_id).bind(b.deployment_id).bind(b.execution_id).bind(b.public_model).bind(b.provider).bind(poll_deadline_at).bind(b.endpoint.as_str()).bind(b.mode.as_str()).bind(b.user_id).bind(b.input_file_id).bind(b.work_file_id).bind(price_tier).bind(b.retry_limit).bind(b.requests).bind(b.window_hours)
+        .fetch_one(conn).await
 }
 /// A job of `kind` owned by `workspace` that `viewer` may see
 /// (`crate::visibility`); anything else is not found, from the same query.

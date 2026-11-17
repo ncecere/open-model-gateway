@@ -9,16 +9,13 @@ use uuid::Uuid;
 
 use super::{
     plan::{Issue, PlanError},
-    store::{NewBatch, Observation},
+    store::Observation,
     *,
 };
 use crate::{
     filestore::{Purpose, files::public_id},
     governance::batch::PriceTier,
 };
-
-/// Admission lease of a batch until its record exists (then extended).
-const ADMISSION_LEASE_SECONDS: i64 = 600;
 
 /// Accounting of a terminal provider observation. `usage` is the provider
 /// aggregate or the per-line sum; `None` keeps the hold (unknown).
@@ -261,33 +258,22 @@ impl Jobs {
                 .filter(|m| (1..=512).contains(&m.chars().count())),
             client: crate::inference::client::current(),
         };
-        let admitted = crate::governance::batch::admit_batch(
-            &self.store,
-            &record,
-            &plan.groups,
-            plan.native.is_some(),
-            ADMISSION_LEASE_SECONDS,
-        )
-        .await;
-        let hold = match admitted {
-            Ok(h) => h,
-            Err(e) => {
-                let _ = files
-                    .delete(plan.work_file, Some(principal.workspace_id))
-                    .await;
-                return Err(e.into());
-            }
-        };
         // The window plus finalization (26 h for the default 24 h window).
-        let deadline = Utc::now() + BATCH_POLL_WINDOW - BATCH_WINDOW
-            + chrono::TimeDelta::hours(i64::from(window_hours));
+        let poll_window =
+            BATCH_POLL_WINDOW - BATCH_WINDOW + TimeDelta::hours(i64::from(window_hours));
         let mode = if plan.native.is_some() {
             BatchMode::Native
         } else {
             BatchMode::Gateway
         };
-        let job = store::insert_batch(
+        // The envelope reservation and the job row are one transaction: the
+        // envelope's lease runs to the job's deadline from the moment it
+        // exists, and a rollback leaves neither. A lost COMMIT acknowledgement
+        // keeps the work file because the server may have committed its job.
+        let admitted = crate::governance::batch::admit_batch(
             &self.store,
+            &record,
+            &plan.groups,
             &NewBatch {
                 id: Uuid::new_v4(),
                 workspace_id: principal.workspace_id,
@@ -297,22 +283,27 @@ impl Jobs {
                 execution_id: request_id,
                 public_model: &plan.model,
                 provider: &provider,
-                poll_deadline_at: deadline,
+                poll_window,
                 endpoint: request.endpoint,
                 mode,
                 input_file_id: input.id,
                 work_file_id: plan.work_file,
-                price_tier: (mode == BatchMode::Native).then_some(hold.tier.as_str()),
                 retry_limit: retries,
                 requests: plan.requests as i32,
                 window_hours,
             },
         )
-        .await
-        .inspect_err(|_| {
-            tracing::error!(execution_id = %request_id, "batch record failed after admission; hold kept until reconciliation");
-        })?;
-        self.hold_until(request_id, deadline).await;
+        .await;
+        let job = match admitted {
+            Ok(Some((_, job))) => job,
+            Ok(None) => return Err(InferenceError::Storage.into()),
+            Err(e) => {
+                let _ = files
+                    .delete(plan.work_file, Some(principal.workspace_id))
+                    .await;
+                return Err(e.into());
+            }
+        };
         crate::metrics::METRICS.observe_batch_created(mode.as_str());
         Ok(job)
     }

@@ -46,12 +46,13 @@ upstream attempt (1:1 through the foreign key), with append-only ledger rows `ho
 | `unknown` -> `settled` (operator evidence) | `resolve_usage_once` (`reconcile.rs` ~244) | Admin authority re-checked in the tx; reservation `FOR UPDATE` (scoped) or the installation row (global); read `r.state != "unknown"` and execution terminal; the UPDATE itself has no state predicate |
 | `settled` -> anything | nobody | Every writer above refuses; the database does not (section 4.2, finding 4) |
 | `held` changed | settlement raises with `greatest(held, floor)`; the batch envelope transfer (`admit_line`, `SET held_microusd=held_microusd-$2`) moves hold into a line's own reservation; the **realtime** paths (`governance/realtime.rs`: window growth, and finalization `held = retained + actual`) can also change it | realtime is out of scope (section 2); `HoldNeverReleased` is stated for the request path |
-| lease extended | `extend_lease` (`governance/jobs.rs`) | `state='pending'`, `greatest(...)` |
+| lease extended | `accept_job` (`governance/jobs.rs`, video; a batch has its final lease from admission) | `state='pending'`, `greatest(...)` |
 
 The request thread (`inference/attempt.rs`): `admit`, `call_upstream` under the request deadline,
-then the outcome is settled inline (`settle_complete`, `track_stream`). `ExecutionGuard::finish`
-sets `finished` before it awaits the 3 s settlement (`inference/mod.rs` ~449); `impl Drop for
-ExecutionGuard` queues a detached cancellation settlement only if `finished` is false. Failover
+then the outcome is settled (`settle_complete`, `track_stream`). `ExecutionGuard::finish`
+sets `finished` and polls the 3 s settlement in the request (`settle_to_completion`,
+`inference/attempt.rs`); a request dropped mid-write hands the unfinished write to a spawned task, so a dropped request does not drop the write;
+`impl Drop for ExecutionGuard` queues a detached cancellation settlement only if `finished` is false. Failover
 is decided only in the `Err(error)` arm of `Engine::attempt` (so structurally never after a
 stream was returned), only after the previous attempt's settlement returned `Ok`, and only for
 `Busy` or (with `allow_ambiguous_failover`) `UpstreamUnavailable`/`Overloaded`
@@ -241,18 +242,30 @@ money.
      claim is `INSERT ... ON CONFLICT DO NOTHING` (`store::claim_line`).
    Suggested fix: carry `runner_id` (and a bumped epoch) in every runner write, or fence them like
    0029.
-2. **A cancelled or failed settlement write turns a fully reported success into `unknown`:
-   confirmed by reading, by design for the timeout case, low severity.** `finish` marks
-   `finished = true` before the write, so a client disconnect while the inline settlement is awaited
-   (`settle_complete`, `track_stream`) drops the write and `Drop` does nothing; a failed or timed-out
-   write also leaves `pending` (test `diagnostic_settlement_timeout_is_not_cancellation_or_a_drop_retry`
-   asserts no retry). The reconciler then marks it `unknown`; the hold is kept (spend overstated)
-   until an operator resolves it with evidence. `MoneyPathDiag` shows it (Receive usage,
-   ClientCancel while `settling`, ExpireLease, Reconcile). With commit-ack loss modelled, a write
+2. **A failed or timed-out settlement write turns a fully reported success into `unknown`
+   (a client disconnect used to do so too, fixed in #639): confirmed by reading, by design for the
+   timeout case, low severity. The client-disconnect case is
+   fixed (#639): `finish` now hands a write that is still in flight when its request is dropped to a spawned
+   task, so a disconnect no longer drops it (database tests drop the request, and the
+   stream consumer, while the settlement waits on a row lock held by the test).** As found, `finish`
+   marked `finished = true` before the write, so a client disconnect while the inline settlement was
+   awaited (`settle_complete`, `track_stream`) dropped the write and `Drop` did nothing. A failed or
+   timed-out write still leaves `pending`, by design (test
+   `diagnostic_settlement_timeout_is_not_cancellation_or_a_drop_retry` asserts no retry); the rest
+   of this item describes that case and the original symptom. The reconciler then marks it
+   `unknown`; the hold is kept (spend overstated) until an operator resolves it with evidence.
+   `MoneyPathDiag` shows it (Receive usage, ClientCancel while `settling`, ExpireLease, Reconcile);
+   the model was not changed or re-run for the fix, and in the code that trace now needs a write
+   that fails or times out rather than a disconnect. With commit-ack loss modelled, a write
    that landed but looked failed is the benign counterpart: the row is already `settled` and the
    invariants hold. A cost-accuracy gap, not a safety violation.
 3. **Batch and video envelopes are admitted with a 10-minute lease and extended in a second
-   transaction: confirmed by reading, low.** `admit_batch` uses `ADMISSION_LEASE_SECONDS = 600`
+   transaction: confirmed by reading, low. Fixed in #640; the model was not re-run.** Since #640 a
+   batch's job row is written in its admission transaction, with the envelope's final lease (poll
+   deadline plus grace), and a video's lease extension and job row are one transaction. A gateway-run
+   batch that an earlier release left with an `unknown` envelope now ends `failed` with
+   `hold_unavailable` instead of every line failing as a provider configuration error. The text
+   below is the finding as made. `admit_batch` used `ADMISSION_LEASE_SECONDS = 600`
    (`jobs/batch.rs`), then `insert_batch`, then `hold_until` -> `extend_lease`. If the process dies
    or the extension fails (it only logs) the reconciler marks the envelope `unknown` after 10
    minutes while the job row stays queued; `admit_line` then refuses every line (`state != "pending"`)

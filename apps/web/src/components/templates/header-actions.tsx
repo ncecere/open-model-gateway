@@ -90,11 +90,12 @@ export function collapseActions(children: ReactNode): CollapsedActions {
 /** A header's actions: unchanged on desktop; primary + "⋯" on a phone when there are two or more. */
 export function HeaderActions({ children }: { children: ReactNode }) {
   const narrow = useMediaQuery(HEADER_COLLAPSE_QUERY);
-  const collapsed = narrow ? collapseActions(children) : null;
-  if (!collapsed) return <div className={styles.headerActions}>{children}</div>;
+  // Give the same action the same sibling key in both layouts. A status change
+  // can remove the menu; its focus fallback must survive that render.
+  const actions = Children.toArray(flattenActions(children));
+  const collapsed = narrow ? collapseActions(actions) : null;
+  if (!collapsed) return <div className={styles.headerActions}>{actions}</div>;
   return <div className={styles.headerActions} data-collapsed="">
-    {collapsed.inline.map((node, i) => <Fragment key={`inline-${i}`}>{node}</Fragment>)}
-    {collapsed.primary}
-    <ActionMenu label="More actions" size="md" actions={collapsed.more} />
+    {[...collapsed.inline, collapsed.primary, <ActionMenu key="more-actions" label="More actions" size="md" actions={collapsed.more} />]}
   </div>;
 }

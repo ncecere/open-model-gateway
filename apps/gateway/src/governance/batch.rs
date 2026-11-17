@@ -22,7 +22,11 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use crate::jobs::fence::{BatchFence, Hold};
+use crate::jobs::{
+    BatchMode, JobRow, LEASE_GRACE, NewBatch,
+    fence::{BatchFence, Hold},
+    insert_batch,
+};
 
 /// The price list a batch reservation is valued with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -225,21 +229,35 @@ pub async fn batch_prices_published(
     Ok(price.is_some_and(|p| p.has_batch_lines()))
 }
 
-/// Admit a batch: one execution (`batches` workload) and one reservation
-/// holding every line's bound. `record.deployment_id` must be the first
-/// group's deployment. A native batch has exactly one group.
-pub async fn admit_batch(
+/// The longest a batch is run or polled after admission, bounding the lease
+/// of its envelope (a 168 h window plus finalization is 170 h).
+const MAX_POLL_WINDOW_SECONDS: i64 = 8 * 86_400;
+
+/// Admit a batch: one execution (`batches` workload), one reservation
+/// holding every line's bound, and the batch's job row, in one transaction,
+/// so a job never exists without an envelope that lives as long as the job
+/// (until its poll deadline plus [`LEASE_GRACE`]), and an envelope never
+/// holds budget for a job that was not created. `record.deployment_id` must
+/// be the first group's deployment. A native batch has exactly one group.
+/// `Ok(None)` means the COMMIT outcome is unknown: keep the private work file
+/// because the server may have committed a job that references it. Such a
+/// result is an accounting failure, never an admission to retry.
+pub(crate) async fn admit_batch(
     store: &Store,
     record: &ExecutionStart,
     groups: &[LineGroup],
-    native: bool,
-    lease_seconds: i64,
-) -> Result<BatchHold, InferenceError> {
+    job: &NewBatch<'_>,
+) -> Result<Option<(BatchHold, JobRow)>, InferenceError> {
     let result = locks::retry_deadlocks!(
         "admission",
-        admit_batch_unobserved(store, record, groups, native, lease_seconds).await
+        admit_batch_unobserved(store, record, groups, job).await
     );
-    crate::metrics::observe_admission(&result.as_ref().map(|_| ()).map_err(|e| *e));
+    let observed = match &result {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(InferenceError::Storage),
+        Err(e) => Err(*e),
+    };
+    crate::metrics::observe_admission(&observed);
     result
 }
 #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
@@ -247,13 +265,15 @@ async fn admit_batch_unobserved(
     store: &Store,
     record: &ExecutionStart,
     groups: &[LineGroup],
-    native: bool,
-    lease_seconds: i64,
-) -> Result<BatchHold, InferenceError> {
-    if !(1..=86_400).contains(&lease_seconds)
+    job: &NewBatch<'_>,
+) -> Result<Option<(BatchHold, JobRow)>, InferenceError> {
+    let native = job.mode == BatchMode::Native;
+    if !(1..=MAX_POLL_WINDOW_SECONDS).contains(&job.poll_window.num_seconds())
         || groups.is_empty()
         || (native && groups.len() != 1)
         || groups[0].deployment.id != record.deployment_id
+        || job.execution_id != record.id
+        || job.deployment_id != record.deployment_id
     {
         return Err(InferenceError::Configuration);
     }
@@ -306,8 +326,11 @@ async fn admit_batch_unobserved(
         }
     }
     let now: DateTime<Utc> = store.admission_now(&mut tx).await.map_err(storage)?;
-    let lease = now
-        .checked_add_signed(chrono::TimeDelta::seconds(lease_seconds))
+    let deadline = now
+        .checked_add_signed(job.poll_window)
+        .ok_or(InferenceError::Configuration)?;
+    let lease = deadline
+        .checked_add_signed(LEASE_GRACE)
         .ok_or(InferenceError::Configuration)?;
     lock_rows(
         store,
@@ -347,11 +370,43 @@ async fn admit_batch_unobserved(
         None,
     )
     .await?;
-    tx.commit().await.map_err(storage)?;
-    Ok(BatchHold {
-        held_microusd: held,
-        tier,
-    })
+    let row = insert_batch(&mut tx, job, pinned.map(|p| p.1.as_str()), deadline)
+        .await
+        .map_err(storage)?;
+    if let Err(error) = commit_batch(tx).await {
+        // A COMMIT error may follow a successful server commit. Do not
+        // retry it or clean up resources that a committed job may reference.
+        crate::db::accounting_failure::storage_error(&error);
+        #[cfg(test)]
+        crate::db::diagnostics::observe_sqlx(
+            crate::db::diagnostics::Stage::GovernanceStorage,
+            &error,
+        );
+        return Ok(None);
+    }
+    Ok(Some((
+        BatchHold {
+            held_microusd: held,
+            tier,
+        },
+        row,
+    )))
+}
+
+// Test the lost acknowledgement boundary after a real PostgreSQL COMMIT.
+#[cfg(test)]
+tokio::task_local! { pub(crate) static LOSE_COMMIT_ACK: bool; }
+
+async fn commit_batch(tx: Tx<'_>) -> Result<(), sqlx::Error> {
+    tx.commit().await?;
+    #[cfg(test)]
+    if LOSE_COMMIT_ACK.try_with(|lose| *lose).unwrap_or(false) {
+        return Err(sqlx::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "commit acknowledgement lost",
+        )));
+    }
+    Ok(())
 }
 
 /// The gateway-run batch a line attempt belongs to, as the runner that holds

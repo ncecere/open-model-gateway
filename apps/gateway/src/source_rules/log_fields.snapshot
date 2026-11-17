@@ -6,17 +6,15 @@ http.rs :: models :: error :: -
 http.rs :: request_context :: info :: header_latency_ms=started.elapsed().as_millis() ; status=response.status().as_u16()
 http.rs :: request_context :: info_span :: method=%request.method() ; request_id=request_id
 inference/attempt.rs :: impl Engine::eligible_candidates :: warn :: error=?other ; provider=%deployment.provider
+inference/attempt.rs :: report_unsettled :: error :: execution_id=%id ; trace_id=trace.as_ref().map(LogTraceId::as_str)
 inference/mod.rs :: impl ExecutionGuard::drop :: error :: execution_id=%execution_id ; trace_id=log_trace_id.as_ref().map(LogTraceId::as_str)
-inference/mod.rs :: impl ExecutionGuard::finish :: error :: execution_id=%self.id ; trace_id=self.log_trace_id.as_ref().map(LogTraceId::as_str)
 inference/mod.rs :: impl ExecutionGuard::finish :: warn :: execution_id=%self.id ; trace_id=self.log_trace_id.as_ref().map(LogTraceId::as_str)
 inference/realtime.rs :: impl RealtimeSession::drop :: error :: execution_id=%record.id
 inference/realtime.rs :: impl RealtimeSession::finish :: error :: execution_id=%self.id
 inference/realtime.rs :: impl RealtimeSession::finish :: warn :: execution_id=%self.id
-jobs/batch.rs :: impl Jobs::create_batch :: error :: execution_id=%request_id
 jobs/batch.rs :: impl Jobs::discard_work_file :: warn :: job_id=%job.id
 jobs/mod.rs :: impl Attempt::drop :: error :: execution_id=%record.id
 jobs/mod.rs :: impl Attempt::fail :: error :: execution_id=%self.id
-jobs/mod.rs :: impl Jobs::hold_until :: error :: execution_id=%execution
 jobs/mod.rs :: impl Jobs::settle :: warn :: job_id=%job.id
 jobs/native.rs :: impl Jobs::collect_native :: warn :: job_id=%job.id
 jobs/native.rs :: impl Jobs::submit_native :: warn :: job_id=%job.id
@@ -28,6 +26,7 @@ jobs/poller.rs :: start :: warn :: -
 jobs/runner.rs :: impl Runner::finalize :: warn :: job_id=%job.id
 jobs/runner.rs :: impl Runner::observe_queue :: warn :: -
 jobs/runner.rs :: impl Runner::publish_demand :: warn :: job_id=%job.id
+jobs/runner.rs :: impl Runner::run_claimed :: warn :: job_id=%job.id
 jobs/runner.rs :: impl Runner::settle_finished :: warn :: job_id=%job.id
 jobs/runner.rs :: impl Runner::tick :: warn :: job_id=%id
 jobs/runner.rs :: start :: warn :: -
