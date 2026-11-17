@@ -246,7 +246,12 @@ mod storage_failures {
         let (gate, signals) = capture(scheduler.gate(Uuid::new_v4())).await;
         assert!(matches!(gate, Err(InferenceError::Storage)));
         assert_eq!(signals, [CLOSED], "the route settings");
-        let (cleared, signals) = capture(scheduler.clear_waits(Uuid::new_v4())).await;
+        let (cleared, signals) = capture(scheduler.clear_waits(&fence::BatchFence {
+            job: Uuid::new_v4(),
+            runner: Uuid::new_v4(),
+            epoch: 1,
+        }))
+        .await;
         assert!(cleared.is_err());
         assert_eq!(signals, [CLOSED], "the demand rows");
     }

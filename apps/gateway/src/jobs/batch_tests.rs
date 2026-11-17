@@ -59,6 +59,15 @@ struct Script {
     /// Result lines a native batch returns (fake format).
     results: Vec<Value>,
     calls: Vec<&'static str>,
+    /// Chat calls a test holds open, by first message text.
+    gates: std::collections::HashMap<String, Arc<Gate>>,
+}
+/// A provider call held open by a test: `entered` is signalled when the call
+/// starts and the call returns once `release` is signalled.
+#[derive(Default)]
+struct Gate {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
 }
 /// A fake provider. `native` enables its batch API. Prompts steer gateway
 /// runs: `fail` → upstream unavailable, `busy` → 429, `huge` → usage far
@@ -82,6 +91,16 @@ impl Fake {
     }
     fn calls(&self) -> Vec<&'static str> {
         self.script.lock().unwrap().calls.clone()
+    }
+    /// Hold every chat call whose first message is `text` until released.
+    fn gate(&self, text: &str) -> Arc<Gate> {
+        self.script
+            .lock()
+            .unwrap()
+            .gates
+            .entry(text.to_owned())
+            .or_default()
+            .clone()
     }
     fn push_batch(&self, status: BatchStatus) {
         let mut s = self.script.lock().unwrap();
@@ -216,6 +235,11 @@ impl ProviderAdapter for Fake {
             let mut script = self.script.lock().unwrap();
             script.executed.push(text.clone());
             script.maxima.push(request.max_output_tokens);
+        }
+        let gate = self.script.lock().unwrap().gates.get(&text).cloned();
+        if let Some(gate) = gate {
+            gate.entered.notify_one();
+            gate.release.notified().await;
         }
         match text.as_str() {
             "cache-hit" => {
@@ -2189,9 +2213,11 @@ async fn restart_resumes_without_re_executing_lines(pool: PgPool) {
     assert_eq!(w.openai.executed(), ["two"]);
     let job = w.reload(&job).await;
     assert_eq!(job.state, "completed");
+    // Line 1 succeeded but its result was never stored: it is listed in the
+    // error file as unavailable, so it counts failed with the interrupted line.
     assert_eq!(
         (job.request_completed, job.request_failed),
-        (Some(2), Some(1))
+        (Some(1), Some(2))
     );
     let out = w.read(f.principal.workspace_id, job.output_file_id).await;
     assert_eq!(out.len(), 1);
@@ -2245,8 +2271,19 @@ async fn lines_never_run_twice_under_concurrency(pool: PgPool) {
     }
     // The claim itself is exclusive: one of many concurrent claims wins.
     let job = &batches[0];
+    let (runner, epoch): (Uuid, i64) =
+        sqlx::query_as("SELECT runner_id,runner_epoch FROM async_jobs WHERE id=$1")
+            .bind(job.id)
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    let fence = super::fence::BatchFence {
+        job: job.id,
+        runner,
+        epoch,
+    };
     let claims = futures_util::future::join_all(
-        (0..8).map(|_| store::claim_line(&f.store, job.id, job.workspace_id, 999, Uuid::new_v4())),
+        (0..8).map(|_| fence.claim_line(&f.store, job.workspace_id, 999, Uuid::new_v4())),
     )
     .await;
     assert_eq!(claims.iter().filter(|c| matches!(c, Ok(true))).count(), 1);
@@ -3142,3 +3179,5 @@ async fn memoized_refusal_classification_stays_per_line(pool: PgPool) {
     );
     consistent(f).await;
 }
+
+mod fence;

@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use super::types::*;
+use super::{fence::BatchFence, types::*};
 use crate::{
     inference::types::Deployment,
     store::Store,
@@ -382,16 +382,6 @@ pub(crate) async fn mark_running(store: &Store, id: Uuid) -> Result<()> {
         .await.map_err(job_storage)?;
     Ok(())
 }
-/// Lines finished since the last call.
-pub(crate) async fn progress(store: &Store, id: Uuid, completed: i32, failed: i32) -> Result<()> {
-    sqlx::query("UPDATE async_jobs SET request_completed=coalesce(request_completed,0)+$2,request_failed=coalesce(request_failed,0)+$3,last_progress_at=clock_timestamp() WHERE id=$1")
-        .bind(id)
-        .bind(completed)
-        .bind(failed)
-        .execute(&store.pool)
-        .await.map_err(job_storage)?;
-    Ok(())
-}
 /// Terminal state of an engine batch with its result files.
 pub(crate) struct Finished<'a> {
     pub state: JobState,
@@ -400,11 +390,39 @@ pub(crate) struct Finished<'a> {
     pub error_file: Option<Uuid>,
     pub counts: Option<RequestCounts>,
 }
+/// The statement that records a batch's terminal state. Parameters: `$1` the
+/// job, then (`fenced`) the runner `$2` and epoch `$3`, then the state, error
+/// code, output file, error file and the three counts.
+pub(crate) fn finish_batch_sql(fenced: bool) -> String {
+    let (guard, n) = if fenced {
+        (" AND runner_id=$2 AND runner_epoch=$3", 3)
+    } else {
+        ("", 1)
+    };
+    format!(
+        "UPDATE async_jobs SET state=${s},upstream_status=${s},error_code=coalesce(error_code,${e}),output_file_id=coalesce(output_file_id,${o}),error_file_id=coalesce(error_file_id,${r}),request_total=coalesce(${t},request_total),request_completed=coalesce(${c},request_completed),request_failed=coalesce(${f},request_failed),completed_at=coalesce(completed_at,clock_timestamp()) WHERE id=$1{guard} AND state IN('queued','in_progress') RETURNING {JOB_COLUMNS}",
+        s = n + 1,
+        e = n + 2,
+        o = n + 3,
+        r = n + 4,
+        t = n + 5,
+        c = n + 6,
+        f = n + 7
+    )
+}
 pub(crate) async fn finish_batch(store: &Store, id: Uuid, f: &Finished<'_>) -> Result<JobRow> {
-    sqlx::query("UPDATE async_jobs SET state=$2,upstream_status=$2,error_code=coalesce(error_code,$3),output_file_id=coalesce(output_file_id,$4),error_file_id=coalesce(error_file_id,$5),request_total=coalesce($6,request_total),request_completed=coalesce($7,request_completed),request_failed=coalesce($8,request_failed),completed_at=coalesce(completed_at,clock_timestamp()) WHERE id=$1 AND state IN('queued','in_progress')")
-        .bind(id).bind(f.state.as_str()).bind(f.error_code).bind(f.output_file).bind(f.error_file)
-        .bind(f.counts.map(|c| c.total as i32)).bind(f.counts.map(|c| c.completed as i32)).bind(f.counts.map(|c| c.failed as i32))
-        .execute(&store.pool).await.map_err(job_storage)?;
+    sqlx::query(&finish_batch_sql(false))
+        .bind(id)
+        .bind(f.state.as_str())
+        .bind(f.error_code)
+        .bind(f.output_file)
+        .bind(f.error_file)
+        .bind(f.counts.map(|c| c.total as i32))
+        .bind(f.counts.map(|c| c.completed as i32))
+        .bind(f.counts.map(|c| c.failed as i32))
+        .execute(&store.pool)
+        .await
+        .map_err(job_storage)?;
     reload(store, id).await
 }
 /// Observed provider progress (native): counts and the stall clock. The
@@ -417,48 +435,43 @@ pub(crate) async fn observe_counts(store: &Store, id: Uuid, counts: RequestCount
     Ok(())
 }
 
-/// Claim up to `limit` runnable gateway-run batches for this runner (a lease
-/// that must be renewed; a crashed runner's batches are resumed elsewhere).
+/// A gateway-run batch claimed by this runner with its fence.
+#[derive(FromRow)]
+struct Claimed {
+    #[sqlx(flatten)]
+    job: JobRow,
+    runner_epoch: i64,
+}
+
+/// Claim up to `limit` runnable gateway-run batches for this runner, other
+/// than `running` (its own runs that are still going): a lease that must be
+/// renewed. The claim bumps the batch's epoch in the statement that takes it,
+/// so every earlier claim of the batch is fenced from then on
+/// ([`super::fence`]); a crashed runner's batches are resumed elsewhere. A
+/// batch with a runner write in flight is skipped (`SKIP LOCKED`) and taken
+/// on a later call.
 pub(crate) async fn claim_gateway(
     store: &Store,
     runner: Uuid,
     lease_seconds: f64,
     limit: i64,
-) -> Result<Vec<JobRow>> {
-    sqlx::query_as(&format!("UPDATE async_jobs SET runner_id=$1,runner_lease_until=clock_timestamp()+make_interval(secs=>$2) WHERE id IN(SELECT id FROM async_jobs WHERE batch_mode='gateway' AND settled_at IS NULL AND (runner_lease_until IS NULL OR runner_lease_until<clock_timestamp()) ORDER BY created_at,id LIMIT $3 FOR UPDATE SKIP LOCKED) RETURNING {JOB_COLUMNS}"))
-        .bind(runner).bind(lease_seconds).bind(limit).fetch_all(&store.pool).await.map_err(job_storage)
-}
-/// Renew this runner's lease. `None` when another runner owns the batch or
-/// it is settled; otherwise whether cancel was requested.
-pub(crate) async fn renew_lease(
-    store: &Store,
-    id: Uuid,
-    runner: Uuid,
-    lease_seconds: f64,
-) -> Result<Option<bool>> {
-    sqlx::query_scalar("UPDATE async_jobs SET runner_lease_until=clock_timestamp()+make_interval(secs=>$3) WHERE id=$1 AND runner_id=$2 AND settled_at IS NULL RETURNING cancel_requested_at IS NOT NULL")
-        .bind(id).bind(runner).bind(lease_seconds).fetch_optional(&store.pool).await.map_err(job_storage)
-}
-pub(crate) async fn release_runner(store: &Store, id: Uuid, runner: Uuid) -> Result<()> {
-    sqlx::query("UPDATE async_jobs SET runner_lease_until=NULL WHERE id=$1 AND runner_id=$2")
-        .bind(id)
-        .bind(runner)
-        .execute(&store.pool)
-        .await
-        .map_err(job_storage)?;
-    Ok(())
+    running: &[Uuid],
+) -> Result<Vec<(JobRow, BatchFence)>> {
+    let claimed: Vec<Claimed> = sqlx::query_as(&format!("UPDATE async_jobs SET runner_id=$1,runner_epoch=runner_epoch+1,runner_lease_until=clock_timestamp()+make_interval(secs=>$2) WHERE id IN(SELECT id FROM async_jobs WHERE batch_mode='gateway' AND settled_at IS NULL AND (runner_lease_until IS NULL OR runner_lease_until<clock_timestamp()) AND id<>ALL($4) ORDER BY created_at,id LIMIT $3 FOR UPDATE SKIP LOCKED) RETURNING {JOB_COLUMNS},runner_epoch"))
+        .bind(runner).bind(lease_seconds).bind(limit).bind(running).fetch_all(&store.pool).await.map_err(job_storage)?;
+    Ok(claimed
+        .into_iter()
+        .map(|c| {
+            let fence = BatchFence {
+                job: c.job.id,
+                runner,
+                epoch: c.runner_epoch,
+            };
+            (c.job, fence)
+        })
+        .collect())
 }
 
-/// A line a crashed runner left `running` is `interrupted`: never executed
-/// again (its attempt's hold is reconciled as unknown). Returns how many.
-pub(crate) async fn interrupt_running(store: &Store, job: Uuid) -> Result<i32> {
-    let n = sqlx::query("UPDATE batch_lines SET state='interrupted',error_code='interrupted',finished_at=clock_timestamp() WHERE job_id=$1 AND state='running'")
-        .bind(job)
-        .execute(&store.pool)
-        .await.map_err(job_storage)?
-        .rows_affected();
-    Ok(i32::try_from(n).unwrap_or(i32::MAX))
-}
 /// `(line_no, state, segment)` of every claimed line of a batch.
 pub(crate) async fn line_states(
     store: &Store,
@@ -469,72 +482,6 @@ pub(crate) async fn line_states(
         .fetch_all(&store.pool)
         .await
         .map_err(job_storage)
-}
-/// Claim a line's first attempt. Inserting the row is the claim, so a line
-/// can never run twice (even across runners).
-pub(crate) async fn claim_line(
-    store: &Store,
-    job: Uuid,
-    workspace: Uuid,
-    line_no: i32,
-    execution: Uuid,
-) -> Result<bool> {
-    Ok(sqlx::query("INSERT INTO batch_lines(job_id,workspace_id,line_no,state,execution_id) VALUES($1,$2,$3,'running',$4) ON CONFLICT DO NOTHING")
-        .bind(job).bind(workspace).bind(line_no).bind(execution).execute(&store.pool).await.map_err(job_storage)?.rows_affected() == 1)
-}
-/// Claim an explicit retry (a new attempt with its own execution).
-pub(crate) async fn retry_line(
-    store: &Store,
-    job: Uuid,
-    line_no: i32,
-    attempts: i16,
-    execution: Uuid,
-) -> Result<bool> {
-    Ok(sqlx::query("UPDATE batch_lines SET state='running',attempts=attempts+1,execution_id=$4,status_code=NULL,error_code=NULL,finished_at=NULL WHERE job_id=$1 AND line_no=$2 AND state='failed' AND attempts=$3 AND segment IS NULL")
-        .bind(job).bind(line_no).bind(attempts).bind(execution).execute(&store.pool).await.map_err(job_storage)?.rows_affected() == 1)
-}
-pub(crate) async fn finish_line(
-    store: &Store,
-    job: Uuid,
-    line_no: i32,
-    succeeded: bool,
-    status_code: Option<u16>,
-    error_code: Option<&str>,
-) -> Result<()> {
-    sqlx::query("UPDATE batch_lines SET state=$3,status_code=$4,error_code=$5,finished_at=clock_timestamp() WHERE job_id=$1 AND line_no=$2 AND state='running'")
-        .bind(job)
-        .bind(line_no)
-        .bind(if succeeded { "succeeded" } else { "failed" })
-        .bind(status_code.map(|s| s as i16))
-        .bind(error_code)
-        .execute(&store.pool)
-        .await.map_err(job_storage)?;
-    Ok(())
-}
-/// Record a stored result segment and the lines it holds.
-pub(crate) async fn insert_segment(
-    store: &Store,
-    job: Uuid,
-    workspace: Uuid,
-    seq: i32,
-    file: Uuid,
-    lines: &[i32],
-) -> Result<()> {
-    let mut tx = crate::db::begin(&store.pool).await.map_err(job_storage)?;
-    sqlx::query(
-        "INSERT INTO batch_segments(job_id,workspace_id,seq,file_id,lines) VALUES($1,$2,$3,$4,$5)",
-    )
-    .bind(job)
-    .bind(workspace)
-    .bind(seq)
-    .bind(file)
-    .bind(lines.len() as i32)
-    .execute(&mut *tx)
-    .await
-    .map_err(job_storage)?;
-    sqlx::query("UPDATE batch_lines SET segment=$2 WHERE job_id=$1 AND line_no=ANY($3) AND segment IS NULL AND state<>'running'")
-        .bind(job).bind(seq).bind(lines).execute(&mut *tx).await.map_err(job_storage)?;
-    tx.commit().await.map_err(job_storage)
 }
 /// `(seq, file id)` of a batch's segments, in order.
 pub(crate) async fn segments(store: &Store, job: Uuid) -> Result<Vec<(i32, Uuid)>> {

@@ -6,7 +6,7 @@
   "files": {
     "apps/gateway/src/audit_export.rs": 1243,
     "apps/gateway/src/filestore/files.rs": 945,
-    "apps/gateway/src/jobs/schedule.rs": 970,
+    "apps/gateway/src/jobs/schedule.rs": 812,
     "apps/gateway/src/management/alerts.rs": 836,
     "apps/gateway/src/management/catalogs.rs": 983,
     "apps/gateway/src/management/directory.rs": 1318,

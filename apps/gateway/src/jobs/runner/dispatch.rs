@@ -45,7 +45,8 @@ impl Runner {
                 started |= self.dispatch_lane(run, tasks, lane, &mut report).await?;
             }
             turn = turn.wrapping_add(1);
-            self.publish_demand(job, report, &mut published).await;
+            self.publish_demand(job, state, report, &mut published)
+                .await;
             if !started {
                 self.idle(tasks).await;
             }
@@ -118,7 +119,14 @@ impl Runner {
         let mut started = false;
         match self
             .scheduler
-            .claim(job, n, execution, route, settings.max_concurrency)
+            .claim(
+                &run.state.fence,
+                job.workspace_id,
+                n,
+                execution,
+                route,
+                settings.max_concurrency,
+            )
             .await
         {
             Ok(Claim::Claimed) => {
@@ -138,6 +146,8 @@ impl Runner {
             }
             Ok(Claim::Full) => note(report, route, waiting, Some(Pause::Concurrency), true),
             Ok(Claim::Wait) => note(report, route, waiting, Some(Pause::FairShare), true),
+            // Another claim holds the batch: nothing more starts here.
+            Err(FenceError::Stale) => run.state.lose(),
             Err(_) => note(report, route, waiting, None, false),
         }
         Ok(started)
@@ -185,7 +195,12 @@ impl Runner {
             return Ok(false);
         };
         let mut started = false;
-        match store::claim_line(&self.jobs.store, job.id, job.workspace_id, n, execution).await {
+        match run
+            .state
+            .fence
+            .claim_line(&self.jobs.store, job.workspace_id, n, execution)
+            .await
+        {
             Ok(true) => {
                 let head = lane.take().ok_or(InferenceError::Storage)?;
                 spawn_line(tasks, run.line, run.records, head, None, permits);
@@ -194,6 +209,7 @@ impl Runner {
             Ok(false) => {
                 lane.take();
             }
+            Err(FenceError::Stale) => run.state.lose(),
             Err(_) => {}
         }
         Ok(started)

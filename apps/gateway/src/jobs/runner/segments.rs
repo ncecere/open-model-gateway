@@ -9,17 +9,19 @@ fn encode_record(r: &Record) -> Result<Vec<u8>, InferenceError> {
     Ok(bytes)
 }
 
-/// Writes one segment file and records it; returns whether it was recorded
-/// (the next segment number is then taken). A segment that is not stored or
-/// recorded leaves its lines reported unavailable.
+/// Writes one segment file and records it under the next segment number
+/// (taken in the database, inside the fence). A segment that is not stored or
+/// recorded leaves its lines reported unavailable; one the run is no longer
+/// allowed to record is deleted and ends the run's work.
 async fn store_segment(
     store: &Store,
     files: &crate::filestore::FileStorage,
     job: &JobRow,
-    next_seq: i32,
+    state: &RunState,
+    part: u32,
     body: Vec<u8>,
     held: &[i32],
-) -> bool {
+) {
     let mut sink = LazySink::new(
         files,
         io::batch_file(
@@ -27,7 +29,11 @@ async fn store_segment(
             job.workspace_id,
             job.api_key_id,
             job.user_id,
-            format!("batch_{}_part_{next_seq}.jsonl", job.id.simple()),
+            format!(
+                "batch_{}_part_{}_{part}.jsonl",
+                job.id.simple(),
+                state.fence.epoch
+            ),
         ),
     );
     let stored = async {
@@ -37,20 +43,24 @@ async fn store_segment(
     .await;
     match stored {
         Ok(Some(file)) => {
-            if store::insert_segment(store, job.id, job.workspace_id, next_seq, file, held)
-                .await
-                .is_err()
-            {
-                let _ = files.delete(file, Some(job.workspace_id)).await;
-                tracing::warn!(job_id = %job.id, "batch segment not recorded; its lines are reported unavailable");
-                false
-            } else {
-                true
+            let recorded = state
+                .fence
+                .insert_segment(store, job.workspace_id, file, held)
+                .await;
+            match state.written(recorded) {
+                Ok(Some(_)) => {}
+                // Refused: `written` ended the run's work and said so.
+                Ok(None) => {
+                    let _ = files.delete(file, Some(job.workspace_id)).await;
+                }
+                Err(_) => {
+                    let _ = files.delete(file, Some(job.workspace_id)).await;
+                    tracing::warn!(job_id = %job.id, "batch segment not recorded; its lines are reported unavailable");
+                }
             }
         }
         _ => {
             tracing::warn!(job_id = %job.id, "batch segment not stored; its lines are reported unavailable");
-            false
         }
     }
 }
@@ -60,13 +70,10 @@ pub(super) async fn write_segments(
     store: Store,
     files: crate::filestore::FileStorage,
     job: JobRow,
+    state: Arc<RunState>,
     mut records: mpsc::Receiver<Record>,
 ) -> Result<(), InferenceError> {
-    let mut next_seq = store::segments(&store, job.id)
-        .await
-        .map_err(|_| InferenceError::Storage)?
-        .last()
-        .map_or(0, |s| s.0 + 1);
+    let mut part = 0u32;
     let mut buffer: Vec<u8> = Vec::new();
     let mut lines: Vec<i32> = Vec::new();
     let mut open = true;
@@ -87,15 +94,69 @@ pub(super) async fn write_segments(
                 }
             },
             _ = &mut deadline => true,
+            // The lease is in doubt: store what is held before a takeover
+            // can refuse it.
+            _ = state.doubt.notified() => true,
         };
         if !flush || lines.is_empty() {
             continue;
         }
         let body = std::mem::take(&mut buffer);
         let held = std::mem::take(&mut lines);
-        if store_segment(&store, &files, &job, next_seq, body, &held).await {
-            next_seq += 1;
+        // A run the fence refused stores nothing more; what it holds is
+        // dropped (the owner reports those lines unavailable).
+        if !state.fenced.load(Ordering::SeqCst) {
+            store_segment(&store, &files, &job, &state, part, body, &held).await;
+            part += 1;
         }
     }
     Ok(())
+}
+
+/// The segment writer of one run, driven by tests.
+#[cfg(test)]
+pub(crate) struct Probe {
+    state: Arc<RunState>,
+    records: mpsc::Sender<Record>,
+    writer: tokio::task::JoinHandle<Result<(), InferenceError>>,
+}
+#[cfg(test)]
+impl Probe {
+    pub(crate) fn start(
+        store: Store,
+        files: crate::filestore::FileStorage,
+        job: JobRow,
+        fence: BatchFence,
+    ) -> Self {
+        let state = Arc::new(RunState::new(fence));
+        let (records, receiver) = mpsc::channel(8);
+        let writer = tokio::spawn(write_segments(store, files, job, state.clone(), receiver));
+        Self {
+            state,
+            records,
+            writer,
+        }
+    }
+    pub(crate) async fn finished(&self, line: i32) {
+        let value = json!({"custom_id": line.to_string()});
+        self.records
+            .send(Record {
+                line,
+                error: false,
+                value,
+            })
+            .await
+            .unwrap();
+    }
+    /// The lease is in doubt (a renewal failed).
+    pub(crate) fn doubt(&self) {
+        self.state.doubt.notify_one();
+    }
+    pub(crate) fn fenced(&self) -> bool {
+        self.state.fenced.load(Ordering::SeqCst)
+    }
+    pub(crate) async fn close(self) {
+        drop(self.records);
+        self.writer.await.unwrap().unwrap();
+    }
 }
