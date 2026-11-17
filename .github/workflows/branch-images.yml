@@ -1,4 +1,4 @@
-# Development images: ghcr.io/ncecere/open-model-gateway:dev-<commit SHA12>.
+# Development images: ghcr.io/bitop-dev/open-model-gateway:dev-<commit SHA12>.
 # Builds do not wait for ci.yml and are NOT scanned, rehearsed or signed.
 # Each architecture is built on its own native runner and published under its own tag:
 # dev-<SHA12> is the linux/amd64 image (unchanged: image.yml's acceptance probe resolves
@@ -132,7 +132,7 @@ jobs:
       artifact_id: ${{ needs.build.outputs.artifact_id_linux_amd64 }}
       root_digest: ${{ needs.build.outputs.digest_linux_amd64 }}
       platform: linux/amd64
-      image_repository: ghcr.io/ncecere/open-model-gateway
+      image_repository: ghcr.io/bitop-dev/open-model-gateway
       source_revision: ${{ needs.build.outputs.source_revision_linux_amd64 }}
 
   import-arm64:
@@ -145,7 +145,7 @@ jobs:
       artifact_id: ${{ needs.build.outputs.artifact_id_linux_arm64 }}
       root_digest: ${{ needs.build.outputs.digest_linux_arm64 }}
       platform: linux/arm64
-      image_repository: ghcr.io/ncecere/open-model-gateway
+      image_repository: ghcr.io/bitop-dev/open-model-gateway
       source_revision: ${{ needs.build.outputs.source_revision_linux_arm64 }}
 
   publish:
@@ -156,7 +156,7 @@ jobs:
       contents: read
       packages: write
     env:
-      IMAGE: ghcr.io/ncecere/open-model-gateway
+      IMAGE: ghcr.io/bitop-dev/open-model-gateway
       DIGEST_AMD64: ${{ needs.import-amd64.outputs.digest }}
       DIGEST_ARM64: ${{ needs.import-arm64.outputs.digest }}
       SOURCE_REVISION: ${{ needs.build.outputs.source_revision_linux_amd64 }}

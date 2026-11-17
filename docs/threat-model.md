@@ -41,7 +41,7 @@ The invariants in [AGENTS.md](../AGENTS.md) are the security properties this mod
 | Prices and audit history | `deployment_prices`, `audit_events` (append-only) |
 | Request metadata | `inference_executions` (no prompt or response columns) |
 | Personal-workspace privacy | Keys and request details visible to the owner only |
-| Release images | `ghcr.io/ncecere/open-model-gateway`, signed with cosign |
+| Release images | `ghcr.io/bitop-dev/open-model-gateway`, signed with cosign |
 
 ## Actors
 

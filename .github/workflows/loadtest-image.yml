@@ -1,5 +1,5 @@
 # On-request development load-test image (docs/kubernetes.md, loadtest profile):
-# ghcr.io/ncecere/open-model-gateway-loadtest:dev-<commit SHA12>.
+# ghcr.io/bitop-dev/open-model-gateway-loadtest:dev-<commit SHA12>.
 # linux/amd64; NOT scanned, rehearsed or signed, never latest/a version/production.
 # SPDX/SLSA data now accompanies the validated OCI handoff, not a certification.
 # prune-dev-images.yml deletes old dev-<12 hex> tags of this package too.
@@ -103,7 +103,7 @@ jobs:
       artifact_id: ${{ needs.build.outputs.artifact_id }}
       root_digest: ${{ needs.build.outputs.digest }}
       platform: linux/amd64
-      image_repository: ghcr.io/ncecere/open-model-gateway-loadtest
+      image_repository: ghcr.io/bitop-dev/open-model-gateway-loadtest
       source_revision: ${{ needs.build.outputs.source_revision }}
 
   publish:
@@ -114,7 +114,7 @@ jobs:
       contents: read
       packages: write
     env:
-      IMAGE: ghcr.io/ncecere/open-model-gateway-loadtest
+      IMAGE: ghcr.io/bitop-dev/open-model-gateway-loadtest
       DIGEST: ${{ needs.import.outputs.digest }}
       SOURCE_REVISION: ${{ needs.build.outputs.source_revision }}
     steps:

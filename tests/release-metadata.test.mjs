@@ -32,6 +32,11 @@ test("chart and default image identify the same release", () => {
   const chart = text("deploy/helm/open-model-gateway/Chart.yaml");
   assert.equal(chart.match(/^version: (\S+)$/m)[1], target);
   assert.equal(chart.match(/^appVersion: "([^"]+)"$/m)[1], target);
+  // Existing release tags were not copied during the repository transfer.
+  const version = target.split("-")[0].split(".").map(Number);
+  const historical = version[0] === 0 && (version[1] < 18 || (version[1] === 18 && version[2] === 0));
+  const owner = historical ? "ncecere" : "bitop-dev";
+  assert.equal(text("deploy/helm/open-model-gateway/values.yaml").match(/^  repository: (\S+)$/m)[1], `ghcr.io/${owner}/open-model-gateway`);
   assert.equal(text("deploy/helm/open-model-gateway/values.yaml").match(/^  tag: (\S+)$/m)[1], `v${target}`);
 });
 
