@@ -10,7 +10,7 @@ One GitHub issue at a time per worker, one loop per issue:
 
 1. Branch from current `main`. Write a failing test that shows the problem (or, for a feature, the behaviour that doesn't exist yet).
 2. Make the smallest change that passes it.
-3. Run the checks below for the areas the change touches (browser tests for UI flows, a real PostgreSQL database for SQL/authorization changes).
+3. Run the checks below for the areas the change touches (browser tests for UI flows, a real PostgreSQL database for SQL/authorization changes). A Spark run ("Running the test suites on the cluster") counts as running the checks, never as replacing green CI.
 4. **Prove it on the real path**, not only with unit tests and mocks: run the changed flow end to end against a running gateway (the local stack, or a Spark environment for chart, CloudNativePG and migration behaviour) and check the result, including the refusal cases.
 5. **Review.** Every change gets a code review. A security-relevant change (authentication, authorization, egress, secrets and credentials, SQL and runtime grants, migrations, crypto, CI/supply chain, anything parsing untrusted input) gets two independent, separately briefed reviews, one of them adversarial (its job is to break the change). Use different models when available and permitted; when the operator restricts model choice, use independent contexts within the permitted model set. Neither review may substitute for the other. Fix actionable findings. Comments state the invariant and why it holds, never review history (rounds, items, findings, who asked): the PR and git history keep that, and `source_rules::review_history` and `apps/web/src/lib/review-history.test.ts` refuse the usual phrasings.
 6. **The coordinator reads every diff before it merges**, including code written by agents, and re-runs whatever it doubts.
@@ -107,21 +107,30 @@ What it does is `docs/local-demo.md` in Kubernetes, in the order the invariants 
 
 ### Running the test suites on the cluster
 
-`scripts/spark-test.py` runs the suites for a pushed commit as a job in its own namespace (demo environments keep running beside it), with the same safety design as `spark-env.py` (the Spark kubeconfig only, scrubbed child environment, only the namespaces `<base>-omg-test-s1` and `-s2`, which `spark-env.py` refuses to touch). Details, measurements and limits: `docs/verification.md` ("Tests on the Spark platform").
+`scripts/spark-test.py` runs the suites for a pushed commit as a job in its own namespace (demo environments keep running beside it), with the same safety design as `spark-env.py` (the Spark kubeconfig only, scrubbed child environment, only the namespaces `<base>-omg-test-s1` and `-s2` and only with the label the tool sets, which `spark-env.py` refuses to touch). Details, measurements and limits: `docs/verification.md` ("Tests on the Spark platform").
 
 ```sh
-python3 -I scripts/spark-test.py run my-name --ref my-branch --suite lib|integration|web|checks|all [--summary result.json] [--keep|--detach]
+python3 -I scripts/spark-test.py run my-name --ref my-branch --suite lib|integration|web|checks|all [--summary result.json] [--test-args "<filter>"] [--fresh] [--fast] [--keep|--detach]
 python3 -I scripts/spark-test.py status [my-name]      # the two slots, phase and current step
 python3 -I scripts/spark-test.py logs my-name [-f]
-python3 -I scripts/spark-test.py result my-name        # after --detach: the test result lines, failing tests and the JSON summary
+python3 -I scripts/spark-test.py result my-name        # after --detach: the result, the failing tests and the JSON summary
 python3 -I scripts/spark-test.py down my-name          # deletes the run and its database; the cache volume stays
 python3 -I scripts/spark-test.py purge                 # deletes idle slots and their cache volumes
 ```
 
+When to use what:
+
+- A branch that is **already pushed**: GitHub CI gives the full library result fastest (four parallel shards, about 7 to 13 minutes) and is the merge gate. A Spark library run takes about 45 minutes on 1.8 CPUs.
+- Spark is for **pre-push** runs (a commit pushed only so the job can fetch it), **extra concurrency** and **targeted reruns** (`--test-args`), and it does not queue behind the local build slot. A Spark run counts as "run the checks" in the execution loop; it never replaces green CI on amd64, which the coordinator needs to merge.
+- A **suspected flake**: rerun the test alone about 20 times (`--test-args <test>` repeated, or locally), file an issue either way, and require green CI on amd64 before merge. Never merge on the strength of a rerun.
+
+Rules of the tool:
+
 - The ref must already be pushed: the job fetches the public repository at the exact commit the ref resolves to and verifies `HEAD`. Nothing but the job manifest and the script is uploaded.
-- At most two runs at once (two cache slots): the shared quota leaves room for two runs and one demo environment, and a third `run` is refused with a message instead of a pod stuck Pending. `run` waits and exits 0 only if every selected suite passed (1 for failures, 2 for errors of the tool), then removes the run; `down` anything left behind.
-- `lib` is the gateway library on a disposable CloudNativePG PostgreSQL 17, in four processes one after the other (as CI's shards: one process of 2,465 tests needs more than 10 GiB), `integration` the gateway's integration targets, the runtime-privilege and ignored probes, the tools and the doctests (not `filestore_s3` or the backup drill, which need Docker), `web` is `npm ci`, typecheck and Vitest, `checks` is `cargo fmt` and both Clippy invocations, `all` is the four.
-- A run is an arm64 run on 1.8 CPUs. It shows that the suites pass on arm64 and finds failures early; it does not replace GitHub CI (amd64, Docker-based tests, the browser suite, the image and supply-chain jobs), and the coordinator still needs green GitHub CI to merge. Timing-sensitive tests can fail under the limited CPU: rerun a failure alone (`--test-args`) before calling it real.
+- **Trust.** The job executes the ref's build scripts, proc-macros, npm install scripts and tests, with internet egress and a cache volume that persists between runs. Test only refs you would run on your own machine; dependency updates are tested only after their review (Supply chain, above); `purge` after a ref you would not run locally. The cache is trusted only as far as the refs that ran in the slot: what cargo, rustup, git and npm cannot verify is reset at the start of each run, `target/` is kept for speed (`--fresh` empties it).
+- At most two runs at once (two cache slots): the shared quota leaves room for two runs and one demo environment, and a third `run` is refused with a message instead of a pod stuck Pending. `--fast` raises only the CPU limit when the free quota allows. `run` waits and exits **0 only if every selected suite passed in full**; 1 when a suite failed (a run that executed no tests fails), 2 for an error of the tool or the platform, a killed pod (out of memory, deadline) or a failed setup (for example an unpushed commit), 3 for a pass of a run narrowed by `--test-args` (`passed (partial)`: never a pass of the suite), 4 for `--detach` (started, outcome unknown). A run removes itself after printing its result and saving the sanitised log of a run that did not pass (`.local/spark-test/`); any other exit prints "run kept: `down <name>`".
+- `lib` is the gateway library on a disposable CloudNativePG PostgreSQL 17, in four processes one after the other, split as CI's shards (one process of the whole library needs more than 10 GiB); `integration` the gateway's integration targets, the runtime-privilege and ignored probes, the tools and the doctests; `web` is `npm ci`, typecheck and Vitest; `checks` is `cargo fmt` and both Clippy invocations; `all` is the four. `deploy/spark/test-coverage.json` lists what CI runs that this does not, and every summary repeats it.
+- **What an arm64 run does not prove:** amd64 behaviour; `filestore_s3` and the backup drill (they need Docker); the browser suite, the container and staging tests, the image, scan and signature jobs, `cargo deny`, secret scanning and the Helm job; the other `npm run test:*` scripts of CI's web job (`test:sdk-bases`, `test:demo`, `test:supply-chain`, `test:ci`, `test:conflict-markers`, `test:structure`, `test:rules`, `test:monitoring`, `test:staging`) and `build:web`; behaviour with more than 1.8 CPUs. Node is the Dockerfile image's 22.23.4 (CI's `setup-node` installs another 22.x patch release) and the pod's Python is 3.11.
 
 ## Checks
 

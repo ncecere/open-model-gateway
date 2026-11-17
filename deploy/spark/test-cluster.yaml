@@ -21,9 +21,6 @@ spec:
   storage:
     size: 8Gi
     storageClass: local-path
-  postgresql:
-    parameters:
-      max_connections: "200"
   resources:
     requests: {cpu: 250m, memory: 512Mi}
     limits: {cpu: "1", memory: 1Gi}

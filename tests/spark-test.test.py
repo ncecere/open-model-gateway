@@ -23,12 +23,14 @@ for _name in [name for name in os.environ if name.startswith("GIT_")]:
     del os.environ[_name]
 
 SHA = "0123456789abcdef" * 2 + "01234567"
+NONCE = "00112233aabbccdd"
 # Refs resolve to a fixed commit: the tests never read this repository's history.
 spark_env.resolve_ref = lambda ref, runner=None, repo=None: spark_env.Ref(ref, SHA, False)
 
 SERVER = "https://bitop-spark.taila06ed.ts.net:6443"
 CONFIG = Path("/k/spark.yaml")
 BASE = "coder-03"
+LABELS = {tool.MANAGED_LABEL: tool.MANAGED_VALUE}
 
 
 def config_view(server=SERVER, namespace=BASE):
@@ -45,19 +47,28 @@ def quota_json(**free):
     return json.dumps({"items": [{"status": {"hard": hard, "used": {key: "0" for key in hard}}}]})
 
 
-class Cluster:
-    """A fake `run`: models the slot namespaces, their lease ConfigMaps and one job, and records every call."""
+def marker(kind, nonce=NONCE, **fields):
+    return f"::omg-test::{nonce}:: {kind}" + "".join(f" {k}={v}" for k, v in fields.items())
 
-    def __init__(self, namespaces=(), leases=None, job="running", leftovers=0, fail_on=None, log="", pod_phase="Running", quota=None):
+
+class Cluster:
+    """A fake `run`: models the slot namespaces (labels, terminating), their lease ConfigMaps and one job, and records every call."""
+
+    def __init__(self, namespaces=(), leases=None, job="running", leftovers=0, fail_on=None, log="", pod=None, quota=None, foreign=(), terminating=()):
         self.calls = []
-        self.quota = quota if quota is not None else quota_json()
         self.namespaces = set(namespaces)
+        self.foreign = set(foreign)  # exist without our label
+        self.terminating = set(terminating)
         self.leases = dict(leases or {})  # slot -> data
         self.job = job
         self.leftovers = leftovers
         self.fail_on = fail_on
         self.log = log
-        self.pod_phase = pod_phase
+        self.pod = pod
+        self.quota = quota if quota is not None else quota_json()
+
+    def exists(self, slot):
+        return slot in self.namespaces or slot in self.foreign or slot in self.terminating
 
     def __call__(self, command, stdin=None, capture=False):
         self.calls.append((list(command), stdin))
@@ -68,11 +79,17 @@ class Cluster:
             return config_view()
         ns = re.search(r"-n (\S+)", joined)
         slot = ns.group(1).rsplit("-", 1)[1] if ns else None
-        if "create namespace" in joined:
-            self.namespaces.add(command[-1].rsplit("-", 1)[1])
+        m = re.search(r"get namespace (\S+) --ignore-not-found", joined)
+        if m:
+            s = m.group(1).rsplit("-", 1)[1]
+            if not self.exists(s):
+                return ""
+            return json.dumps({"metadata": {"name": m.group(1), "labels": {} if s in self.foreign else dict(LABELS)}, "status": {"phase": "Terminating" if s in self.terminating else "Active"}})
+        if "create -f -" in joined and stdin and '"kind": "Namespace"' in stdin:
+            document = json.loads(stdin)
+            self.namespaces.add(document["metadata"]["name"].rsplit("-", 1)[1])
+            assert document["metadata"]["labels"] == LABELS
             return ""
-        if joined.endswith("get namespace -o name"):
-            return "".join(f"namespace/{BASE}-omg-test-{s}\nnamespace/{BASE}-omg-other\n" for s in sorted(self.namespaces))
         if "get networkpolicy" in joined:
             return "networkpolicy/a\nnetworkpolicy/b\n"
         if "create configmap omg-test-lease" in joined:
@@ -86,14 +103,22 @@ class Cluster:
             self.leases.pop(slot, None)
             return ""
         if "get job/omg-test" in joined:
-            conditions = {"complete": [{"type": "Complete", "status": "True"}], "failed": [{"type": "Failed", "status": "True"}], "running": []}[self.job]
+            if self.job is None:
+                return ""
+            conditions = {"complete": [{"type": "Complete", "status": "True"}], "failed": [{"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded"}], "deadline": [{"type": "Failed", "status": "True", "reason": "DeadlineExceeded"}], "running": []}[self.job]
             return json.dumps({"status": {"conditions": conditions, "startTime": "2026-11-16T10:00:00Z", "completionTime": "2026-11-16T10:10:05Z"}})
         if "get pods -l job-name=omg-test" in joined:
-            return json.dumps({"items": [{"status": {"phase": self.pod_phase, "containerStatuses": [{"name": "tests", "state": {"terminated": {"exitCode": 137, "reason": "OOMKilled"}}}]}}]})
+            if self.pod == "none":
+                return ""
+            status = {"phase": "Running", "containerStatuses": [{"name": "tests", "state": {"terminated": {"exitCode": 137, "reason": "OOMKilled"}}}]}
+            status.update(self.pod or {})
+            return json.dumps({"items": [{"status": status}]})
         if "exec job/omg-test" in joined:
             return "lib/lib\n"
         if "logs job/omg-test" in joined:
             return self.log
+        if "get events" in joined:
+            return "FailedScheduling   0/1 nodes: Insufficient cpu\n"
         if "get resourcequota" in joined:
             return self.quota
         if "get persistentvolumeclaim omg-test-cache" in joined:
@@ -106,6 +131,20 @@ class Cluster:
         return [" ".join(command) for command, _ in self.calls]
 
 
+class Primed(Cluster):
+    """A cluster whose leases carry the nonce the test log was written with (the real nonce is random per run)."""
+
+    def __call__(self, command, stdin=None, capture=False):
+        result = super().__call__(command, stdin, capture)
+        if "create configmap omg-test-lease" in " ".join(command):
+            self.leases["s1"]["nonce"] = NONCE
+        return result
+
+
+def lease(name="probe", suite="lib", nonce=NONCE, **extra):
+    return {"name": name, "suite": suite, "ref": "main", "sha": SHA, "nonce": nonce, "started": "10000", "started_ms": "10000000", **extra}
+
+
 def make(cluster, clock=None, sleep=None):
     ticks = iter(range(10_000, 10_000_000, 1))
     return tool.SparkTest(CONFIG, runner=cluster, clock=clock or (lambda: next(ticks)), sleep=sleep or (lambda seconds: None))
@@ -115,39 +154,30 @@ def quiet():
     return contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO())
 
 
-LOG_PASS = f"""::omg-test:: run suite=all commit={SHA}
-::omg-test:: step-start suite=setup name=source
-::omg-test:: source commit={SHA}
-::omg-test:: step-end suite=setup name=source exit=0 seconds=2
-::omg-test:: step-start suite=lib name=lib
-running 3 tests
-test a::b ... ok
-test result: ok. 2441 passed; 0 failed; 9 ignored; 0 measured; 0 filtered out; finished in 3000.12s
-::omg-test:: step-end suite=lib name=lib exit=0 seconds=3100
-::omg-test:: step-start suite=integration name=targets
-test result: ok. 10 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.00s
-test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
-::omg-test:: step-end suite=integration name=targets exit=0 seconds=50
-::omg-test:: step-start suite=web name=vitest
- Test Files  200 passed (200)
-      Tests  1903 passed (1903)
-::omg-test:: step-end suite=web name=vitest exit=0 seconds=90
-::omg-test:: done exit=0 seconds=3300
-"""
-
-LOG_FAIL = f"""::omg-test:: step-start suite=lib name=lib
-test good::one ... ok
-test bad::one ... FAILED
-test bad::two ... FAILED
-test result: FAILED. 8 passed; 2 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.00s
-::omg-test:: step-end suite=lib name=lib exit=101 seconds=40
-::omg-test:: step-start suite=web name=vitest
- FAIL  src/a.test.ts > suite > fails
- FAIL  src/a.test.ts > suite > fails
-\x1b[31m Tests  1 failed | 1902 skipped | 4 passed (1907)\x1b[0m
-::omg-test:: step-end suite=web name=vitest exit=1 seconds=9
-::omg-test:: done exit=1 seconds=60
-"""
+def log_for(suite="lib", *, nonce=NONCE, passed=2456, ignored=9, failed=0, extra="", steps=None, done=True):
+    """A log with the markers and result lines of a run of the suite; the pieces a test breaks are parameters."""
+    out = [marker("run", nonce, suite=suite, commit=SHA), marker("source", nonce, commit=SHA)]
+    parts = tool.SUITE_PARTS[suite]
+    for part in parts:
+        names = list(tool.REQUIRED_STEPS.get(part, ()))
+        if part == "lib":
+            names += [f"shard-{i}" for i in range(tool.LIB_SHARDS)]
+        for name in names:
+            if steps is not None and f"{part}/{name}" not in steps:
+                continue
+            out.append(marker("step-start", nonce, suite=part, name=name))
+            if part == "web" and name == "vitest":
+                out.append(f"      Tests  {passed} passed ({passed})" if part != "x" else "")
+            elif part in ("lib", "integration") and (name.startswith("shard-") or name in ("targets", "doctests")):
+                each = passed // 4 if part == "lib" else passed
+                out.append(f"test result: ok. {each} passed; {failed} failed; {ignored if name == 'shard-0' else 0} ignored; 0 measured; 0 filtered out; finished in 1.00s")
+            out.append(marker("step-end", nonce, suite=part, name=name, exit=0, seconds=1))
+    if "lib" in parts:
+        out.append(marker("lib-inventory", nonce, tests=(passed // 4) * 4 + (ignored if "lib" in parts else 0)))
+    out.append(extra)
+    if done:
+        out.append(marker("done", nonce, exit=0, seconds=9))
+    return "\n".join(out) + "\n"
 
 
 class Names(unittest.TestCase):
@@ -172,7 +202,6 @@ class Names(unittest.TestCase):
         self.assertEqual(len(tool.SLOTS), 2)
 
     def test_spark_env_and_spark_test_namespaces_never_overlap(self):
-        # spark-env.py environments are <base>-omg-<name>; this tool owns <base>-omg-test-*.
         for slot in tool.SLOTS:
             with self.assertRaises(spark_env.SparkError):
                 spark_env.check_namespace(BASE, f"{BASE}-omg-test-{slot}")
@@ -213,19 +242,43 @@ class Safety(unittest.TestCase):
                 tool.spark_env.kubeconfig_path({"SPARK_KUBECONFIG": str(Path(folder) / "absent.yaml")})
 
     def test_every_command_is_kubectl_with_the_spark_kubeconfig_and_an_owned_namespace(self):
-        cluster = Cluster(job="complete", log=LOG_PASS)
-        spark = make(cluster)
+        cluster = Primed(job="complete", log=log_for("web", passed=1903))
         with contextlib.redirect_stdout(io.StringIO()):
-            spark.run("probe", "web", "HEAD", "", 60, keep=False, detach=False, summary_path=None)
-        self.assertTrue(cluster.calls)
+            make(cluster).run("probe", "web", "HEAD", "", 60, keep=False, detach=False, summary_path=None)
         for command, _ in cluster.calls:
             self.assertEqual(command[:3], ["kubectl", "--kubeconfig", str(CONFIG)], command)
             self.assertNotIn("helm", command)
             if "-n" in command:
                 tool.check_namespace(BASE, command[command.index("-n") + 1])
             elif "config" not in command:
-                self.assertTrue("namespace" in command or "resourcequota" in command, command)  # the base namespace's quota, or listing and creating the slot namespaces
+                # cluster-wide only: the base namespace's quota, and getting or creating one of the two slot namespaces by name
+                named = [w for w in command if re.fullmatch(rf"{BASE}-omg-test-s[12]", w)]
+                self.assertTrue("resourcequota" in command or named or ("create" in command and "-f" in command), command)
         self.assertFalse([c for c, _ in cluster.calls if "delete" in c and "namespace" in c], "down never deletes a namespace")
+
+    def test_a_namespace_without_our_label_is_never_used_stopped_or_deleted(self):
+        for action in (lambda s: s.status(), lambda s: s.down("probe"), lambda s: s.purge(), lambda s: s.acquire("probe", {"suite": "lib"}), lambda s: s.find("probe")):
+            cluster = Cluster(foreign={"s1"}, leases={"s1": lease()})
+            with contextlib.redirect_stdout(io.StringIO()):
+                try:
+                    action(make(cluster))
+                except tool.SparkError as error:
+                    self.assertIn("managed-by", str(error))
+            self.assertFalse([c for c in cluster.commands() if " delete " in c or "create configmap" in c], cluster.commands())
+
+    def test_slot_namespaces_are_created_with_the_label(self):
+        cluster = Cluster()
+        make(cluster).acquire("probe", {"suite": "lib"})
+        create = [(c, d) for c, d in cluster.calls if d and '"Namespace"' in d]
+        self.assertEqual(len(create), 1)
+        self.assertEqual(json.loads(create[0][1])["metadata"]["labels"], LABELS)
+
+    def test_a_namespace_being_deleted_gives_a_retry_message(self):
+        cluster = Cluster(terminating={"s1"})
+        with self.assertRaises(tool.SparkError) as caught:
+            make(cluster).acquire("probe", {"suite": "lib"})
+        self.assertIn("being deleted", str(caught.exception))
+        self.assertIn("retry", str(caught.exception))
 
     def test_a_missing_tool_is_reported(self):
         with self.assertRaises(tool.SparkError):
@@ -236,10 +289,44 @@ class Rendering(unittest.TestCase):
     JOB = (ROOT / "deploy" / "spark" / "test-job.yaml").read_text()
 
     def test_a_valid_job(self):
-        text = tool.render_job(self.JOB, "lib", SHA, "", 90)
+        text = tool.render_job(self.JOB, "lib", SHA, "", 90, nonce=NONCE)
         self.assertIn(f'value: "{SHA}"', text)
+        self.assertIn(f'value: "{NONCE}"', text)
         self.assertIn("activeDeadlineSeconds: 5400", text)
+        self.assertIn('cpu: "1800m", memory: 10Gi', text)
         self.assertNotRegex(text, r"__[A-Z_]+__")
+        self.assertIn('{name: OMG_JOBS, value: "2"}', text)
+        self.assertIn('{name: OMG_TEST_THREADS, value: "4"}', text)
+        self.assertIn('{name: OMG_WEB_WORKERS, value: "1"}', text)
+        self.assertIn('{name: OMG_FRESH, value: "0"}', text)
+
+    def test_the_password_is_not_in_the_environment(self):
+        text = tool.render_job(self.JOB, "lib", SHA, "", 90, nonce=NONCE)
+        self.assertNotIn("PGPASSWORD", text)
+        self.assertNotIn("secretKeyRef", text)
+        self.assertIn("secretName: omg-test-pg-superuser", text)
+
+    def test_fast_raises_the_limit_and_what_follows_it_but_not_the_request(self):
+        text = tool.render_job(self.JOB, "lib", SHA, "", 90, nonce=NONCE, cpu_limit_m=5500)
+        self.assertIn('limits: {cpu: "5500m", memory: 10Gi}', text)
+        self.assertIn('requests: {cpu: "1500m", memory: 6Gi}', text)
+        self.assertIn('{name: OMG_JOBS, value: "4"}', text)
+        self.assertIn('{name: OMG_TEST_THREADS, value: "8"}', text)
+        self.assertIn('{name: OMG_WEB_WORKERS, value: "4"}', text)
+        self.assertEqual(tool.cpu_plan(1800), {"jobs": 2, "threads": 4, "workers": 1})
+        self.assertEqual(tool.cpu_plan(6000), {"jobs": 4, "threads": 8, "workers": 4})
+        for bad in (1000, 6001, "5000", None):
+            with self.assertRaises(tool.SparkError, msg=repr(bad)):
+                tool.render_job(self.JOB, "lib", SHA, "", 90, nonce=NONCE, cpu_limit_m=bad)
+
+    def test_fresh_and_the_nonce(self):
+        self.assertIn('{name: OMG_FRESH, value: "1"}', tool.render_job(self.JOB, "lib", SHA, "", 90, nonce=NONCE, fresh=True))
+        for bad in ("x", NONCE + "0", NONCE.upper(), ""):
+            if bad == "":
+                continue
+            with self.assertRaises(tool.SparkError, msg=bad):
+                tool.render_job(self.JOB, "lib", SHA, "", 90, nonce=bad)
+        self.assertNotEqual(tool.render_job(self.JOB, "lib", SHA, "", 90), tool.render_job(self.JOB, "lib", SHA, "", 90), "a random nonce per rendering")
 
     def test_test_args_are_checked_and_limited_to_lib_and_web(self):
         self.assertIn('"--exact management::tests::x"', tool.render_job(self.JOB, "lib", SHA, "--exact management::tests::x", 60))
@@ -250,6 +337,15 @@ class Rendering(unittest.TestCase):
         for suite in ("integration", "checks", "all"):
             with self.assertRaises(tool.SparkError, msg=suite):
                 tool.render_job(self.JOB, suite, SHA, "x", 60)
+
+    def test_arguments_that_do_not_run_tests_are_refused(self):
+        for bad in ("--list", "--help", "-h", "--version", "--format=json", "--format terse", "x --list", "--show-output", "--shuffle", "--shuffle-seed=3", "--report-time", "--ensure-time",
+                    "--watch", "--ui", "-u", "--update", "--reporter=json", "--coverage"):
+            for suite in ("lib", "web"):
+                with self.assertRaises(tool.SparkError, msg=f"{suite} {bad}"):
+                    tool.validate_test_args(bad, suite)
+        for good in ("--exact a::b", "--ignored a_b", "metrics_export::tests", "src/x.test.ts", "--nocapture a"):
+            tool.validate_test_args(good, "lib")
 
     def test_suite_commit_and_timeout_are_checked(self):
         for bad in ("", "rm", "LIB", "lib;x"):
@@ -262,21 +358,19 @@ class Rendering(unittest.TestCase):
             with self.assertRaises(tool.SparkError, msg=minutes):
                 tool.render_job(self.JOB, "lib", SHA, "", minutes)
 
+    def test_default_deadlines_per_suite(self):
+        self.assertEqual(tool.DEFAULT_TIMEOUT_MINUTES, {"web": 30, "checks": 45, "integration": 60, "lib": 120, "all": 180})
+        cluster = Cluster()
+        with contextlib.redirect_stdout(io.StringIO()):
+            make(cluster).run("probe", "web", "HEAD", "", None, keep=False, detach=True, summary_path=None)
+        job = next(d for _, d in cluster.calls if d and "kind: Job" in d)
+        self.assertIn("activeDeadlineSeconds: 1800", job)
+
     def test_a_manifest_without_a_placeholder_or_with_a_leftover_is_refused(self):
         with self.assertRaises(tool.SparkError):
             tool.render_job(self.JOB.replace("__SHA__", "x"), "lib", SHA, "", 60)
         with self.assertRaises(tool.SparkError):
             tool.render_job(self.JOB + "\n# __OTHER__\n", "lib", SHA, "", 60)
-
-    def test_the_run_script_is_valid_bash_and_prints_no_password(self):
-        import subprocess
-        script = ROOT / "deploy" / "spark" / "test-run.sh"
-        subprocess.run(["bash", "-n", str(script)], check=True)
-        text = script.read_text()
-        self.assertNotRegex(text, r"(?m)^\s*(set -x|set -o xtrace)")
-        self.assertNotIn("echo \"$PGPASSWORD\"", text)
-        self.assertNotIn("printenv", text)
-        self.assertRegex(text, r"main 2>&1 \| redact\nexit \"\$\{PIPESTATUS\[0\]\}\"")
 
     def test_the_password_secret_is_random_redacted_and_not_an_argument(self):
         first, second = json.loads(tool.superuser_secret()), json.loads(tool.superuser_secret())
@@ -287,20 +381,20 @@ class Rendering(unittest.TestCase):
 
 
 class Slots(unittest.TestCase):
-    INFO = {"suite": "lib", "ref": "main", "sha": SHA}
+    INFO = {"suite": "lib", "ref": "main", "sha": SHA, "nonce": NONCE}
 
-    def acquire(self, cluster, name="new"):
+    def acquire(self, cluster, name="new", info=None):
         spark = make(cluster)
-        return spark, spark.acquire(name, dict(self.INFO))
+        return spark, spark.acquire(name, dict(info or self.INFO))
 
     def test_the_first_run_creates_one_slot_namespace_and_waits_for_its_policies(self):
         cluster = Cluster()
         _, slot = self.acquire(cluster)
         self.assertEqual(slot, "s1")
         commands = cluster.commands()
-        created = [c for c in commands if "create namespace" in c]
-        self.assertEqual(created, [f"kubectl --kubeconfig {CONFIG} create namespace {BASE}-omg-test-s1"])
-        self.assertLess(commands.index(created[0]), next(i for i, c in enumerate(commands) if "get networkpolicy" in c))
+        created = [i for i, (c, d) in enumerate(cluster.calls) if d and '"Namespace"' in d]
+        self.assertEqual(len(created), 1)
+        self.assertLess(created[0], next(i for i, c in enumerate(commands) if "get networkpolicy" in c))
         self.assertLess(next(i for i, c in enumerate(commands) if "get networkpolicy" in c), next(i for i, c in enumerate(commands) if "create configmap omg-test-lease" in c))
         self.assertEqual(cluster.leases["s1"]["name"], "new")
         self.assertEqual(cluster.leases["s1"]["sha"], SHA)
@@ -309,31 +403,30 @@ class Slots(unittest.TestCase):
         cluster = Cluster(namespaces={"s2"})
         _, slot = self.acquire(cluster)
         self.assertEqual(slot, "s2")
-        self.assertFalse([c for c in cluster.commands() if "create namespace" in c])
+        self.assertFalse([d for _, d in cluster.calls if d and '"Namespace"' in d])
 
     def test_the_second_slot_is_created_when_the_first_is_busy(self):
-        cluster = Cluster(namespaces={"s1"}, leases={"s1": {"name": "other", "suite": "web", "ref": "main", "sha": SHA}})
+        cluster = Cluster(namespaces={"s1"}, leases={"s1": lease("other", "web")})
         _, slot = self.acquire(cluster)
         self.assertEqual(slot, "s2")
-        self.assertEqual(len([c for c in cluster.commands() if "create namespace" in c]), 1)
+        self.assertEqual(len([d for _, d in cluster.calls if d and '"Namespace"' in d]), 1)
 
     def test_a_third_run_is_refused_with_a_clear_message_and_nothing_is_created(self):
-        busy = {"suite": "lib", "ref": "main", "sha": SHA}
-        cluster = Cluster(namespaces={"s1", "s2"}, leases={"s1": {"name": "one", **busy}, "s2": {"name": "two", **busy}})
-        spark = make(cluster)
+        cluster = Cluster(namespaces={"s1", "s2"}, leases={"s1": lease("one"), "s2": lease("two")})
         with self.assertRaises(tool.SparkError) as caught:
-            spark.acquire("three", dict(self.INFO))
+            make(cluster).acquire("three", dict(self.INFO))
         message = str(caught.exception)
         for needle in ("all 2 test slots are in use", "one (lib main", "two (lib main", "down"):
             self.assertIn(needle, message)
-        self.assertFalse([c for c in cluster.commands() if "create" in c and "namespace" in c])
+        self.assertFalse([c for c in cluster.commands() if "create" in c])
         self.assertEqual(set(cluster.leases), {"s1", "s2"})
 
     def test_a_lease_created_by_someone_else_in_the_meantime_moves_to_the_next_slot(self):
         class Racing(Cluster):
             def __call__(self, command, stdin=None, capture=False):
-                if "create configmap omg-test-lease" in " ".join(command) and "omg-test-s1" in " ".join(command) and "s1" not in self.leases:
-                    self.leases["s1"] = {"name": "winner"}
+                joined = " ".join(command)
+                if "create configmap omg-test-lease" in joined and "omg-test-s1" in joined and "s1" not in self.leases:
+                    self.leases["s1"] = lease("winner", nonce="ffffffffffffffff")
                 return super().__call__(command, stdin, capture)
 
         cluster = Racing(namespaces={"s1", "s2"})
@@ -341,10 +434,27 @@ class Slots(unittest.TestCase):
         self.assertEqual(slot, "s2")
 
     def test_a_duplicate_name_is_refused(self):
-        cluster = Cluster(namespaces={"s1"}, leases={"s1": {"name": "same", "suite": "lib", "ref": "main", "sha": SHA}})
+        cluster = Cluster(namespaces={"s1"}, leases={"s1": lease("same")})
         with self.assertRaises(tool.SparkError) as caught:
             self.acquire(cluster, "same")
         self.assertIn("already exists", str(caught.exception))
+
+    def test_the_same_name_started_twice_at_once_gives_way_for_the_later_lease(self):
+        earlier = lease("same", nonce="aaaaaaaaaaaaaaaa", started_ms="1000")
+
+        class Simultaneous(Cluster):
+            def __call__(self, command, stdin=None, capture=False):
+                result = super().__call__(command, stdin, capture)
+                if "create configmap omg-test-lease" in " ".join(command) and "omg-test-s1" in " ".join(command):
+                    self.leases["s2"] = earlier  # the other process leased slot s2 just before
+                return result
+
+        cluster = Simultaneous(namespaces={"s1", "s2"})
+        with self.assertRaises(tool.SparkError) as caught:
+            self.acquire(cluster, "same", info={**self.INFO, "nonce": "bbbbbbbbbbbbbbbb"})
+        self.assertIn("same time", str(caught.exception))
+        self.assertNotIn("s1", cluster.leases, "the later lease is released")
+        self.assertEqual(cluster.leases["s2"], earlier)
 
     def test_a_forbidden_namespace_that_is_not_ready_is_retried_but_other_errors_are_not(self):
         class Slow(Cluster):
@@ -360,7 +470,7 @@ class Slots(unittest.TestCase):
         _, slot = self.acquire(Slow())
         self.assertEqual(slot, "s1")
         with self.assertRaises(tool.SparkError):
-            self.acquire(Cluster(fail_on="create namespace"))
+            self.acquire(Cluster(fail_on="create -f -"))
 
     def test_a_namespace_that_never_gets_its_policies_is_not_used(self):
         class Never(Cluster):
@@ -372,161 +482,6 @@ class Slots(unittest.TestCase):
         with self.assertRaises(tool.SparkError) as caught:
             self.acquire(Never())
         self.assertIn("two network policies", str(caught.exception))
-
-
-class Lifecycle(unittest.TestCase):
-    def test_start_applies_the_cache_then_secrets_script_database_and_job_in_that_order(self):
-        cluster = Cluster()
-        spark = make(cluster)
-        with contextlib.redirect_stdout(io.StringIO()):
-            slot, resolved = spark.start("probe", "lib", "HEAD", "", 90)
-        self.assertEqual(slot, "s1")
-        commands = cluster.commands()
-        order = [next(i for i, c in enumerate(commands) if needle in c) for needle in ("create configmap omg-test-lease", "apply -f -", "create -f -", "create configmap omg-test-script")]
-        self.assertEqual(order, sorted(order))
-        stdins = [data for _, data in cluster.calls if data]
-        self.assertEqual(len(stdins), 4)
-        self.assertIn("PersistentVolumeClaim", stdins[0])
-        self.assertIn('"Secret"', stdins[1])
-        self.assertIn("kind: Cluster", stdins[2])
-        self.assertIn("kind: Job", stdins[3])
-        self.assertIn(resolved.sha, stdins[3])
-
-    def test_no_secret_is_ever_a_command_line_argument(self):
-        cluster = Cluster()
-        spark = make(cluster)
-        with contextlib.redirect_stdout(io.StringIO()):
-            spark.start("probe", "lib", "HEAD", "", 90)
-        secret = json.loads(next(data for _, data in cluster.calls if data and '"Secret"' in data))["stringData"]["password"]
-        self.assertFalse([c for c in cluster.commands() if secret in c])
-        for _, data in cluster.calls:
-            if data and secret in data:
-                self.assertIn('"Secret"', data)
-
-    def test_a_failed_setup_removes_the_run_and_frees_the_slot(self):
-        cluster = Cluster(fail_on="kind: Job")
-        cluster.fail_on = None
-
-        class Failing(Cluster):
-            def __call__(self, command, stdin=None, capture=False):
-                if stdin and "kind: Job" in stdin:
-                    raise tool.SparkError("kubectl create failed (exit 1): exceeded quota")
-                return super().__call__(command, stdin, capture)
-
-        cluster = Failing()
-        spark = make(cluster)
-        out, err = quiet()
-        with out, err, self.assertRaises(tool.SparkError):
-            spark.start("probe", "lib", "HEAD", "", 90)
-        self.assertEqual(cluster.leases, {}, "the lease is released")
-        self.assertTrue([c for c in cluster.commands() if "delete job omg-test" in c])
-
-    def test_down_removes_the_run_but_never_a_namespace_and_the_lease_goes_last(self):
-        cluster = Cluster(namespaces={"s1"}, leases={"s1": {"name": "probe", "suite": "lib", "ref": "main", "sha": SHA}})
-        with contextlib.redirect_stdout(io.StringIO()):
-            make(cluster).down("probe")
-        commands = cluster.commands()
-        deleted = [c for c in commands if " delete " in c]
-        self.assertTrue(deleted[-1].endswith("delete configmap omg-test-lease --ignore-not-found"), deleted)
-        self.assertTrue(any("delete cluster.postgresql.cnpg.io omg-test-db" in c for c in deleted))
-        self.assertFalse([c for c in deleted if "namespace" in c or "persistentvolumeclaim" in c or "pvc" in c], "the cache volume is not deleted")
-        self.assertEqual(cluster.leases, {})
-
-    def test_down_keeps_the_lease_when_something_is_left_behind(self):
-        cluster = Cluster(namespaces={"s1"}, leases={"s1": {"name": "probe"}}, leftovers=1)
-        with self.assertRaises(tool.SparkError) as caught:
-            make(cluster).down("probe")
-        self.assertIn("omg-test-db-0", str(caught.exception))
-        self.assertIn("s1", cluster.leases)
-
-    def test_down_of_an_unknown_run_changes_nothing(self):
-        cluster = Cluster(namespaces={"s1"})
-        with self.assertRaises(tool.SparkError):
-            make(cluster).down("ghost")
-        self.assertFalse([c for c in cluster.commands() if " delete " in c])
-
-    def test_purge_deletes_idle_slot_namespaces_only(self):
-        cluster = Cluster(namespaces={"s1", "s2"}, leases={"s1": {"name": "busy", "suite": "lib", "ref": "main", "sha": SHA}})
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            make(cluster).purge()
-        deleted = [c for c in cluster.commands() if "delete namespace" in c]
-        self.assertEqual(deleted, [f"kubectl --kubeconfig {CONFIG} delete namespace {BASE}-omg-test-s2 --wait=false"])
-        self.assertIn("in use", out.getvalue())
-
-    def test_status_lists_slots(self):
-        cluster = Cluster(namespaces={"s1", "s2"}, leases={"s1": {"name": "busy", "suite": "lib", "ref": "main", "sha": SHA, "started": "10000"}})
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            make(cluster).status()
-        self.assertIn("s1: busy (lib main", out.getvalue())
-        self.assertIn("s2: free", out.getvalue())
-
-    def test_run_waits_prints_the_result_and_downs(self):
-        cluster = Cluster(job="complete", log=LOG_PASS)
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            code = make(cluster).run("probe", "all", "HEAD", "", 60, keep=False, detach=False, summary_path=None)
-        self.assertEqual(code, 0)
-        self.assertIn("test result: ok. 2441 passed; 0 failed; 9 ignored", out.getvalue())
-        self.assertEqual(cluster.leases, {})
-
-    def test_a_failing_run_exits_nonzero_names_the_failures_and_is_still_removed(self):
-        cluster = Cluster(job="failed", log=LOG_FAIL.replace("\x1b", "\x1b"))
-        out = io.StringIO()
-        with tempfile.TemporaryDirectory() as folder, contextlib.redirect_stdout(out):
-            path = Path(folder) / "summary.json"
-            code = make(cluster).run("probe", "all", "HEAD", "", 60, keep=False, detach=False, summary_path=str(path))
-            summary = json.loads(path.read_text())
-            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
-        self.assertEqual(code, 1)
-        self.assertEqual(summary["result"], "failed")
-        self.assertEqual(summary["failed_tests"], ["bad::one", "bad::two", "src/a.test.ts > suite > fails"])
-        self.assertIn("failing tests:", out.getvalue())
-        self.assertIn("bad::two", out.getvalue())
-        self.assertEqual(cluster.leases, {})
-
-    def test_keep_and_detach_leave_the_run_in_place(self):
-        cluster = Cluster(job="complete", log=LOG_PASS)
-        with contextlib.redirect_stdout(io.StringIO()):
-            make(cluster).run("probe", "all", "HEAD", "", 60, keep=True, detach=False, summary_path=None)
-        self.assertIn("s1", cluster.leases)
-        cluster = Cluster()
-        with contextlib.redirect_stdout(io.StringIO()):
-            make(cluster).run("probe", "all", "HEAD", "", 60, keep=False, detach=True, summary_path=None)
-        self.assertIn("s1", cluster.leases)
-
-    def test_a_run_that_has_not_finished_has_no_result(self):
-        cluster = Cluster(namespaces={"s1"}, leases={"s1": {"name": "probe", "suite": "lib", "ref": "main", "sha": SHA}}, job="running")
-        with self.assertRaises(tool.SparkError):
-            make(cluster).result("probe")
-
-    def test_a_job_that_ran_another_commit_is_refused(self):
-        other = LOG_PASS.replace(f"source commit={SHA}", "source commit=" + "f" * 40)
-        cluster = Cluster(namespaces={"s1"}, leases={"s1": {"name": "probe", "suite": "lib", "ref": "main", "sha": SHA}}, job="complete", log=other)
-        with self.assertRaises(tool.SparkError):
-            make(cluster).result("probe")
-
-    def test_a_job_without_a_pod_names_the_warning_events(self):
-        class NoPod(Cluster):
-            def __call__(self, command, stdin=None, capture=False):
-                joined = " ".join(command)
-                if "get pods -l job-name=omg-test" in joined:
-                    return ""
-                if "get events" in joined:
-                    return "FailedCreate   exceeded quota: requests.cpu\n"
-                return super().__call__(command, stdin, capture)
-
-        cluster = NoPod(namespaces={"s1"}, leases={"s1": {"name": "probe", "suite": "lib", "ref": "main", "sha": SHA, "started": "10000"}}, job="running", pod_phase="Pending")
-        now = [10_000]
-
-        def sleep(seconds):
-            now[0] += seconds
-
-        spark = tool.SparkTest(CONFIG, runner=cluster, clock=lambda: now[0], sleep=sleep)
-        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(tool.SparkError) as caught:
-            spark.wait("probe", "s1")
-        self.assertIn("exceeded quota", str(caught.exception))
 
 
 class Ledger(unittest.TestCase):
@@ -549,10 +504,6 @@ class Ledger(unittest.TestCase):
 
     def test_it_gives_up_and_other_errors_are_not_retried(self):
         waits = []
-
-        def always(command, stdin=None, capture=False):
-            raise tool.SparkError(self.ERROR if "config" not in command else "x")
-
         spark = tool.SparkTest(CONFIG, runner=lambda c, stdin=None, capture=False: config_view() if "config" in c else (_ for _ in ()).throw(tool.SparkError(self.ERROR)), sleep=waits.append)
         with self.assertRaises(tool.SparkError):
             spark.kubectl(["create", "configmap", "x"], slot="s1")
@@ -566,10 +517,14 @@ class Ledger(unittest.TestCase):
 
 class Quota(unittest.TestCase):
     def test_quantities(self):
-        self.assertEqual([tool.quantity("requests.cpu", v) for v in ("1500m", "2", "0.5")], [1500, 2000, 500])
-        self.assertEqual([tool.quantity("limits.memory", v) for v in ("8Gi", "512Mi", "1048576Ki", str(1024**3))], [8192, 512, 1024, 1024])
-        self.assertEqual(tool.quantity("requests.storage", "30Gi"), 30720)
+        self.assertEqual([tool.quantity("requests.cpu", v) for v in ("1500m", "2", "0.5", "1e3m")], [1500, 2000, 500, 1000])
+        self.assertEqual([tool.quantity("limits.memory", v) for v in ("8Gi", "512Mi", "1048576Ki", str(1024**3), "24G", "512M", "1.5Gi")], [8192, 512, 1024, 1024, 22888, 488, 1536])
+        self.assertEqual(tool.quantity("requests.storage", "20Gi"), 20480)
+        self.assertEqual(tool.quantity("requests.storage", "100G"), 95367)
         self.assertEqual(tool.quantity("pods", "3"), 3)
+        for bad in ("", "x", "5Zi", "1.2.3"):
+            with self.assertRaises(tool.SparkError, msg=bad):
+                tool.quantity("limits.memory", bad)
 
     def test_run_needs_match_the_manifests(self):
         job = (ROOT / "deploy" / "spark" / "test-job.yaml").read_text()
@@ -588,6 +543,8 @@ class Quota(unittest.TestCase):
         self.assertEqual(needs["requests.cpu"], tests_requests[0] + db_requests[0])
         self.assertEqual(needs["requests.memory"], tests_requests[1] + db_requests[1])
         self.assertEqual(needs["limits.cpu"], tests_limits[0] + db_limits[0])
+        self.assertEqual(tests_limits[0], tool.DEFAULT_CPU_LIMIT_M)
+        self.assertEqual(db_limits[0], tool.DB_CPU_LIMIT_M)
         self.assertEqual(needs["limits.memory"], tests_limits[1] + db_limits[1])
         self.assertEqual(needs["requests.storage"], tool.quantity("requests.storage", re.search(r"storage:\n    size: (\S+)", cluster).group(1)))
         self.assertEqual(tool.CACHE_NEEDS["requests.storage"], tool.quantity("requests.storage", re.search(r"requests: \{storage: (\S+)\}", cache).group(1)))
@@ -599,6 +556,11 @@ class Quota(unittest.TestCase):
         self.assertIn("requests.cpu: needs 1750, 1250 available", short)
         self.assertEqual(tool.quota_shortfalls(json.dumps({"items": []}), tool.RUN_NEEDS), [])
 
+    def test_the_smallest_room_wins_when_several_objects_define_a_key(self):
+        two = json.dumps({"items": [{"status": {"hard": {"requests.cpu": "4"}, "used": {"requests.cpu": "0"}}}, {"status": {"hard": {"requests.cpu": "2"}, "used": {"requests.cpu": "1500m"}}}]})
+        self.assertEqual(tool.quota_free(two, ["requests.cpu"]), {"requests.cpu": 500})
+        self.assertEqual(tool.quota_free(json.dumps({"items": list(reversed(json.loads(two)["items"]))}), ["requests.cpu"]), {"requests.cpu": 500})
+
     def test_a_run_that_does_not_fit_is_refused_before_anything_is_created(self):
         cluster = Cluster(quota=quota_json(**{"requests.memory": "4Gi"}))
         out, err = quiet()
@@ -607,68 +569,510 @@ class Quota(unittest.TestCase):
         self.assertIn("requests.memory", str(caught.exception))
         self.assertIn("shared Spark quota", str(caught.exception))
         self.assertEqual(cluster.leases, {})
-        self.assertFalse([c for c in cluster.commands() if "create -f -" in c or "apply" in c or "create configmap omg-test-script" in c])
+        self.assertFalse([c for c in cluster.commands() if "apply" in c or "create configmap omg-test-script" in c])
+
+    def test_fast_uses_the_free_limit_quota_and_refuses_when_it_does_not_fit(self):
+        self.assertEqual(tool.fast_cpu_limit(8000), 6000)
+        self.assertEqual(tool.fast_cpu_limit(5000), 1800 + 5000 - 2800)
+        self.assertIsNone(tool.fast_cpu_limit(3200))
+        self.assertIsNone(tool.fast_cpu_limit(2800))
+        cluster = Cluster(quota=quota_json(**{"limits.cpu": "5"}))
+        with contextlib.redirect_stdout(io.StringIO()):
+            slot, _ = make(cluster).start("probe", "lib", "HEAD", "", 60, fast=True)
+        job = next(d for _, d in cluster.calls if d and "kind: Job" in d)
+        self.assertIn('limits: {cpu: "4000m", memory: 10Gi}', job)
+        self.assertIn('requests: {cpu: "1500m", memory: 6Gi}', job)
+        self.assertEqual(cluster.leases[slot]["fast_cpu_limit_m"], "4000")
+        full = Cluster(quota=quota_json(**{"limits.cpu": "3"}))
+        with self.assertRaises(tool.SparkError) as caught:
+            make(full).start("probe", "lib", "HEAD", "", 60, fast=True)
+        self.assertIn("--fast does not fit", str(caught.exception))
+        self.assertEqual(full.leases, {})
+
+
+class Lifecycle(unittest.TestCase):
+    def test_start_applies_the_cache_then_secrets_script_database_and_job_in_that_order(self):
+        cluster = Cluster()
+        with contextlib.redirect_stdout(io.StringIO()):
+            slot, resolved = make(cluster).start("probe", "lib", "HEAD", "", 90)
+        self.assertEqual(slot, "s1")
+        commands = cluster.commands()
+        order = [next(i for i, c in enumerate(commands) if needle in c) for needle in ("create configmap omg-test-lease", "apply -f -", "create configmap omg-test-script")]
+        self.assertEqual(order, sorted(order))
+        stdins = [data for _, data in cluster.calls if data and '"Namespace"' not in data]
+        self.assertEqual(len(stdins), 4)
+        self.assertIn("PersistentVolumeClaim", stdins[0])
+        self.assertIn('"Secret"', stdins[1])
+        self.assertIn("kind: Cluster", stdins[2])
+        self.assertIn("kind: Job", stdins[3])
+        self.assertIn(resolved.sha, stdins[3])
+        self.assertRegex(cluster.leases["s1"]["nonce"], r"^[0-9a-f]{16}$")
+        self.assertIn(f'value: "{cluster.leases["s1"]["nonce"]}"', stdins[3])
+
+    def test_the_lease_records_the_narrowing_and_the_print_says_partial(self):
+        cluster = Cluster()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            make(cluster).start("probe", "lib", "HEAD", "--ignored x", 90, fresh=True)
+        self.assertEqual(cluster.leases["s1"]["test_args"], "--ignored x")
+        self.assertEqual(cluster.leases["s1"]["fresh"], "1")
+        self.assertIn("PARTIAL", out.getvalue())
+
+    def test_no_secret_is_ever_a_command_line_argument(self):
+        cluster = Cluster()
+        with contextlib.redirect_stdout(io.StringIO()):
+            make(cluster).start("probe", "lib", "HEAD", "", 90)
+        secret = json.loads(next(data for _, data in cluster.calls if data and '"Secret"' in data))["stringData"]["password"]
+        self.assertFalse([c for c in cluster.commands() if secret in c])
+        for _, data in cluster.calls:
+            if data and secret in data:
+                self.assertIn('"Secret"', data)
+
+    def test_a_failed_setup_removes_the_run_and_frees_the_slot(self):
+        class Failing(Cluster):
+            def __call__(self, command, stdin=None, capture=False):
+                if stdin and "kind: Job" in stdin:
+                    raise tool.SparkError("kubectl create failed (exit 1): exceeded quota")
+                return super().__call__(command, stdin, capture)
+
+        cluster = Failing()
+        out, err = quiet()
+        with out, err, self.assertRaises(tool.SparkError):
+            make(cluster).start("probe", "lib", "HEAD", "", 90)
+        self.assertEqual(cluster.leases, {}, "the lease is released")
+        self.assertTrue([c for c in cluster.commands() if "delete job omg-test" in c])
+
+    def test_down_removes_the_run_but_never_a_namespace_and_the_lease_goes_last(self):
+        cluster = Cluster(namespaces={"s1"}, leases={"s1": lease()})
+        with contextlib.redirect_stdout(io.StringIO()):
+            make(cluster).down("probe")
+        deleted = [c for c in cluster.commands() if " delete " in c]
+        self.assertTrue(deleted[-1].endswith("delete configmap omg-test-lease --ignore-not-found"), deleted)
+        self.assertTrue(any("delete cluster.postgresql.cnpg.io omg-test-db" in c for c in deleted))
+        self.assertFalse([c for c in deleted if "namespace" in c or "persistentvolumeclaim" in c or "pvc" in c], "the cache volume is not deleted")
+        self.assertEqual(cluster.leases, {})
+
+    def test_down_keeps_the_lease_when_something_is_left_behind(self):
+        cluster = Cluster(namespaces={"s1"}, leases={"s1": lease()}, leftovers=1)
+        with self.assertRaises(tool.SparkError) as caught:
+            make(cluster).down("probe")
+        self.assertIn("omg-test-db-0", str(caught.exception))
+        self.assertIn("s1", cluster.leases)
+
+    def test_down_of_an_unknown_run_changes_nothing_and_is_not_an_error(self):
+        cluster = Cluster(namespaces={"s1"})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            make(cluster).down("ghost")
+        self.assertIn("nothing to remove", out.getvalue())
+        self.assertFalse([c for c in cluster.commands() if " delete " in c])
+
+    def test_purge_deletes_idle_slot_namespaces_only(self):
+        cluster = Cluster(namespaces={"s1", "s2"}, leases={"s1": lease("busy")})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            make(cluster).purge()
+        deleted = [c for c in cluster.commands() if "delete namespace" in c]
+        self.assertEqual(deleted, [f"kubectl --kubeconfig {CONFIG} delete namespace {BASE}-omg-test-s2 --wait=false"])
+        self.assertIn("in use", out.getvalue())
+
+    def test_purge_skips_a_namespace_that_is_already_being_deleted(self):
+        cluster = Cluster(terminating={"s1"})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            make(cluster).purge()
+        self.assertFalse([c for c in cluster.commands() if "delete namespace" in c])
+        self.assertIn("already being deleted", out.getvalue())
+
+    def test_status_lists_slots(self):
+        cluster = Cluster(namespaces={"s1", "s2"}, leases={"s1": lease("busy", test_args="--exact a")})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            make(cluster).status()
+        self.assertIn("s1: busy (lib main", out.getvalue())
+        self.assertIn("--test-args '--exact a'", out.getvalue())
+        self.assertIn("s2: free", out.getvalue())
+
+    def test_run_waits_prints_the_result_and_downs(self):
+        cluster = Primed(job="complete", log=log_for("web", passed=1903))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = make(cluster).run("probe", "web", "HEAD", "", 60, keep=False, detach=False, summary_path=None)
+        self.assertEqual(code, 0)
+        self.assertIn("RESULT: passed: web of HEAD", out.getvalue())
+        self.assertIn("Tests  1903 passed (1903)", out.getvalue())
+        self.assertEqual(cluster.leases, {})
+
+    def _run_with_log(self, log, suite="lib", job="complete", test_args="", pod=None, keep=False, log_path=None):
+        cluster = Primed(job=job, log=log, pod=pod)
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as folder, contextlib.redirect_stdout(out):
+            summary = Path(folder) / "summary.json"
+            tool.LOG_DIR = Path(folder) / "logs"
+            code = make(cluster).run("probe", suite, "HEAD", test_args, 60, keep=keep, detach=False, summary_path=str(summary), log_path=log_path)
+            data = json.loads(summary.read_text())
+            logs = sorted(p.name for p in tool.LOG_DIR.glob("*")) if tool.LOG_DIR.exists() else []
+            self.assertEqual(stat.S_IMODE(summary.stat().st_mode), 0o600)
+        return code, data, out.getvalue(), cluster, logs
+
+    def test_a_failing_run_exits_one_names_the_failures_and_saves_a_log_before_it_is_removed(self):
+        log = log_for("lib") + "\ntest bad::one ... FAILED\n---- bad::one stdout ----\nthread 'bad::one' panicked at x.rs:1:1:\nassertion failed\n\nfailures:\n    bad::one\n"
+        failing = log.replace(marker("step-end", suite="lib", name="shard-1", exit=0, seconds=1), marker("step-end", suite="lib", name="shard-1", exit=101, seconds=1))
+        code, summary, printed, cluster, logs = self._run_with_log(failing)
+        self.assertEqual(code, 1)
+        self.assertEqual(summary["result"], "failed")
+        self.assertEqual(summary["failed_tests"], ["bad::one"])
+        self.assertIn("failure output (sanitised, bounded):", printed)
+        self.assertIn("assertion failed", printed)
+        self.assertEqual(logs, [f"probe-{SHA[:12]}.log"])
+        self.assertEqual(cluster.leases, {}, "the run is removed after the log is saved")
+
+    def test_a_killed_run_is_not_a_failing_test(self):
+        code, summary, printed, cluster, _ = self._run_with_log(log_for("lib", done=False), job="failed", pod={"containerStatuses": [{"name": "tests", "state": {"terminated": {"exitCode": 137, "reason": "OOMKilled"}}}]})
+        self.assertEqual(code, 2)
+        self.assertEqual(summary["result"], "killed")
+        self.assertEqual(summary["pod_reason"], "OOMKilled")
+        self.assertIn("RESULT: killed", printed)
+
+    def test_an_evicted_pod_and_a_deadline_are_recorded(self):
+        _, summary, _, _, _ = self._run_with_log(log_for("lib", done=False), job="failed", pod={"reason": "Evicted", "containerStatuses": []})
+        self.assertEqual((summary["result"], summary["pod_reason"]), ("killed", "Evicted"))
+        _, summary, _, _, _ = self._run_with_log(log_for("lib", done=False), job="deadline", pod={"containerStatuses": []})
+        self.assertEqual((summary["result"], summary["pod_reason"]), ("killed", "DeadlineExceeded"))
+
+    def test_a_narrowed_run_is_partial_and_never_exit_zero(self):
+        log = log_for("web", passed=20)
+        code, summary, printed, _, _ = self._run_with_log(log, suite="web", test_args="deployment-preview-focus")
+        self.assertEqual(code, 3)
+        self.assertTrue(summary["partial"])
+        self.assertEqual(summary["test_args"], "deployment-preview-focus")
+        self.assertEqual(summary["result"], "passed")
+        self.assertIn("RESULT: passed (partial)", printed)
+        self.assertTrue(any("partial" in note for note in summary["notes"]))
+
+    def test_a_run_that_executed_no_tests_is_failed(self):
+        zero = log_for("web", passed=0)
+        code, summary, printed, _, _ = self._run_with_log(zero, suite="web")
+        self.assertEqual((code, summary["result"]), (1, "failed"))
+        self.assertIn("suite web executed no tests", summary["notes"])
+        self.assertIn("RESULT: failed", printed)
+        # a log without any result line at all
+        bare = "\n".join([marker("source", commit=SHA), marker("done", exit=0, seconds=1)]) + "\n"
+        code, summary, _, _, _ = self._run_with_log(bare, suite="lib")
+        self.assertEqual((code, summary["result"]), (1, "failed"))
+        self.assertTrue(any("did not run" in n for n in summary["notes"]))
+        # a filter that matches nothing: libtest runs 0 tests
+        filtered = log_for("lib", passed=0, ignored=0, steps=["lib/npm-ci", "lib/build"]).replace(marker("done", exit=0, seconds=9), "") \
+            + marker("step-start", suite="lib", name="filtered") + "\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2465 filtered out; finished in 0.00s\n" \
+            + marker("step-end", suite="lib", name="filtered", exit=0, seconds=0) + "\n" + marker("done", exit=0, seconds=3) + "\n"
+        filtered = filtered.replace(marker("lib-inventory", tests=0) + "\n", "")
+        code, summary, _, _, _ = self._run_with_log(filtered, suite="lib", test_args="no_such_test")
+        self.assertEqual((code, summary["result"]), (1, "failed"))
+        self.assertIn("suite lib executed no tests", summary["notes"])
+
+    def test_a_step_that_did_not_run_fails_an_exit_zero_run(self):
+        log = log_for("integration", passed=170, ignored=10, steps=["integration/npm-ci", "integration/targets"])
+        code, summary, _, _, _ = self._run_with_log(log, suite="integration")
+        self.assertEqual((code, summary["result"]), (1, "failed"))
+        self.assertIn("step integration/tools did not run", summary["notes"])
+
+    def test_a_setup_failure_reports_the_reason_not_a_stopped_pod(self):
+        log = "\n".join([marker("run", suite="lib", commit=SHA), "cannot fetch " + SHA + " from https://github.com/x/y.git: push the branch first", marker("step-end", suite="setup", name="source", exit=1, seconds=2),
+                         marker("setup-failed"), "\x1b]0;evil title\x07\x1b[31mred\x1b[0m"]) + "\n"
+        code, summary, printed, _, _ = self._run_with_log(log, job="failed")
+        self.assertEqual((code, summary["result"]), (2, "setup failed"))
+        self.assertIn("RESULT: setup failed", printed)
+        self.assertIn("push the branch first", printed)
+        self.assertNotIn("pod was stopped", printed)
+        self.assertNotIn("\x1b", printed)
+        self.assertNotIn("evil title\x07", printed)
+
+    def test_the_log_is_saved_for_a_pass_only_when_asked(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "run.log"
+            _, _, _, _, logs = self._run_with_log(log_for("web", passed=1903), suite="web", log_path=str(path))
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            self.assertNotIn("\x1b", path.read_text())
+        _, _, _, _, logs = self._run_with_log(log_for("web", passed=1903), suite="web")
+        self.assertEqual(logs, [])
+
+    def test_keep_and_detach_leave_the_run_in_place_and_detach_is_not_a_pass(self):
+        cluster = Primed(job="complete", log=log_for("web", passed=1903))
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = make(cluster).run("probe", "web", "HEAD", "", 60, keep=True, detach=False, summary_path=None)
+        self.assertIn("s1", cluster.leases)
+        cluster = Cluster()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = make(cluster).run("probe", "all", "HEAD", "", 60, keep=False, detach=True, summary_path=None)
+        self.assertEqual(code, tool.EXIT_STARTED)
+        self.assertNotEqual(code, 0)
+        self.assertIn("nothing is known about the outcome", out.getvalue())
+        self.assertIn("s1", cluster.leases)
+
+    def test_a_bad_summary_path_is_refused_before_anything_starts(self):
+        cluster = Cluster()
+        with tempfile.TemporaryDirectory() as folder:
+            for bad in (str(Path(folder) / "no" / "such" / "dir" / "s.json"), folder):
+                with self.assertRaises(tool.SparkError, msg=bad):
+                    make(cluster).run("probe", "web", "HEAD", "", 60, keep=False, detach=True, summary_path=bad)
+        self.assertEqual(cluster.calls, [], "not one command ran")
+
+    def test_a_run_that_has_not_finished_has_no_result(self):
+        cluster = Cluster(namespaces={"s1"}, leases={"s1": lease()}, job="running")
+        with self.assertRaises(tool.SparkError):
+            make(cluster).result("probe")
+
+    def test_a_job_that_ran_another_commit_is_refused(self):
+        other = log_for("lib").replace(f"commit={SHA}", "commit=" + "f" * 40)
+        cluster = Cluster(namespaces={"s1"}, leases={"s1": lease()}, job="complete", log=other)
+        with self.assertRaises(tool.SparkError):
+            make(cluster).result("probe")
+
+    def test_an_error_while_waiting_keeps_the_run_and_says_so(self):
+        cluster = Cluster(job="running")
+        spark = make(cluster)
+        err = io.StringIO()
+
+        def broken(*args, **kwargs):
+            raise tool.SparkError("boom")
+
+        spark.wait = broken
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err), self.assertRaises(tool.SparkError):
+            spark.run("probe", "web", "HEAD", "", 60, keep=False, detach=False, summary_path=None)
+        self.assertIn("run kept: `down probe`", err.getvalue())
+        self.assertIn("s1", cluster.leases)
+
+
+class Waiting(unittest.TestCase):
+    def clock(self):
+        now = [10_000]
+
+        def sleep(seconds):
+            now[0] += seconds
+
+        return (lambda: now[0]), sleep
+
+    def waiter(self, cluster):
+        clock, sleep = self.clock()
+        return tool.SparkTest(CONFIG, runner=cluster, clock=clock, sleep=sleep)
+
+    def test_a_pod_that_cannot_pull_its_image_fails_the_wait_with_the_reason_and_events(self):
+        pending = {"phase": "Pending", "containerStatuses": [{"name": "tests", "state": {"waiting": {"reason": "ImagePullBackOff", "message": "Back-off pulling image x"}}}]}
+        cluster = Cluster(namespaces={"s1"}, leases={"s1": lease()}, job="running", pod=pending)
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(tool.SparkError) as caught:
+            self.waiter(cluster).wait("probe", "s1", lease())
+        message = str(caught.exception)
+        for needle in ("ImagePullBackOff", "FailedScheduling", "run kept: `down probe`"):
+            self.assertIn(needle, message)
+
+    def test_unschedulable_and_unbound_volumes_are_stuck_too(self):
+        for condition in ({"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/1 nodes: Insufficient cpu"},
+                          {"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "pod has unbound immediate PersistentVolumeClaims"}):
+            cluster = Cluster(namespaces={"s1"}, leases={"s1": lease()}, job="running", pod={"phase": "Pending", "containerStatuses": [], "conditions": [condition]})
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(tool.SparkError) as caught:
+                self.waiter(cluster).wait("probe", "s1", lease())
+            self.assertIn("Unschedulable", str(caught.exception))
+        self.assertIsNone(tool.stuck_reason({"status": {"phase": "Running"}}))
+        self.assertIsNone(tool.stuck_reason({"status": {"phase": "Pending", "containerStatuses": [{"state": {"waiting": {"reason": "ContainerCreating"}}}]}}))
+
+    def test_a_brief_stall_does_not_fail_the_wait(self):
+        calls = {"n": 0}
+
+        class Slowly(Cluster):
+            def __call__(inner, command, stdin=None, capture=False):
+                if "get pods -l job-name=omg-test" in " ".join(command):
+                    calls["n"] += 1
+                    inner.job = "complete" if calls["n"] > 5 else "running"
+                return super().__call__(command, stdin, capture)
+
+        cluster = Slowly(namespaces={"s1"}, leases={"s1": lease()}, job="running", pod={"phase": "Pending", "containerStatuses": [{"state": {"waiting": {"reason": "ErrImagePull"}}}]})
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.waiter(cluster).wait("probe", "s1", lease()), "succeeded")
+
+    def test_a_vanished_job_ends_the_wait(self):
+        class Vanishing(Cluster):
+            polls = 0
+
+            def __call__(inner, command, stdin=None, capture=False):
+                if "get job/omg-test" in " ".join(command):
+                    Vanishing.polls += 1
+                    inner.job = "running" if Vanishing.polls < 3 else None
+                return super().__call__(command, stdin, capture)
+
+        cluster = Vanishing(namespaces={"s1"}, leases={"s1": lease()}, job="running")
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(tool.SparkError) as caught:
+            self.waiter(cluster).wait("probe", "s1", lease())
+        self.assertIn("vanished", str(caught.exception))
+
+    def test_a_lease_that_is_gone_or_belongs_to_another_run_ends_the_wait(self):
+        for replacement in (None, lease("probe", nonce="ffffffffffffffff"), lease("other"), {**lease(), "sha": "f" * 40}):
+            leases = {} if replacement is None else {"s1": replacement}
+            cluster = Cluster(namespaces={"s1"}, leases=leases, job="complete", log=log_for("web", passed=1903))
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(tool.SparkError, msg=str(replacement)) as caught:
+                self.waiter(cluster).wait("probe", "s1", lease())
+            self.assertIn("no longer belongs", str(caught.exception))
+
+    def test_a_few_transient_errors_are_tolerated_and_many_are_not(self):
+        class Flaky(Cluster):
+            failures = 0
+
+            def __call__(inner, command, stdin=None, capture=False):
+                if "get job/omg-test" in " ".join(command) and Flaky.failures < inner.limit:
+                    Flaky.failures += 1
+                    raise tool.SparkError("kubectl get failed (exit 1): connection reset")
+                return super().__call__(command, stdin, capture)
+
+        cluster = Flaky(namespaces={"s1"}, leases={"s1": lease()}, job="complete")
+        cluster.limit = 3
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.waiter(cluster).wait("probe", "s1", lease()), "succeeded")
+        Flaky.failures = 0
+        cluster = Flaky(namespaces={"s1"}, leases={"s1": lease()}, job="complete")
+        cluster.limit = 99
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(tool.SparkError) as caught:
+            self.waiter(cluster).wait("probe", "s1", lease())
+        self.assertIn("consecutive kubectl errors", str(caught.exception))
+
+    def test_a_job_without_a_pod_names_the_warning_events(self):
+        cluster = Cluster(namespaces={"s1"}, leases={"s1": lease()}, job="running", pod="none")
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(tool.SparkError) as caught:
+            self.waiter(cluster).wait("probe", "s1", lease())
+        self.assertIn("FailedScheduling", str(caught.exception))
 
 
 class Reading(unittest.TestCase):
     def test_a_passing_log(self):
-        parsed = tool.parse_log(LOG_PASS)
-        self.assertEqual(parsed["suites"]["lib"], {"passed": 2441, "failed": 0, "ignored": 9, "targets": 1})
-        self.assertEqual(parsed["suites"]["integration"], {"passed": 15, "failed": 0, "ignored": 1, "targets": 2})
-        self.assertEqual(parsed["suites"]["web"], {"passed": 1903, "failed": 0, "ignored": 0, "targets": 1})
+        parsed = tool.parse_log(log_for("lib"), NONCE)
+        self.assertEqual(parsed["suites"]["lib"], {"passed": 2456, "failed": 0, "ignored": 9, "targets": 4})
         self.assertEqual(parsed["commit"], SHA)
-        self.assertEqual(parsed["done"], {"exit": 0, "seconds": 3300})
-        self.assertEqual(len(parsed["steps"]), 4)
-        self.assertEqual(len(parsed["results"]), 3)
-        summary = tool.build_summary("probe", "all", "main", SHA, parsed, "complete", {}, 3310)
-        self.assertEqual((summary["result"], summary["exit_code"], summary["duration_seconds"], summary["wall_seconds"]), ("passed", 0, 3300, 3310))
-        self.assertEqual(summary["counts"], {"passed": 2441 + 15 + 1903, "failed": 0, "ignored": 10})
-        self.assertEqual(summary["failed_steps"], [])
+        self.assertEqual(parsed["done"], {"exit": 0, "seconds": 9})
+        summary = tool.build_summary("probe", "lib", "main", SHA, parsed, "complete", {}, 3310)
+        self.assertEqual((summary["result"], summary["exit_code"], summary["duration_seconds"], summary["wall_seconds"], summary["partial"]), ("passed", 0, 9, 3310, False))
+        self.assertEqual(summary["counts"], {"passed": 2456, "failed": 0, "ignored": 9})
+        self.assertEqual(summary["lib_tests_listed"], 2465)
         json.dumps(summary)
 
+    def test_every_suite_lists_what_it_does_not_cover(self):
+        for suite in tool.SUITES:
+            covered = tool.build_summary("probe", suite, "main", SHA, tool.parse_log(log_for(suite, passed=1904 if suite == "web" else 2456), NONCE), "complete", {}, 1)["not_covered"]
+            joined = " ".join(covered)
+            for needle in ("amd64", "browser suite", "container and staging"):
+                self.assertIn(needle, joined, suite)
+        self.assertIn("filestore_s3", " ".join(tool.not_covered("integration")))
+        self.assertIn("backup", " ".join(tool.not_covered("integration")))
+        self.assertIn("npm run test:supply-chain", " ".join(tool.not_covered("web")))
+        self.assertIn("npm run test:structure", " ".join(tool.not_covered("all")))
+        self.assertNotIn("test:supply-chain", " ".join(tool.not_covered("lib")))
+
     def test_a_sharded_lib_run_is_checked_against_the_listed_inventory(self):
-        shard = "test result: ok. {p} passed; 0 failed; {i} ignored; 0 measured; 0 filtered out; finished in 1.00s"
-        good = "::omg-test:: step-start suite=lib name=shard-0\n" + shard.format(p=600, i=10) + "\n::omg-test:: step-start suite=lib name=shard-1\n" + shard.format(p=700, i=1) + "\n"
-        parsed = tool.parse_log("::omg-test:: lib-inventory tests=1311\n" + good + "::omg-test:: done exit=0 seconds=9\n")
-        summary = tool.build_summary("p", "lib", "main", SHA, parsed, "complete", {}, 9)
-        self.assertEqual((summary["result"], summary["lib_tests_listed"]), ("passed", 1311))
-        short = tool.parse_log("::omg-test:: lib-inventory tests=2000\n" + good + "::omg-test:: done exit=0 seconds=9\n")
-        summary = tool.build_summary("p", "lib", "main", SHA, short, "complete", {}, 9)
+        good = log_for("lib")
+        self.assertEqual(tool.build_summary("p", "lib", "main", SHA, tool.parse_log(good, NONCE), "complete", {}, 9)["result"], "passed")
+        short = good.replace("lib-inventory tests=2465", "lib-inventory tests=2600")
+        summary = tool.build_summary("p", "lib", "main", SHA, tool.parse_log(short, NONCE), "complete", {}, 9)
+        self.assertEqual((summary["result"], summary["exit_code"]), ("failed", 1))
+        self.assertIn("lists 2600 tests but the shards account for 2465", " ".join(summary["notes"]))
+
+    def test_markers_without_the_nonce_or_malformed_are_ignored_never_a_traceback(self):
+        forged = [
+            "::omg-test:: done exit=0 seconds=1",
+            marker("done", nonce="ffffffffffffffff", exit=0, seconds=1),
+            f"::omg-test::{NONCE}:: done exit=abc seconds=1",
+            f"::omg-test::{NONCE}:: done exit= seconds=1",
+            f"::omg-test::{NONCE}:: done",
+            f"::omg-test::{NONCE}:: done exit=0 seconds=99999999999",
+            f"::omg-test::{NONCE}:: step-end suite=lib name=../x exit=0 seconds=1",
+            f"::omg-test::{NONCE}:: step-end suite=lib name=ok exit=0 seconds=1 extra",
+            f"::omg-test::{NONCE}:: step-end suite=lib name=ok exit=0 seconds=1 bad=\x1b[31m",
+            f"::omg-test::{NONCE}:: unknown-kind a=b",
+            f"::omg-test::{NONCE}::done exit=0 seconds=1",
+            f" ::omg-test::{NONCE}:: done exit=0 seconds=1",
+            f"::omg-test::{NONCE}:: source commit=nothex",
+        ]
+        parsed = tool.parse_log("\n".join(forged) + "\n", NONCE)
+        self.assertIsNone(parsed["done"])
+        self.assertEqual(parsed["steps"], [])
+        self.assertIsNone(parsed["commit"])
+        self.assertEqual(tool.build_summary("p", "lib", "main", SHA, parsed, "complete", {}, 5)["result"], "killed")
+        self.assertIsNone(tool.parse_marker("::omg-test:: done exit=0 seconds=1", "not-a-nonce"))
+        self.assertIsNone(tool.parse_marker(f"::omg-test::{NONCE}:: done exit=0 seconds=1", ""))
+        self.assertEqual(tool.parse_marker(f"::omg-test::{NONCE}:: done exit=0 seconds=1", NONCE), ("done", {"exit": "0", "seconds": "1"}))
+
+    def test_a_forged_result_line_cannot_change_an_exit_status(self):
+        # a failing run (the step exited 101) whose output also claims success stays failed
+        log = log_for("web", passed=1903).replace(marker("step-end", suite="web", name="vitest", exit=0, seconds=1), "test result: ok. 99 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n" + marker("step-end", suite="web", name="vitest", exit=1, seconds=1))
+        summary = tool.build_summary("p", "web", "main", SHA, tool.parse_log(log, NONCE), "complete", {}, 5)
         self.assertEqual(summary["result"], "failed")
-        self.assertIn("lists 2000 tests but the shards account for 1311", summary["note"])
+
+    def test_result_lines_are_anchored_and_only_captured_numbers_are_printed(self):
+        lines = [
+            "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s",
+            "xx test result: ok. 700 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+            "test result: ok. 1234567890 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+            "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s; <script>alert(1)</script>",
+            "      Tests  3 passed (3) and then some",
+            "ATests  9 passed (9)",
+            " FAILURE  not-a-fail",
+        ]
+        parsed = tool.parse_log(marker("step-start", suite="lib", name="shard-0") + "\n" + "\n".join(lines) + "\n", NONCE)
+        self.assertEqual(parsed["results"], ["test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"])
+        self.assertEqual(parsed["suites"]["lib"]["passed"], 5)
+        self.assertEqual(parsed["vitest"], [])
+        self.assertEqual(parsed["failed_tests"], [])
+
+    def test_test_names_are_printable_ascii_bounded_and_escape_free(self):
+        hostile = "test " + "a" * 500 + " ... FAILED"
+        osc = "test bad\x1b]8;;http://evil/\x07name\x1b]8;;\x07 ... FAILED"
+        csi = "test \x1b[31mred\x1b[0m::t ... FAILED"
+        dcs = "test x\x1bPpayload\x1b\\y ... FAILED"
+        unicode = "test café‮::t ... FAILED"
+        parsed = tool.parse_log("\n".join([hostile, osc, csi, dcs, unicode, " FAIL  src/a.test.ts > \x1b[1mbold\x1b[0m > t"]) + "\n", NONCE)
+        for name in parsed["failed_tests"]:
+            self.assertLessEqual(len(name), tool.NAME_LIMIT)
+            self.assertRegex(name, r"^[ -~]*$")
+        self.assertIn("bad" + "name", parsed["failed_tests"])
+        self.assertIn("red::t", parsed["failed_tests"])
+        self.assertIn("xy", parsed["failed_tests"])
+        self.assertIn("src/a.test.ts > bold > t", parsed["failed_tests"])
+        self.assertEqual(tool.sanitize("a\x1b]0;title\x1b\\b\x1b]0;unterminated"), "ab")
+        self.assertEqual(tool.sanitize("\x9b31mz\x00\x7f"), "31mz", "8-bit controls are dropped as non-printable")
+
+    def test_a_forged_marker_in_the_tail_of_a_setup_failure_is_not_shown(self):
+        log = "\n".join(["::omg-test:: step-end suite=x name=y exit=0 seconds=0", "plain line", marker("setup-failed")]) + "\n"
+        parsed = tool.parse_log(log, NONCE)
+        self.assertTrue(parsed["setup_failed"])
+        self.assertEqual(parsed["tail"], ["plain line"])
 
     def test_a_failing_log(self):
-        parsed = tool.parse_log(LOG_FAIL)
-        self.assertEqual(parsed["failed_tests"], ["bad::one", "bad::two", "src/a.test.ts > suite > fails"])
-        self.assertEqual(parsed["suites"]["lib"]["failed"], 2)
-        self.assertEqual(parsed["suites"]["web"], {"passed": 4, "failed": 1, "ignored": 1902, "targets": 1})
-        summary = tool.build_summary("probe", "all", "main", SHA, parsed, "failed", {}, 61)
-        self.assertEqual((summary["result"], summary["exit_code"]), ("failed", 1))
-        self.assertEqual(summary["failed_steps"], ["lib/lib", "web/vitest"])
+        log = log_for("lib") + "test bad::one ... FAILED\ntest bad::two ... FAILED\n"
+        log = log.replace(marker("step-end", suite="lib", name="shard-0", exit=0, seconds=1), marker("step-end", suite="lib", name="shard-0", exit=101, seconds=1))
+        summary = tool.build_summary("probe", "lib", "main", SHA, tool.parse_log(log, NONCE), "failed", {}, 61)
+        self.assertEqual((summary["result"], tool.result_exit(summary)), ("failed", 1))
+        self.assertEqual(summary["failed_steps"], ["lib/shard-0"])
+        self.assertEqual(summary["failed_tests"], ["bad::one", "bad::two"])
 
     def test_a_passing_log_of_a_failed_job_is_still_failed(self):
-        summary = tool.build_summary("probe", "lib", "main", SHA, tool.parse_log(LOG_PASS), "failed", {}, 5)
+        summary = tool.build_summary("probe", "lib", "main", SHA, tool.parse_log(log_for("lib"), NONCE), "failed", {}, 5)
         self.assertEqual(summary["result"], "failed")
 
     def test_a_run_killed_before_its_end_marker_reports_the_pod(self):
-        parsed = tool.parse_log("::omg-test:: step-start suite=lib name=lib\nrunning 5 tests\n")
+        parsed = tool.parse_log(marker("step-start", suite="lib", name="lib") + "\nrunning 5 tests\n", NONCE)
         summary = tool.build_summary("probe", "lib", "main", SHA, parsed, "failed", {"exit_code": 137, "reason": "OOMKilled"}, 120)
-        self.assertEqual((summary["result"], summary["exit_code"], summary["pod_reason"]), ("failed", 137, "OOMKilled"))
-        self.assertIn("end marker", summary["note"])
+        self.assertEqual((summary["result"], summary["exit_code"], summary["pod_reason"]), ("killed", 137, "OOMKilled"))
+        self.assertEqual(tool.result_exit(summary), 2)
         self.assertEqual(tool.build_summary("probe", "lib", "main", SHA, parsed, "failed", {}, 1)["exit_code"], 1, "an unknown exit is a failure, never 0")
 
-    def test_the_report_has_the_result_lines_the_failures_and_the_json(self):
-        parsed = tool.parse_log(LOG_FAIL)
-        report = tool.format_report(tool.build_summary("probe", "all", "main", SHA, parsed, "failed", {}, 61), parsed)
-        lines = report.splitlines()
-        self.assertTrue(lines[0].startswith("test result: FAILED. 8 passed; 2 failed"))
-        self.assertEqual(json.loads(lines[-1])["suite"], "all")
-        self.assertEqual(json.dumps(json.loads(lines[-1]), separators=(",", ":")), lines[-1], "the JSON line is compact")
+    def test_failure_blocks_are_bounded_and_sanitised(self):
+        body = "".join(f"line {i} \x1b[31mred\x1b[0m\n" for i in range(100))
+        text = f"failures:\n\n---- a::b stdout ----\n{body}\n---- c::d stdout ----\nother\n\nfailures:\n    a::b\n"
+        blocks = tool.failure_blocks(text, ["a::b"])
+        self.assertEqual([name for name, _ in blocks], ["a::b"])
+        self.assertEqual(len(blocks[0][1]), tool.FAILURE_BLOCK_LINES)
+        self.assertEqual(blocks[0][1][0], "line 0 red")
+        self.assertEqual(tool.failure_blocks(text, ["nothing"]), [])
 
     def test_markers_and_noise(self):
-        self.assertEqual(tool.parse_marker("::omg-test:: step-end suite=lib name=a-b exit=3 seconds=4"), ("step-end", {"suite": "lib", "name": "a-b", "exit": "3", "seconds": "4"}))
-        self.assertEqual(tool.parse_marker("::omg-test::"), ("", {}))
-        self.assertEqual(tool.parse_log("")["suites"], {})
+        self.assertEqual(tool.parse_log("", NONCE)["suites"], {})
 
     def test_job_phases(self):
         running = json.dumps({"status": {"conditions": []}})
@@ -684,17 +1088,58 @@ class Reading(unittest.TestCase):
             target.write_text("keep")
             link = Path(folder) / "link"
             link.symlink_to(target)
-            with self.assertRaises(OSError):
+            with self.assertRaises(tool.SparkError):
                 tool.write_summary(str(link), {"a": 1})
+            with self.assertRaises(tool.SparkError):
+                tool.check_writable(str(link))
             self.assertEqual(target.read_text(), "keep")
             path = Path(folder) / "ok.json"
             tool.write_summary(str(path), {"a": 1})
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
+    def test_a_saved_log_is_sanitised_and_redacted(self):
+        secret = json.loads(tool.superuser_secret())["stringData"]["password"]
+        text = f"ok \x1b[31mred\x1b[0m \x1b]0;t\x07 postgres://postgres:{secret}@h/db\n"
+        saved = tool.sanitized_log(text)
+        self.assertNotIn(secret, saved)
+        self.assertNotIn("\x1b", saved)
+        self.assertIn("ok red", saved)
+
     def test_elapsed_text(self):
         self.assertEqual(tool.elapsed_text(75), "1m15s")
         self.assertEqual(tool.elapsed_text(3725), "1h02m05s")
         self.assertEqual(tool.elapsed_text(-5), "0m00s")
+
+
+class Main(unittest.TestCase):
+    def test_an_unexpected_exception_is_exit_two_without_a_traceback(self):
+        err = io.StringIO()
+        original = tool.SparkTest.status
+        tool.SparkTest.status = lambda self, name=None: (_ for _ in ()).throw(ZeroDivisionError("bug \x1b[31m"))
+        with tempfile.TemporaryDirectory() as folder:
+            config = Path(folder) / "spark.yaml"
+            config.write_text("x")
+            old = os.environ.get("SPARK_KUBECONFIG")
+            os.environ["SPARK_KUBECONFIG"] = str(config)
+            try:
+                with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as caught:
+                    tool.main(["status"])
+            finally:
+                tool.SparkTest.status = original
+                if old is None:
+                    del os.environ["SPARK_KUBECONFIG"]
+                else:
+                    os.environ["SPARK_KUBECONFIG"] = old
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("internal error (ZeroDivisionError)", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
+        self.assertNotIn("\x1b", err.getvalue())
+
+    def test_the_exit_statuses_are_distinct(self):
+        self.assertEqual([tool.EXIT_PASSED, tool.EXIT_FAILED, tool.EXIT_ERROR, tool.EXIT_PARTIAL, tool.EXIT_STARTED], [0, 1, 2, 3, 4])
+        doc = tool.__doc__
+        for fragment in ("0 every suite passed in full", "1 a suite failed", "2 an error of the tool", "3 passed but partial", "4 `run --detach`"):
+            self.assertIn(fragment, doc)
 
 
 if __name__ == "__main__":

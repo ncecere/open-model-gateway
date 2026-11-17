@@ -55,13 +55,18 @@ spec:
             - {name: OMG_SUITE, value: "__SUITE__"}
             - {name: OMG_SHA, value: "__SHA__"}
             - {name: OMG_REPO_URL, value: "https://github.com/ncecere/open-model-gateway.git"}
-            - {name: OMG_JOBS, value: "2"}
-            # libtest threads: the CPU limit is below 2, so the default would be 2, and the DB-bound tests wait most of the time.
-            - {name: OMG_TEST_THREADS, value: "4"}
+            - {name: OMG_NONCE, value: "__NONCE__"}
+            - {name: OMG_FRESH, value: "__FRESH__"}
+            # Cargo jobs, libtest threads and Vitest workers follow the CPU limit (--fast raises all three). The
+            # libtest default would be 2 and the database-bound tests mostly wait; Vitest does not read the cgroup limit.
+            - {name: OMG_JOBS, value: "__JOBS__"}
+            - {name: OMG_TEST_THREADS, value: "__TEST_THREADS__"}
+            - {name: OMG_WEB_WORKERS, value: "__WEB_WORKERS__"}
+            - {name: OMG_NPM_CI_FLAGS, value: "__NPM_FLAGS__"}
             - {name: OMG_TEST_ARGS, value: "__TEST_ARGS__"}
             - {name: OMG_DB_HOST, value: omg-test-db-rw}
-            - {name: OMG_TARGET_LIMIT_GIB, value: "20"}
-            - {name: PGPASSWORD, valueFrom: {secretKeyRef: {name: omg-test-pg-superuser, key: password}}}
+            - {name: OMG_TARGET_LIMIT_GIB, value: "12"}
+            - {name: OMG_CACHE_LIMIT_GIB, value: "17"}
           # Burstable: a request that leaves room for a second run and a demo environment in the
           # shared quota (tests/supply-chain/spark-test-manifests.test.mjs does the arithmetic).
           resources:
@@ -70,12 +75,16 @@ spec:
           securityContext: *locked
           volumeMounts:
             - {name: cache, mountPath: /cache}
+            - {name: pg, mountPath: /secrets, readOnly: true}
             - {name: node, mountPath: /opt/node, readOnly: true}
             - {name: scripts, mountPath: /scripts, readOnly: true}
             - {name: tmp, mountPath: /tmp}
       volumes:
         - name: cache
           persistentVolumeClaim: {claimName: omg-test-cache}
+        # The PostgreSQL superuser password is a file, not an environment variable: only with_db reads it.
+        - name: pg
+          secret: {secretName: omg-test-pg-superuser, defaultMode: 0440, items: [{key: password, path: password}]}
         - name: node
           emptyDir: {sizeLimit: 512Mi}
         - name: scripts

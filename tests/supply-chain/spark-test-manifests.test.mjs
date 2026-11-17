@@ -56,7 +56,8 @@ test("the toolchain images are the Dockerfile's", () => {
   const node = podOf(job()).initContainers.find(c => c.name === "node");
   assert.equal(tests.image, APPROVED_RUST, "the Rust image is the Dockerfile's build image");
   assert.equal(node.image, dockerfileNode, "the Node image is the Dockerfile's");
-  assert.match(dockerfile, new RegExp(`^FROM ${APPROVED_RUST.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} AS build$`, "m"));
+  // A line comparison, not a pattern built from the reference: no image reference becomes a regular expression.
+  assert.ok(dockerfile.split("\n").includes(`FROM ${APPROVED_RUST} AS build`), "the Dockerfile's build stage is the approved Rust image");
   const toolchain = readFileSync(join(root, "rust-toolchain.toml"), "utf8").match(/^channel = "([^"]+)"$/m)[1];
   assert.ok(tests.image.includes(`rust:${toolchain}-`), `the image carries Rust ${toolchain}, as rust-toolchain.toml says`);
 });
@@ -67,6 +68,16 @@ test("the database image is the PostgreSQL 17 image of deploy/spark/values.yaml"
   assert.match(cluster.spec.imageName, /^ghcr\.io\/cloudnative-pg\/postgresql:17\.\d+@sha256:[0-9a-f]{64}$/);
   assert.equal(cluster.spec.instances, 1);
   assert.equal(cluster.spec.storage.storageClass, "local-path");
+});
+
+test("the database password is a mounted file, never an environment variable", () => {
+  const doc = job();
+  const tests = podOf(doc).containers.find(c => c.name === "tests");
+  assert.ok(!(tests.env ?? []).some(e => e.valueFrom || /PASS|SECRET|TOKEN/i.test(e.name)), "no secret in the environment");
+  assert.deepEqual(podOf(doc).volumes.find(v => v.name === "pg").secret.items, [{ key: "password", path: "password" }]);
+  assert.ok(tests.volumeMounts.some(m => m.name === "pg" && m.mountPath === "/secrets" && m.readOnly === true));
+  assert.equal(load("test-cache.yaml").spec.resources.requests.storage, "20Gi");
+  assert.equal(load("test-cluster.yaml").spec.postgresql, undefined, "PostgreSQL keeps its defaults (max_connections 100), as CI's service container");
 });
 
 test("nothing in the test manifests exposes a port or reaches the host", () => {
@@ -90,7 +101,9 @@ test("the script installs and downloads nothing of its own", () => {
   // Only the public repository, over HTTPS, at an exact commit.
   assert.match(read("test-job.yaml"), /OMG_REPO_URL, value: "https:\/\/github\.com\/ncecere\/open-model-gateway\.git"/);
   assert.match(code, /git rev-parse HEAD/);
-  assert.match(code, /main 2>&1 \| redact\nexit "\$\{PIPESTATUS\[0\]\}"/, "all output passes the redaction");
+  assert.match(code, /\( main 2>&1; echo "\$\?" >"\$status_file" \) \| redact &/, "all output passes the redaction");
+  assert.match(code, /trap terminate TERM INT/, "bash is PID 1 in the pod: SIGTERM must be trapped for `down` and the deadline to stop it");
+  assert.doesNotMatch(code, /PGPASSWORD/, "the database password is a file read inside with_db, not an environment variable");
 });
 
 test("two runs fit the shared quota next to one demo environment", () => {
