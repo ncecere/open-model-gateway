@@ -29,6 +29,14 @@ struct World {
     token: String,
 }
 async fn world(pool: PgPool, script: Script, deadline: Duration) -> World {
+    world_with_timeouts(pool, script, deadline, timeouts()).await
+}
+async fn world_with_timeouts(
+    pool: PgPool,
+    script: Script,
+    deadline: Duration,
+    timeouts: transport::Timeouts,
+) -> World {
     let mut f = fixture(pool).await;
     let token = issue_key(&mut f).await;
     let deployment = add_deployment(
@@ -42,7 +50,11 @@ async fn world(pool: PgPool, script: Script, deadline: Duration) -> World {
     .await;
     let mock = TimedMock::new(script).await;
     let mut registry = ProviderRegistry::default();
-    registry.register(Arc::new(mock.adapter())).unwrap();
+    registry
+        .register(Arc::new(BedrockAdapter::for_test_with_timeouts(
+            &mock.base, timeouts,
+        )))
+        .unwrap();
     let engine = Engine::new(
         Arc::new(f.store.clone()),
         registry,
@@ -243,11 +255,22 @@ async fn http_client_disconnect_is_neutral_and_retains_unknown_hold(pool: PgPool
     w.recorded(id, "cancelled", None, None).await;
 }
 
-async fn active_deadline(pool: PgPool, script: Script, duration: Duration) {
-    let mut w = world(pool, script, duration).await;
+async fn active_deadline(
+    pool: PgPool,
+    script: Script,
+    duration: Duration,
+    timeouts: transport::Timeouts,
+) {
+    let mut w = world_with_timeouts(pool, script, duration, timeouts).await;
     let (response, _server) = w.http().await;
     let id = response_id(&response);
+    let body_started = Instant::now();
     let body = response.text().await.unwrap();
+    if matches!(script, Script::Flowing) {
+        assert!(body_started.elapsed() > timeouts.total);
+    } else {
+        assert!(duration < timeouts.read);
+    }
     assert!(
         body.contains("Hello") && body.contains("timeout_error") && !body.contains("[DONE]"),
         "{body}"
@@ -257,11 +280,22 @@ async fn active_deadline(pool: PgPool, script: Script, duration: Duration) {
 }
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn active_engine_deadline_before_read_timer_is_neutral(pool: PgPool) {
-    active_deadline(pool, Script::Stalled, Duration::from_millis(150)).await;
+    // Allow real database admission and SDK headers to finish before testing
+    // the returned stream. The engine deadline still precedes the read bound.
+    active_deadline(
+        pool,
+        Script::Stalled,
+        Duration::from_secs(2),
+        transport::Timeouts {
+            read: Duration::from_secs(3),
+            total: Duration::from_secs(10),
+        },
+    )
+    .await;
 }
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn active_engine_deadline_after_old_total_cap_is_neutral(pool: PgPool) {
-    active_deadline(pool, Script::Flowing, Duration::from_millis(900)).await;
+    active_deadline(pool, Script::Flowing, Duration::from_secs(2), timeouts()).await;
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
