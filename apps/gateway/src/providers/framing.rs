@@ -11,11 +11,7 @@ const SSE_LIMIT: usize = 1024 * 1024;
 /// against routing health. A frame that arrived whole but does not parse or
 /// violates the protocol is `InvalidUpstream` instead (docs/provider-adapters.md,
 /// "Failures inside a returned stream").
-pub(super) const TRUNCATED: InferenceError = InferenceError::UpstreamUnavailable;
-/// The class of SSE bytes that are not valid UTF-8: the line cannot be decoded,
-/// which is corruption of the stream (a transport failure), not a
-/// well-formed frame with the wrong content.
-pub(super) const UNDECODABLE: InferenceError = InferenceError::UpstreamUnavailable;
+pub(super) const TRANSPORT: InferenceError = InferenceError::UpstreamUnavailable;
 pub(crate) fn transport(error: reqwest::Error) -> InferenceError {
     if error.is_timeout() {
         InferenceError::Timeout
@@ -190,7 +186,7 @@ impl Decoder {
             return Ok(None);
         }
         self.skip_lf = byte == b'\r';
-        let line = std::str::from_utf8(&self.line).map_err(|_| UNDECODABLE)?;
+        let line = std::str::from_utf8(&self.line).map_err(|_| InferenceError::InvalidUpstream)?;
         let line = if !self.started {
             line.strip_prefix('\u{feff}').unwrap_or(line)
         } else {
@@ -227,7 +223,7 @@ pub(super) fn frames(response: reqwest::Response) -> impl Stream<Item = Result<V
             }
         }
         // A protocol's explicit terminal event must cause the consumer to return first.
-        Err(TRUNCATED)?;
+        Err(TRANSPORT)?;
     }
 }
 pub(super) fn string(value: &Value) -> Result<&str> {

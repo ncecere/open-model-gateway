@@ -321,16 +321,28 @@ fn empty(value: &Value) -> bool {
     }
 }
 
-/// A 200 body (or stream frame) carrying `error` is a failure, classified as
-/// the same error is as an HTTP response (`super::stream_error`): its numeric
-/// `code` is the status, a documented name stands for its status, and either
-/// goes through this adapter's own `status_error`. A Messages client's
-/// validation statuses (400, 413, 422) are refined by the error envelope as
-/// `post_inner` does with `generation_status`.
+/// A 200 body (or stream frame) carrying `error` is a failure, mapped by code.
 fn embedded_error(value: &Value) -> Result<()> {
     embedded_error_protocol(value, false)
 }
 fn embedded_error_protocol(value: &Value, messages: bool) -> Result<()> {
+    if empty(&value["error"]) {
+        return Ok(());
+    }
+    if let Some(code) = value["error"]["code"]
+        .as_u64()
+        .and_then(|c| u16::try_from(c).ok())
+    {
+        return Err(status_error(code));
+    }
+    Err(if messages {
+        super::framing::classified_error(value).unwrap_or(InferenceError::UpstreamUnavailable)
+    } else {
+        InferenceError::UpstreamUnavailable
+    })
+}
+
+fn stream_embedded_error(value: &Value, messages: bool) -> Result<()> {
     if empty(&value["error"]) {
         return Ok(());
     }
@@ -447,7 +459,13 @@ fn normalize_frame(
     if data == b"[DONE]" {
         return Ok((data.to_vec(), None));
     }
-    let (mut value, cost) = parse_protocol(data, messages)?;
+    let mut value: Value =
+        serde_json::from_slice(data).map_err(|_| InferenceError::InvalidUpstream)?;
+    if !value.is_object() {
+        return Err(InferenceError::InvalidUpstream);
+    }
+    stream_embedded_error(&value, messages)?;
+    let cost = provider_cost(data)?;
     normalize_choices(&mut value)?;
     if let Some(previous) = finish.as_deref()
         && !value["usage"].is_null()
@@ -505,7 +523,7 @@ fn decode_chat_stream(response: reqwest::Response, messages: bool) -> EventStrea
             }
         }
         // Only [DONE] proves completion.
-        Err(super::framing::TRUNCATED)?;
+        Err(super::framing::TRANSPORT)?;
     })
 }
 

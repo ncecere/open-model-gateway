@@ -225,7 +225,7 @@ impl State {
         if self.started && self.stopped && self.metadata {
             Ok(())
         } else {
-            Err(crate::providers::framing::TRUNCATED)
+            Err(crate::providers::framing::TRANSPORT)
         }
     }
 }
@@ -289,6 +289,7 @@ fn transport_class(
     error: &SdkError<aws::error::ConverseStreamOutputError, RawMessage>,
 ) -> InferenceError {
     match error {
+        SdkError::TimeoutError(_) => InferenceError::Timeout,
         SdkError::DispatchFailure(_) => {
             let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
             while let Some(cause) = source {
@@ -357,3 +358,19 @@ pub(super) fn decode(
 #[cfg(test)]
 #[path = "stream_property_tests.rs"]
 mod property_tests;
+
+#[cfg(test)]
+mod receive_tests {
+    use super::*;
+    #[test]
+    fn sdk_timeout_and_invalid_raw_message_keep_transport_classes() {
+        let timeout = SdkError::timeout_error(std::io::Error::other("timeout"));
+        assert_eq!(transport_class(&timeout), InferenceError::Timeout);
+        let invalid =
+            SdkError::response_error(std::io::Error::other("decode"), RawMessage::invalid(None));
+        assert_eq!(
+            transport_class(&invalid),
+            InferenceError::UpstreamUnavailable
+        );
+    }
+}

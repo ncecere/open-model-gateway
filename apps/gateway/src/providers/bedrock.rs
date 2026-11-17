@@ -66,7 +66,16 @@ impl BedrockAdapter {
     /// builds the same shape inline since it already has field access.
     #[cfg(test)]
     pub(crate) fn for_test(base: &str) -> Self {
-        let adapter = Self::new().unwrap();
+        Self::for_test_transport(base, transport::client().unwrap())
+    }
+
+    #[cfg(test)]
+    fn for_test_transport(
+        base: &str,
+        http: aws_smithy_runtime_api::client::http::SharedHttpClient,
+    ) -> Self {
+        let mut adapter = Self::new().unwrap();
+        adapter.http = http;
         let config = aws_sdk_bedrockruntime::Config::builder()
             .behavior_version(BehaviorVersion::v2026_01_12())
             .region(Region::new("us-east-1"))

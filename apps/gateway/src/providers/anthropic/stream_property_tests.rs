@@ -11,7 +11,7 @@
 //!   `stop_reason`; `Usage` and `Done` by the `message_stop` that follows it.
 //!   After `Done` every later frame is refused with `InvalidUpstream` (`State`
 //!   has a `done` flag). Frames running out before `message_stop` is
-//!   `framing::frames`' final `InvalidUpstream`, never a success, and the parser
+//!   `framing::frames`' final `UpstreamUnavailable`, never a success, and the parser
 //!   fabricates nothing for a truncated stream.
 //! * Usage is merged from what was reported: the start event's `output_tokens`
 //!   is preliminary and never used (absent output stays unknown, not zero), a

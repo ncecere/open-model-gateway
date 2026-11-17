@@ -35,7 +35,7 @@ pub mod secrets;
 #[cfg(all(test, feature = "integration-tests"))]
 mod stream_class_e2e_tests;
 #[cfg(test)]
-mod stream_class_tests;
+pub(crate) mod stream_class_tests;
 mod stream_error;
 pub(crate) mod text_workloads;
 

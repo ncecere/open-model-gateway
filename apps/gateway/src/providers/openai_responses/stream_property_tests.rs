@@ -15,7 +15,7 @@
 //!   `response.incomplete`, and then `push` returns exactly `Finish`, `Usage`,
 //!   `Done` in that order. `execute` returns at the first `Done`, so a driver
 //!   sees at most one terminal and nothing after it. Frames running out before
-//!   a terminal is `framing::frames`' final `Err(TRUNCATED)` (a transport
+//!   a terminal is `framing::frames`' final `Err(TRANSPORT)` (a transport
 //!   failure, `UpstreamUnavailable`), never a success; the parser fabricates nothing for a truncated stream.
 //!   `State` itself has no "terminated" flag: a second terminal pushed after
 //!   the first would re-emit (pinned by an ignored finding below; unreachable

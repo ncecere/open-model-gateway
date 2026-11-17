@@ -188,7 +188,18 @@ async fn messages_parallel_calls_and_results_preserve_openai_turns() {
     super::super::contract::assert_parallel_chat_wire(&capture[0].body);
 }
 
-/// #614: a provider `error` in a response body or a stream frame is classified
+#[test]
+fn non_messages_error_decoding_preserves_shared_adapter_behavior() {
+    let value = json!({"error":{"code":"rate_limit_exceeded","message":"prompt is too long"}});
+    for profile in [None, Some("vllm"), Some("ollama")] {
+        assert_error(
+            decode_complete_profile(&value, profile),
+            InferenceError::InvalidUpstream,
+        );
+    }
+}
+
+/// #614: a provider `error` in a stream frame is classified
 /// like the same error as an HTTP response, for every client protocol and
 /// profile, by its documented code or type (or numeric status) alone.
 #[test]
@@ -262,11 +273,11 @@ fn error_decoding_is_classified_like_the_same_http_error() {
             E::UpstreamRejected,
         ),
         (json!({"code":503}), E::UpstreamUnavailable, E::Overloaded),
-        // Unrecognised, or an explicit code that is not a name: unavailable.
+        // Unknown string codes fall back to a documented type.
         (
             json!({"code":"brand_new","type":"rate_limit_error"}),
-            E::UpstreamUnavailable,
-            E::UpstreamUnavailable,
+            E::Busy,
+            E::Busy,
         ),
         (
             json!({"message":"slow down"}),
@@ -282,9 +293,6 @@ fn error_decoding_is_classified_like_the_same_http_error() {
     for (error, chat, messages) in cases {
         let value = json!({"error": error});
         let bytes = serde_json::to_vec(&value).unwrap();
-        for profile in [None, Some("vllm"), Some("ollama")] {
-            assert_error(decode_complete_profile(&value, profile), chat);
-        }
         assert_error(StreamState::default().decode(&bytes), chat);
         let mut state = StreamState {
             messages: true,
@@ -731,13 +739,12 @@ async fn malformed_truncated_and_out_of_order_streams_fail_closed() {
         .into_bytes(),
         event(chunk(json!({}), json!("future_reason"))).into_bytes(),
     ];
-    // The body ending before `[DONE]` (cases 0, 4, 5 and 6, whatever partial
-    // frame is left) and bytes that are not UTF-8 (case 2) are transport
-    // failures; everything else arrived whole and is wrong.
+    // EOF before `[DONE]` (cases 0, 4, 5 and 6, including partial frames)
+    // is a transport failure; complete malformed lines remain invalid.
     for (n, bytes) in cases.into_iter().enumerate() {
         let mock = Mock::sse(bytes, 7).await;
         let results = stream_results(&mock).await;
-        let expected = if [0, 2, 4, 5, 6].contains(&n) {
+        let expected = if [0, 4, 5, 6].contains(&n) {
             InferenceError::UpstreamUnavailable
         } else {
             InferenceError::InvalidUpstream

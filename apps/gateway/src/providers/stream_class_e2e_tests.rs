@@ -33,8 +33,7 @@ enum Client {
     Responses,
 }
 /// The client protocols that reach `kind`: Responses reaches the native
-/// Responses transport only. The local profile needs approved endpoints
-/// and is covered in `stream_class_tests`.
+/// Responses transport only; local profiles use pinned approved endpoints.
 fn clients(kind: Kind) -> Vec<Client> {
     match kind {
         Kind::Responses => vec![Client::Responses],
@@ -57,6 +56,13 @@ async fn register(
     kind: Kind,
     mock_base: &str,
 ) -> (String, crate::inference::admission_validation_tests::Server) {
+    if kind == Kind::Local {
+        sqlx::query("UPDATE provider_connections SET endpoint=$1 WHERE provider='vllm'")
+            .bind(kind.target(mock_base).endpoint)
+            .execute(&f.store.pool)
+            .await
+            .unwrap();
+    }
     let mut registry = ProviderRegistry::default();
     registry.register(kind.adapter(mock_base)).unwrap();
     start_gateway(f, registry).await
@@ -432,10 +438,11 @@ per_kind! {
     openai_chat: Kind::OpenAi,
     openai_responses: Kind::Responses,
     openrouter: Kind::OpenRouter,
+    local: Kind::Local,
 }
 
-/// #622: a reset, a body that ends before the terminal frame, and bytes that
-/// cannot be decoded end the 200 as `upstream_unavailable` and count against
+/// #622: a reset or a body that ends before the terminal frame (including
+/// inside a frame) ends the 200 as `upstream_unavailable` and count against
 /// health; a whole frame with wrong content ends it as
 /// `invalid_upstream_response` and does not.
 async fn transport_failures(pool: PgPool, kind: Kind) {
@@ -477,7 +484,7 @@ async fn transport_failures(pool: PgPool, kind: Kind) {
             vec![Step::Bytes(
                 [content.clone(), b"data: \xff\xfe\n\n".to_vec()].concat(),
             )],
-            E::UpstreamUnavailable,
+            E::InvalidUpstream,
         ),
         (
             "a frame that is not JSON",
@@ -500,7 +507,7 @@ async fn transport_failures(pool: PgPool, kind: Kind) {
             // The chat-shaped providers report usage before their terminal
             // frame: counts the stream did report stay recorded.
             let tokens = (*place == "end before the terminal frame"
-                && matches!(kind, Kind::OpenAi | Kind::OpenRouter))
+                && matches!(kind, Kind::OpenAi | Kind::OpenRouter | Kind::Local))
             .then_some((3, 2));
             check(&w, client, &reply, *class, tokens, &at, &mut problems).await;
         }
@@ -784,5 +791,74 @@ async fn client_drop(pool: PgPool, kind: Kind) {
             rows, 0,
             "{at}: a cancelled attempt left a health observation"
         );
+    }
+}
+
+/// Named errors in non-stream 200 bodies retain the prior class and therefore
+/// do not gain Busy's unconditional failover. An ambiguous OpenRouter error
+/// may still fail over under its existing opt-in policy.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn non_stream_200_errors_do_not_gain_failover(pool: PgPool) {
+    let mut f = fixture(pool).await;
+    let token = issue_key(&mut f).await;
+    for kind in [Kind::OpenAi, Kind::OpenRouter] {
+        let first = add_deployment(&f, kind.provider(), kind.credential(), None, "first", 0).await;
+        let second =
+            add_deployment(&f, kind.provider(), kind.credential(), None, "second", 1).await;
+        only_deployments(&f, &[first, second]).await;
+        sqlx::query("INSERT INTO routing_policies(model_id,max_attempts) VALUES($1,2) ON CONFLICT(model_id) DO UPDATE SET max_attempts=2,allow_ambiguous_failover=false")
+            .bind(f.model).execute(&f.store.pool).await.unwrap();
+        for (d, priority) in [(first, 0), (second, 1)] {
+            sqlx::query("INSERT INTO deployment_routing(deployment_id,priority,residency) VALUES($1,$2,'us')")
+                .bind(d).bind(priority).execute(&f.store.pool).await.unwrap();
+        }
+        for name in ["rate_limit_exceeded", "insufficient_quota"] {
+            for content in [false, true] {
+                sqlx::query("DELETE FROM deployment_health")
+                    .execute(&f.store.pool)
+                    .await
+                    .unwrap();
+                let seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let log = seen.clone();
+                let body = json!({"error":{"code":name},"choices":if content {json!([{"index":0,"message":{"role":"assistant","content":"partial"},"finish_reason":"stop"}])} else {json!([])}}).to_string().into_bytes();
+                let app = Router::new().fallback(move || {
+                    log.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let body = body.clone();
+                    async move { response(200, "application/json", vec![Step::Bytes(body)]) }
+                });
+                let (mock, _mock) = serve(app).await;
+                let (base, _gateway) = register(&f, kind, &mock).await;
+                let reply = reqwest::Client::builder().no_proxy().build().unwrap()
+                    .post(format!("{base}/v1/chat/completions")).bearer_auth(&token)
+                    .json(&json!({"model":"company/smart","stream":false,"messages":[{"role":"user","content":"hi"}]}))
+                    .send().await.unwrap();
+                let id: Uuid = reply.headers()["x-request-id"]
+                    .to_str()
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                assert_eq!(reply.status().as_u16(), 502);
+                let body = reply.text().await.unwrap();
+                let expected = if kind == Kind::OpenAi {
+                    InferenceError::InvalidUpstream
+                } else {
+                    InferenceError::UpstreamUnavailable
+                };
+                assert!(body.contains(expected.code()), "{body}");
+                assert_eq!(
+                    seen.load(std::sync::atomic::Ordering::SeqCst),
+                    1,
+                    "{kind:?} {name} content={content}"
+                );
+                let attempts: i64 = sqlx::query_scalar(
+                    "SELECT count(*) FROM inference_executions WHERE root_request_id=$1",
+                )
+                .bind(id)
+                .fetch_one(&f.store.pool)
+                .await
+                .unwrap();
+                assert_eq!(attempts, 1);
+            }
+        }
     }
 }

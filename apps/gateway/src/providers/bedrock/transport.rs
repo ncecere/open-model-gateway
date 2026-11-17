@@ -129,3 +129,9 @@ pub(super) fn client() -> anyhow::Result<SharedHttpClient> {
     let connector = SharedHttpConnector::new(Connector(client));
     Ok(http_client_fn(move |_, _| connector.clone()))
 }
+
+#[cfg(test)]
+pub(super) fn for_test(client: crate::egress::HttpClient) -> SharedHttpClient {
+    let connector = SharedHttpConnector::new(Connector(client));
+    http_client_fn(move |_, _| connector.clone())
+}

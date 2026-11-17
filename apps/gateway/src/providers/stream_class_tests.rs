@@ -8,7 +8,7 @@
 //!   status, for each client protocol the adapter serves, before and after
 //!   content. An unrecognised error is `UpstreamUnavailable`, never a success.
 //! - **Transport failures** inside a returned stream (reset, a clean end
-//!   before the terminal frame, a partial frame, bytes that are not UTF-8) are
+//!   before the terminal frame, a partial frame) are
 //!   `UpstreamUnavailable`. A frame that arrived whole but is not JSON, has the
 //!   wrong shape, or exceeds the frame bound stays `InvalidUpstream`.
 //!
@@ -233,9 +233,9 @@ impl Kind {
                 json!({"type":"error","code":name,"message":"secret provider text","param":null,"sequence_number":3}),
                 json!({"type":"response.failed","response":{"status":"failed","error":{"code":name,"message":"secret provider text"}}}),
             ],
-            Self::OpenAi | Self::OpenRouter | Self::Local => vec![
-                json!({"error":{"message":"secret provider text","type":"invalid_request_error","param":null,"code":name}}),
-            ],
+            Self::OpenAi | Self::OpenRouter | Self::Local => {
+                vec![json!({"error":{"message":"secret provider text","param":null,"code":name}})]
+            }
         }
     }
     /// A frame that arrived whole and is JSON, but means nothing here.
@@ -370,28 +370,7 @@ async fn a_complete_stream_completes() {
     }
 }
 
-/// The documented names and the HTTP status each stands for (Anthropic
-/// "Errors", OpenAI "Error codes" and the Responses error codes).
-pub(crate) const NAMES: &[(&str, u16)] = &[
-    ("invalid_request_error", 400),
-    ("context_length_exceeded", 400),
-    ("invalid_prompt", 400),
-    ("authentication_error", 401),
-    ("invalid_api_key", 401),
-    ("billing_error", 402),
-    ("permission_error", 403),
-    ("not_found_error", 404),
-    ("model_not_found", 404),
-    ("request_too_large", 413),
-    ("rate_limit_error", 429),
-    ("rate_limit_exceeded", 429),
-    ("insufficient_quota", 429),
-    ("api_error", 500),
-    ("server_error", 500),
-    ("timeout_error", 504),
-    ("overloaded_error", 529),
-    ("overloaded", 529),
-];
+pub(crate) use super::stream_error::DOCUMENTED as NAMES;
 
 /// What the HTTP response of `status` is classified as, restated by hand from
 /// the adapters' documented tables, as an oracle independent of the code under
@@ -403,7 +382,17 @@ pub(crate) fn http_class(kind: Kind, messages: bool, name: &str, status: u16) ->
         401 | 402 if kind == Kind::OpenRouter => E::Configuration,
         403 if kind == Kind::OpenRouter => E::UpstreamRejected,
         529 if messages && kind != Kind::OpenRouter => E::Overloaded,
-        400 if messages && matches!(name, "context_length_exceeded") => E::ContextLength,
+        400 if messages
+            && matches!(
+                name,
+                "context_length_exceeded" | "prompt_too_long" | "too_many_tokens"
+            ) =>
+        {
+            E::ContextLength
+        }
+        503 if messages && kind != Kind::OpenRouter => E::Overloaded,
+        408 | 524 if kind == Kind::OpenRouter => E::Timeout,
+        408 => E::Timeout,
         429 => E::Busy,
         401 | 403 => E::Configuration,
         400..=499 => E::UpstreamRejected,
@@ -569,13 +558,6 @@ async fn transport_failures_inside_a_stream_are_an_unavailable_provider() {
                     vec![Step::Bytes(Vec::new())],
                     false,
                 ),
-                (
-                    "bytes that are not UTF-8",
-                    vec![Step::Bytes(
-                        [content.clone(), b"data: \xff\xfe\n\n".to_vec()].concat(),
-                    )],
-                    true,
-                ),
             ];
             for (place, steps, delivered) in cases {
                 let at = format!("{kind:?} messages={messages} {place}");
@@ -614,6 +596,7 @@ async fn a_whole_frame_with_wrong_content_stays_an_invalid_response() {
             let oversized = format!("data: {}\n\n", "x".repeat(1024 * 1024 + 16)).into_bytes();
             let cases: Vec<(&str, Vec<u8>)> = vec![
                 ("not JSON", b"data: {not json\n\n".to_vec()),
+                ("invalid UTF-8 line", b"data: \xff\xfe\n\n".to_vec()),
                 ("JSON of the wrong shape", kind.wrong_shape()),
                 ("a frame over the bound", oversized),
                 ("the closing frames twice", [rest.clone(), rest].concat()),
@@ -629,4 +612,70 @@ async fn a_whole_frame_with_wrong_content_stays_an_invalid_response() {
         }
     }
     assert!(problems.is_empty(), "{problems:#?}");
+}
+
+#[tokio::test]
+async fn a_json_200_for_a_stream_request_is_not_an_sse_error_event() {
+    for kind in KINDS {
+        for &messages in kind.clients() {
+            let body = br#"{"error":{"code":"rate_limit_exceeded"}}"#.to_vec();
+            assert!(matches!(
+                run(
+                    kind,
+                    messages,
+                    200,
+                    "application/json",
+                    vec![Step::Bytes(body)]
+                )
+                .await,
+                Outcome::Refused(InferenceError::InvalidUpstream)
+            ));
+        }
+    }
+}
+
+#[tokio::test]
+async fn numeric_codes_and_string_precedence_match_http_statuses() {
+    for kind in KINDS {
+        for &messages in kind.clients() {
+            for (code, typ, status) in [
+                (json!(408), "rate_limit_error", 408),
+                (json!(429), "invalid_request_error", 429),
+                (json!(503), "invalid_request_error", 503),
+                (json!(524), "invalid_request_error", 524),
+                (json!("400"), "rate_limit_error", 400),
+                (json!("429"), "invalid_request_error", 429),
+                (json!(""), "invalid_request_error", 400),
+                (json!("new_name"), "invalid_request_error", 400),
+            ] {
+                let error = json!({"code":code,"type":typ});
+                let frame = match kind {
+                    Kind::Anthropic => json!({"type":"error","error":error}),
+                    Kind::Responses => {
+                        json!({"type":"response.failed","response":{"status":"failed","error":error}})
+                    }
+                    _ => json!({"error":error}),
+                };
+                let http = run(
+                    kind,
+                    messages,
+                    status,
+                    "application/json",
+                    vec![Step::Bytes(frame.to_string().into_bytes())],
+                )
+                .await;
+                assert_eq!(
+                    http.class(),
+                    Some(http_class(kind, messages, "", status)),
+                    "HTTP {status} {kind:?}"
+                );
+                let outcome = sse_run(kind, messages, vec![Step::Bytes(sse(&[frame]))]).await;
+                assert_eq!(
+                    outcome.class(),
+                    http.class(),
+                    "{kind:?} messages={messages} code={code}"
+                );
+            }
+        }
+    }
 }

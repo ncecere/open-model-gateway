@@ -236,3 +236,56 @@ fn a_body_failure_is_classified_by_where_it_arose() {
         assert_eq!(failure.class(), class, "{failure:?}");
     }
 }
+
+/// The real bounded HTTP body, through Smithy, preserves an active read timeout.
+/// Sleeping between polls instead is downstream inactivity, not upstream idle.
+#[tokio::test]
+async fn read_timeout_and_slow_reader_are_distinct() {
+    for stalled in [true, false] {
+        let f = frames();
+        let steps = if stalled {
+            vec![bytes(&f[..2]), Step::Hang]
+        } else {
+            vec![bytes(&f)]
+        };
+        let (base, _server) =
+            serve(upstream(200, "application/vnd.amazon.eventstream", steps)).await;
+        let http = crate::egress::client_builder(crate::egress::resolver(
+            crate::egress::Purpose::Provider,
+        ))
+        .read_timeout(Duration::from_millis(100))
+        .build()
+        .unwrap();
+        let adapter =
+            BedrockAdapter::for_test_transport(&base, super::super::transport::for_test(http));
+        let mut req = request();
+        req.stream = true;
+        let ProviderOutput::Stream(mut stream) = adapter.execute(&target(), req).await.unwrap()
+        else {
+            panic!("stream expected")
+        };
+        let first = stream.next().await.unwrap().unwrap();
+        assert!(matches!(first, ChatEvent::Delta { .. }));
+        // No upstream read is pending while the consumer is processing a delta.
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let mut done = false;
+        let mut failure = None;
+        while let Some(event) = stream.next().await {
+            match event {
+                Ok(ChatEvent::Done) => done = true,
+                Err(e) => {
+                    failure = Some(e);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        if stalled {
+            assert_eq!(failure, Some(InferenceError::Timeout));
+            assert!(!done);
+        } else {
+            assert_eq!(failure, None);
+            assert!(done);
+        }
+    }
+}

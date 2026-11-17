@@ -158,8 +158,42 @@ async fn messages_parallel_calls_and_results_preserve_openrouter_turns() {
     assert_eq!(mock.count(), 1);
 }
 
+#[tokio::test]
+async fn non_messages_named_errors_keep_legacy_adapter_behavior() {
+    let value = json!({"error":{"code":"rate_limit_exceeded","message":"prompt is too long"}});
+    for messages in [false, true] {
+        let mock = Mock::json(value.clone()).await;
+        let mut request = chat(false);
+        if messages {
+            request.messages_options = Some(Box::default());
+        }
+        let expected = if messages {
+            InferenceError::Busy
+        } else {
+            InferenceError::UpstreamUnavailable
+        };
+        assert!(
+            matches!(mock.adapter().execute(&target("private"), request).await, Err(error) if error == expected)
+        );
+        let mock = Mock::sse(format!("data: {value}\n\n"), 1).await;
+        let mut request = chat(true);
+        if messages {
+            request.messages_options = Some(Box::default());
+        }
+        let ProviderOutput::Stream(mut stream) = mock
+            .adapter()
+            .execute(&target("private"), request)
+            .await
+            .unwrap()
+        else {
+            panic!("stream expected");
+        };
+        assert!(matches!(stream.next().await, Some(Err(error)) if error == InferenceError::Busy));
+    }
+}
+
 /// #614: a named (string) code is classified like its numeric status, for every
-/// client protocol, in a body and in a stream frame: through this adapter's own
+/// client protocol, in a stream frame: through this adapter's own
 /// status table.
 #[tokio::test]
 async fn named_errors_are_classified_like_the_same_http_error() {
@@ -216,15 +250,6 @@ async fn named_errors_are_classified_like_the_same_http_error() {
     for (error, chat_class, messages_class) in cases {
         let value = json!({"error": error});
         for (messages, expected) in [(false, chat_class), (true, messages_class)] {
-            let mock = Mock::json(value.clone()).await;
-            let mut request = chat(false);
-            if messages {
-                request.messages_options = Some(Box::default());
-            }
-            assert!(
-                matches!(mock.adapter().execute(&target("private"), request).await, Err(error) if error == expected),
-                "{value} messages={messages}"
-            );
             let mock = Mock::sse(format!("data: {value}\n\n"), 1).await;
             let mut request = chat(true);
             if messages {
