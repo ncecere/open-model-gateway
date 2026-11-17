@@ -1,0 +1,278 @@
+//! Explicit terminal gateway envelope resolution. Line reservations own charges.
+use super::free_price::{MAX_CANDIDATES, Resolve};
+use super::*;
+use crate::governance::locks::{self, Scope};
+use chrono::{DateTime, Utc};
+use sqlx::{Postgres, Transaction};
+use std::collections::{BTreeMap, BTreeSet};
+
+#[derive(sqlx::FromRow)]
+struct Candidate {
+    job_id: Uuid,
+    execution_id: Uuid,
+    workspace_id: Uuid,
+    api_key_id: Uuid,
+    admitted_at: DateTime<Utc>,
+    held_microusd: i64,
+}
+// A terminal gateway record proves the envelope covers no provider attempt.
+// Every admitted line must still have its own reservation; no missing charge
+// can be concealed by releasing the envelope. The job lock fences new lines.
+// Fence the UUID-only reservation lookup before applying eligibility. With
+// sparse statistics PostgreSQL can otherwise bitmap-AND the entire UNKNOWN
+// index for each job, making a bounded page repeatedly scan retained history.
+const CANDIDATES: &str = "SELECT j.id AS job_id,r.execution_id,r.workspace_id,r.api_key_id,r.admitted_at,r.held_microusd
+FROM async_jobs j
+CROSS JOIN LATERAL (
+ SELECT r.execution_id,r.workspace_id,r.api_key_id,r.deployment_id,r.admitted_at,r.held_microusd,r.state,r.price_id,r.unbounded_cost
+ FROM governance_reservations r WHERE r.execution_id=j.execution_id OFFSET 0
+) r
+JOIN inference_executions e ON e.id=r.execution_id AND e.started_at=r.admitted_at
+WHERE j.kind='batch' AND j.batch_mode='gateway' AND j.state IN ('completed','failed','cancelled','expired') AND j.completed_at IS NOT NULL
+AND j.upstream_id IS NULL AND j.submit_started_at IS NULL
+AND r.workspace_id=j.workspace_id AND r.api_key_id=j.api_key_id AND r.deployment_id=j.deployment_id
+AND r.state='unknown' AND r.price_id IS NULL AND r.held_microusd IS NOT NULL AND NOT r.unbounded_cost
+AND e.state<>'started' AND e.workload_kind='batches' AND e.batch_job_id IS NULL
+AND ($1::timestamptz IS NULL OR r.admitted_at >= $1) AND ($2::timestamptz IS NULL OR r.admitted_at < $2)
+AND ($3::uuid IS NULL OR r.workspace_id=$3) AND ($4::uuid IS NULL OR r.deployment_id=$4)
+AND ($5::uuid[] IS NULL OR j.id IN (SELECT unnest($5::uuid[])))
+ORDER BY r.admitted_at,r.execution_id LIMIT 10001 OFFSET $6";
+async fn candidates(
+    tx: &mut Transaction<'_, Postgres>,
+    p: &Resolve,
+    ids: Option<&[Uuid]>,
+) -> Result<Vec<Candidate>, ApiError> {
+    let bounds = p.bounds()?;
+    Ok(sqlx::query_as(CANDIDATES)
+        .bind(bounds.map(|b| b.0))
+        .bind(bounds.map(|b| b.1))
+        .bind(p.workspace_id)
+        .bind(p.deployment_id)
+        .bind(ids)
+        .bind(if ids.is_none() { p.offset()? } else { 0 })
+        .fetch_all(&mut **tx)
+        .await?)
+}
+#[derive(sqlx::FromRow)]
+struct Line {
+    batch_job_id: Option<Uuid>,
+    state: String,
+    actual_microusd: Option<i64>,
+    held_microusd: Option<i64>,
+    unbounded_cost: bool,
+}
+#[derive(Default, Clone)]
+struct Evidence {
+    envelope_held: i64,
+    settled: i64,
+    held: i64,
+    pending: i64,
+    unknown: i64,
+    unbounded: i64,
+}
+fn add(a: i64, b: i64) -> Result<i64, ApiError> {
+    a.checked_add(b).ok_or(ApiError(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Accounting total exceeds supported range",
+    ))
+}
+impl Evidence {
+    fn json(&self) -> Value {
+        json!({"envelope_held_microusd":self.envelope_held.to_string(),"line_settled_microusd":self.settled.to_string(),"line_held_microusd":self.held.to_string(),"line_pending_count":self.pending.to_string(),"line_unknown_count":self.unknown.to_string(),"line_unbounded_count":self.unbounded.to_string()})
+    }
+    fn include(&mut self, other: &Self) -> Result<(), ApiError> {
+        self.envelope_held = add(self.envelope_held, other.envelope_held)?;
+        self.settled = add(self.settled, other.settled)?;
+        self.held = add(self.held, other.held)?;
+        self.pending = add(self.pending, other.pending)?;
+        self.unknown = add(self.unknown, other.unknown)?;
+        self.unbounded = add(self.unbounded, other.unbounded)?;
+        Ok(())
+    }
+}
+async fn locked(
+    tx: &mut Transaction<'_, Postgres>,
+    initial: &[Candidate],
+) -> Result<(Vec<Line>, BTreeSet<Uuid>), ApiError> {
+    let jobs: Vec<_> = initial.iter().map(|r| r.job_id).collect();
+    let executions: Vec<_> = initial.iter().map(|r| r.execution_id).collect();
+    // All jobs precede every reservation. FOR UPDATE excludes runner claims,
+    // line claims and admission; settlement only waits on reservation rows.
+    sqlx::query("SELECT id FROM async_jobs WHERE id=ANY($1) ORDER BY id FOR UPDATE")
+        .bind(&jobs)
+        .fetch_all(&mut **tx)
+        .await?;
+    let lines=sqlx::query_as("SELECT e.batch_job_id,r.state,r.actual_microusd,r.held_microusd,r.unbounded_cost FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id AND e.started_at=r.admitted_at WHERE r.execution_id=ANY($1) OR e.batch_job_id=ANY($2) ORDER BY r.admitted_at,r.execution_id FOR UPDATE OF r")
+        .bind(&executions).bind(&jobs).fetch_all(&mut **tx).await?;
+    // Job locks exclude line admission. Read missing line reservations once
+    // for the page, rather than a correlated anti-join for each envelope.
+    let ambiguous:Vec<Uuid>=sqlx::query_scalar("SELECT DISTINCT e.batch_job_id FROM inference_executions e JOIN async_jobs j ON j.id=e.batch_job_id WHERE e.batch_job_id IN (SELECT unnest($1::uuid[])) AND (e.workspace_id<>j.workspace_id OR NOT EXISTS(SELECT 1 FROM governance_reservations r WHERE r.execution_id=e.id AND r.admitted_at=e.started_at))")
+        .bind(&jobs).fetch_all(&mut **tx).await?;
+    Ok((lines, ambiguous.into_iter().collect()))
+}
+fn evidence(rows: &[Candidate], lines: &[Line]) -> Result<BTreeMap<Uuid, Evidence>, ApiError> {
+    let mut result = BTreeMap::new();
+    for r in rows {
+        result.insert(
+            r.job_id,
+            Evidence {
+                envelope_held: r.held_microusd,
+                ..Default::default()
+            },
+        );
+    }
+    for line in lines {
+        let Some(e) = line.batch_job_id.and_then(|job| result.get_mut(&job)) else {
+            continue;
+        };
+        if line.state == "settled" {
+            e.settled = add(
+                e.settled,
+                line.actual_microusd.ok_or(ApiError(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Settled line cost unavailable",
+                ))?,
+            )?;
+        } else {
+            e.held = add(e.held, line.held_microusd.unwrap_or(0))?;
+            e.pending += i64::from(line.state == "pending");
+            e.unknown += i64::from(line.state == "unknown");
+            e.unbounded += i64::from(line.unbounded_cost || line.held_microusd.is_none());
+        }
+    }
+    Ok(result)
+}
+pub(super) async fn resolve(
+    State(s): State<Store>,
+    Extension(u): Extension<ManagementPrincipal>,
+    Json(p): Json<Resolve>,
+) -> ApiResult {
+    p.validate()?;
+    let offset = p.offset()?;
+    if u.token_id().is_some() {
+        return Err(denied());
+    }
+    let mut tx = crate::db::begin(&s.pool).await?;
+    resources::catalog_lock(&mut tx, false).await?;
+    resources::require_platform_admin(
+        &resources::platform_role_snapshot(&mut tx, u.user_id()).await?,
+    )?;
+    let mut initial = candidates(&mut tx, &p, None).await?;
+    let more = initial.len() > MAX_CANDIDATES;
+    initial.truncate(MAX_CANDIDATES);
+    let scanned = initial.len() as i64;
+    locks::shared(
+        &mut tx,
+        initial
+            .iter()
+            .map(|r| Scope::Workspace(r.workspace_id))
+            .chain([Scope::User(u.user_id())]),
+    )
+    .await?;
+    // The actor scope is held through all later job/reservation waits.
+    resources::platform_write(&mut tx, &u).await?;
+    let (lines, ambiguous) = locked(&mut tx, &initial).await?;
+    let ids: Vec<_> = initial.iter().map(|r| r.job_id).collect();
+    let mut rows = candidates(&mut tx, &p, Some(&ids)).await?;
+    rows.retain(|r| !ambiguous.contains(&r.job_id));
+    let count = rows.len().to_string();
+    let evidence = evidence(&rows, &lines)?;
+    let mut total = Evidence::default();
+    for e in evidence.values() {
+        total.include(e)?;
+    }
+    if p.apply {
+        if p.expected_count.as_deref() != Some(count.as_str()) {
+            return Err(ApiError(
+                StatusCode::CONFLICT,
+                "Eligible count changed; preview again",
+            ));
+        }
+        let touches: Vec<_> = rows
+            .iter()
+            .map(|r| locks::Touch {
+                workspace: r.workspace_id,
+                api_key: r.api_key_id,
+                at: r.admitted_at,
+            })
+            .collect();
+        locks::rows(&mut tx, &touches, false).await?;
+        apply(
+            &mut tx,
+            &rows,
+            &evidence,
+            u.user_id(),
+            p.reason.as_deref().ok_or_else(invalid)?,
+        )
+        .await?;
+    }
+    let next =
+        more.then(|| (offset + scanned - if p.apply { rows.len() as i64 } else { 0 }).to_string());
+    let mut result = total.json();
+    result["eligible_count"] = json!(count);
+    result["resolved_count"] = json!(if p.apply {
+        rows.len().to_string()
+    } else {
+        "0".into()
+    });
+    result["next_offset"] = json!(next);
+    // No retry on COMMIT errors: the transaction may already be durable.
+    commit(tx).await?;
+    Ok(Json(result))
+}
+async fn apply(
+    tx: &mut Transaction<'_, Postgres>,
+    rows: &[Candidate],
+    evidence: &BTreeMap<Uuid, Evidence>,
+    actor: Uuid,
+    reason: &str,
+) -> Result<(), ApiError> {
+    let mut workspaces = BTreeMap::<Uuid, (i64, Evidence)>::new();
+    for r in rows {
+        let e = &evidence[&r.job_id];
+        sqlx::query("UPDATE governance_reservations SET state='settled',actual_microusd=0,batch_envelope_resolved=true WHERE execution_id=$1 AND admitted_at=$2 AND state='unknown'").bind(r.execution_id).bind(r.admitted_at).execute(&mut **tx).await?;
+        // Copy observations byte-for-byte, including NULLs; known line costs
+        // are evidence only, because their reservations already charged them.
+        sqlx::query("INSERT INTO monetary_ledger(id,execution_id,admitted_at,kind,amount_microusd,input_tokens,output_tokens,billing_usage,cost_components,meter_usage,output_image_variant,provider_cost_microusd,evidence) SELECT gen_random_uuid(),execution_id,admitted_at,'reconciliation',0,input_tokens,output_tokens,billing_usage,cost_components,meter_usage,output_image_variant,provider_cost_microusd,$3 FROM governance_reservations WHERE execution_id=$1 AND admitted_at=$2")
+            .bind(r.execution_id).bind(r.admitted_at).bind(format!("batch-lines={};{reason}",e.settled)).execute(&mut **tx).await?;
+        sqlx::query(
+            "UPDATE async_jobs SET settled_at=clock_timestamp() WHERE id=$1 AND settled_at IS NULL",
+        )
+        .bind(r.job_id)
+        .execute(&mut **tx)
+        .await?;
+        let (count, total) = workspaces.entry(r.workspace_id).or_default();
+        *count += 1;
+        total.include(e)?;
+    }
+    for (workspace, (count, total)) in workspaces {
+        let mut metadata = total.json();
+        metadata["reason"] = json!(reason);
+        metadata["resolved_count"] = json!(count.to_string());
+        // The actor's export can include this event: every resource/metadata
+        // field must remain aggregate-only even for another owner's workspace.
+        sqlx::query("INSERT INTO audit_events(id,workspace_id,actor_user_id,action,resource_type,resource_id,metadata) VALUES(gen_random_uuid(),$1,$2,'usage.batch_envelope_resolved','workspace',$1,$3)").bind(workspace).bind(actor).bind(metadata).execute(&mut **tx).await?;
+    }
+    Ok(())
+}
+#[cfg(test)]
+tokio::task_local! {pub(crate) static LOSE_COMMIT_ACK: bool;}
+async fn commit(tx: Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
+    tx.commit().await?;
+    #[cfg(test)]
+    if LOSE_COMMIT_ACK.try_with(|lose| *lose).unwrap_or(false) {
+        return Err(sqlx::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "commit acknowledgement lost",
+        )));
+    }
+    Ok(())
+}
+#[test]
+fn management_openapi_batch_envelope_request_vectors() {
+    crate::management::openapi::requests::vectors::<Resolve>(
+        "POST",
+        "/api/v1/platform/reservations/resolve-batch-envelopes",
+        json!({"apply":true,"month":"2026-01","workspace_id":Uuid::nil(),"deployment_id":Uuid::nil(),"expected_count":"0","reason":"operator reference","offset":"0"}),
+    );
+}

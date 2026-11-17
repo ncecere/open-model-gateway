@@ -57,9 +57,9 @@ mod tests {
             "management OpenAPI: {operations} operations; {placeholders} incomplete request/response schemas remaining (#81)"
         );
         // #81 is complete: zero placeholders (a new route fails until its fragment is complete).
-        // 273 operations: #657 adds explicit free-price reservation resolution.
+        // 274 operations: #661 adds explicit terminal batch-envelope resolution.
         assert_eq!(
-            operations, 273,
+            operations, 274,
             "review route additions and update this progress baseline"
         );
         assert_eq!(

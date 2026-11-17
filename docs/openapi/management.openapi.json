@@ -967,6 +967,63 @@
             }
           }
         },
+        "description": "Storage or aggregate accounting unavailable",
+        "headers": {
+          "Cache-Control": {
+            "schema": {
+              "const": "no-store"
+            }
+          },
+          "Referrer-Policy": {
+            "schema": {
+              "const": "no-referrer"
+            }
+          }
+        },
+        "x-omg-body-header-requirements": [
+          {
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Referrer-Policy": {
+                "required": true,
+                "schema": {
+                  "const": "no-referrer"
+                }
+              }
+            },
+            "schema": {
+              "$ref": "#/components/schemas/ManagementAuth503"
+            }
+          }
+        ]
+      },
+      "ManagementMiddleware503Variant6": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ManagementAuth503"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ErrorEnvelope"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
         "description": "Storage or pinned pricing unavailable",
         "headers": {
           "Cache-Control": {
@@ -5968,6 +6025,258 @@
           "created_at",
           "workspace_name",
           "workspace_kind"
+        ],
+        "type": "object"
+      },
+      "BatchEnvelopeResolutionInput": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "if": {
+              "properties": {
+                "apply": {
+                  "const": true
+                }
+              },
+              "required": [
+                "apply"
+              ]
+            },
+            "properties": {
+              "apply": {
+                "default": false,
+                "type": "boolean"
+              },
+              "deployment_id": {
+                "format": "uuid",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "expected_count": {
+                "pattern": "^(0|[1-9][0-9]{0,3}|10000)$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "month": {
+                "pattern": "^([1-9][0-9]{3}|0[1-9][0-9]{2}|00[1-9][0-9]|000[1-9])-(0[1-9]|1[0-2])$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "offset": {
+                "default": "0",
+                "description": "Canonical decimal offset from 0 through 9223372036854765807.",
+                "pattern": "^(?:0|[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-5][0-9]{4}|922337203685476[0-4][0-9]{3}|9223372036854765[0-7][0-9]{2}|922337203685476580[0-6]|9223372036854765807)$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "maxLength": 150,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "workspace_id": {
+                "format": "uuid",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [],
+            "then": {
+              "properties": {
+                "expected_count": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "expected_count",
+                "reason"
+              ]
+            },
+            "type": "object"
+          },
+          {
+            "if": {
+              "prefixItems": [
+                {
+                  "const": true
+                }
+              ]
+            },
+            "items": false,
+            "maxItems": 7,
+            "minItems": 6,
+            "prefixItems": [
+              {
+                "default": false,
+                "type": "boolean"
+              },
+              {
+                "pattern": "^([1-9][0-9]{3}|0[1-9][0-9]{2}|00[1-9][0-9]|000[1-9])-(0[1-9]|1[0-2])$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "format": "uuid",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "format": "uuid",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "pattern": "^(0|[1-9][0-9]{0,3}|10000)$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "maxLength": 150,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "default": "0",
+                "description": "Canonical decimal offset from 0 through 9223372036854765807.",
+                "pattern": "^(?:0|[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-5][0-9]{4}|922337203685476[0-4][0-9]{3}|9223372036854765[0-7][0-9]{2}|922337203685476580[0-6]|9223372036854765807)$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            ],
+            "then": {
+              "prefixItems": [
+                {
+                  "default": false,
+                  "type": "boolean"
+                },
+                {
+                  "pattern": "^([1-9][0-9]{3}|0[1-9][0-9]{2}|00[1-9][0-9]|000[1-9])-(0[1-9]|1[0-2])$",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "format": "uuid",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "format": "uuid",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "pattern": "^(0|[1-9][0-9]{0,3}|10000)$",
+                  "type": "string"
+                },
+                {
+                  "maxLength": 150,
+                  "minLength": 1,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "array"
+          }
+        ]
+      },
+      "BatchEnvelopeResolutionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "eligible_count": {
+            "pattern": "^(0|[1-9][0-9]{0,3}|10000)$",
+            "type": "string"
+          },
+          "envelope_held_microusd": {
+            "maxLength": 19,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "line_held_microusd": {
+            "maxLength": 19,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "line_pending_count": {
+            "maxLength": 19,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "line_settled_microusd": {
+            "maxLength": 19,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "line_unbounded_count": {
+            "maxLength": 19,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "line_unknown_count": {
+            "maxLength": 19,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "next_offset": {
+            "maxLength": 19,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolved_count": {
+            "pattern": "^(0|[1-9][0-9]{0,3}|10000)$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "eligible_count",
+          "resolved_count",
+          "next_offset",
+          "envelope_held_microusd",
+          "line_settled_microusd",
+          "line_held_microusd",
+          "line_pending_count",
+          "line_unknown_count",
+          "line_unbounded_count"
         ],
         "type": "object"
       },
@@ -50089,6 +50398,12 @@
       "post_api_v1_platform_report_schedulesResponse": {
         "$ref": "#/components/schemas/MoneyPlatformScheduleCreated"
       },
+      "post_api_v1_platform_reservations_resolve_batch_envelopesRequest": {
+        "$ref": "#/components/schemas/BatchEnvelopeResolutionInput"
+      },
+      "post_api_v1_platform_reservations_resolve_batch_envelopesResponse": {
+        "$ref": "#/components/schemas/BatchEnvelopeResolutionResult"
+      },
       "post_api_v1_platform_reservations_resolve_free_priceRequest": {
         "$ref": "#/components/schemas/FreePriceResolutionInput"
       },
@@ -67654,6 +67969,108 @@
         "x-omg-token-policy": "Denied"
       }
     },
+    "/api/v1/platform/reservations/resolve-batch-envelopes": {
+      "post": {
+        "description": "Explicit browser-session Platform Admin action, separate from free-price eligibility. Bounded aggregate preview/apply of terminal gateway-run UNKNOWN envelopes only; native/nonterminal/ambiguous jobs are excluded. Apply with expected_count and reason. The unused envelope settles at ZERO; line reservations own charges and retain pending/unknown holds. Known settled line sum is evidence, never charged twice. NULL usage and observations remain unchanged. Counts and totals only, including personal workspaces; line held amount is a known floor when line_unbounded_count is positive. Preview is advisory; changed count conflicts atomically. Follow apply next_offset; resolved rows leave the scan. No automatic action or retry.",
+        "operationId": "post_api_v1_platform_reservations_resolve_batch_envelopes",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchEnvelopeResolutionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchEnvelopeResolutionResult"
+                }
+              }
+            },
+            "description": "Count only, or atomically resolved at zero cost"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid input"
+          },
+          "401": {
+            "$ref": "#/components/responses/ManagementMiddleware401Variant2"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManagementMiddleware403Variant3"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Eligible page count changed; preview again"
+          },
+          "413": {
+            "$ref": "#/components/responses/ManagementMiddleware413Variant1"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid JSON shape"
+          },
+          "429": {
+            "$ref": "#/components/responses/ManagementMiddleware429Variant1"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant5"
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "PlatformWrite",
+        "x-omg-middleware-responses": {
+          "$ref": "#/x-omg-middleware-contracts/management"
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_reservations_resolve_batch_envelopesRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_reservations_resolve_batch_envelopesResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
     "/api/v1/platform/reservations/resolve-free-price": {
       "post": {
         "description": "Explicit browser-session Platform Admin action. Preview a bounded page, then apply with expected_count, reason and the same numeric offset. Rechecks pinned pricing and live authority; missing usage remains NULL. Only counts and a numeric next_offset leave the route, including personal workspaces. No automatic resolution. Nonzero holds, priced/unknown/missing rates, missing variant defaults, realtime, running executions/jobs and unpinned batch envelopes are excluded. Preview is advisory; applying selects again and refuses a changed page count. Follow the apply response next_offset because resolved candidates are removed; null means the selected scan reached its end.",
@@ -67733,7 +68150,7 @@
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant5"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant6"
           }
         },
         "security": [

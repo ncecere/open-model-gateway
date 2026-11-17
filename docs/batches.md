@@ -124,7 +124,7 @@ Results count toward the workspace's [storage](files-api.md) but never fail on i
 - **Transfer:** its hold is moved out of the batch's reservation (the envelope) under the installation lock, so the budget totals do not change.
 - **Budgets:** only the part of a line's hold that the envelope can no longer cover is checked against budgets. A line that overspent (settled above its bound) therefore stops the batch at the budget.
 - **Settlement:** each line settles from its own usage. Unknown usage keeps that line's hold.
-- **End:** when the batch ends, the envelope settles at zero, which releases what no line used.
+- **End:** when the batch ends, the envelope settles at zero, which releases what no line used. A terminal batch whose envelope became UNKNOWN requires the explicit audited [Platform Admin resolution](operations.md#explicit-resolution-of-terminal-gateway-batch-envelopes); it releases only that envelope hold and preserves every line charge/hold.
 
 **Native batches** settle once from the provider's aggregate usage, or from the sum of the decoded lines' usage when every succeeded line reported it. Otherwise the usage is unknown and the hold is retained. A provider-accepted batch later reported failed keeps unknown usage/cost even on an entirely free price, with any supplied usage preserved as evidence; this also applies to legacy passthrough batches. Cancelled and expired batches record any usage as evidence and keep the hold, as before ([async jobs](async-jobs.md#reservation-and-settlement)).
 

@@ -269,6 +269,7 @@ async fn free_price_runtime_http_operator_flow(pool: PgPool) {
         );
         seen.observe(&page);
     }
+    super::batch_envelope_http_tests::run(&f, &client, &base, &admin, &member, &mut seen).await;
     seen.finish(crate::management::openapi::responses::FREE_PRICE_AREAS);
     let mut tx = crate::db::begin(&pool).await.unwrap();
     crate::governance::locks::exclusive(&mut tx, [crate::governance::locks::Scope::User(f.owner)])
@@ -311,4 +312,19 @@ async fn free_price_runtime_http_operator_flow(pool: PgPool) {
             .as_u16(),
         401
     );
+    let batch_path = format!("{base}/api/v1/platform/reservations/resolve-batch-envelopes");
+    for (credential, status) in [(&token.token, 403), (&inference.token, 401)] {
+        assert_eq!(
+            client
+                .post(&batch_path)
+                .bearer_auth(credential)
+                .json(&json!({}))
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .as_u16(),
+            status
+        );
+    }
 }
