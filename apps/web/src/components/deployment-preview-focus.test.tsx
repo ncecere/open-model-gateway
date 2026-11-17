@@ -2,11 +2,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { defaultScheduler, notifyManager, QueryClientProvider } from "@tanstack/react-query";
 import { DeploymentStatusActions } from "./deployment-preview";
 import { ActionProvider, Button, useApi } from "./ui";
 import { platformPath } from "../lib/api";
 import { PageHeader } from "./templates/page-header";
+import { PrevNext } from "./templates/prev-next";
 import { HEADER_COLLAPSE_QUERY } from "./templates/header-actions";
 import { RoutesTable, type RouteRow, type RouteSet } from "../pages/model-page";
 import { routeTiers } from "../lib/model-setup";
@@ -36,15 +37,45 @@ beforeEach(() => {
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   viewport(1440);
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); notifyManager.setScheduler(defaultScheduler); vi.unstubAllGlobals(); });
 
 // The menu moves focus into its popup after opening; keyboard navigation sent
 // before that lands on the trigger and is lost (flaky under load).
 const menuFocused = () => waitFor(() => expect(document.activeElement?.closest('[role="menu"]')).not.toBeNull());
 
 describe("menu-originated deployment review focus", () => {
+  it.each([1440, 390])("keeps the focused header fallback mounted when route navigation arrives at %spx", width => {
+    viewport(width);
+    const header = (ready: boolean) => <DeploymentStatusActions record={record} name="Upstream">{actions => <PageHeader title="Route" actions={<>{ready && <PrevNext noun="route" />}{actions}</>} />}</DeploymentStatusActions>;
+    const { rerender } = render(header(false));
+    const fallback = screen.getByRole("button", { name: /^Review changes$/ });
+    fallback.focus();
+    for (const ready of [true, false]) {
+      rerender(header(ready));
+      expect(screen.queryByRole("navigation", { name: "Route navigation" }) !== null).toBe(ready);
+      expect(fallback.isConnected).toBe(true);
+      expect(screen.getByRole("button", { name: /^Review changes$/ })).toBe(fallback);
+      expect(document.activeElement).toBe(fallback);
+    }
+  });
+
+  it.each([true, false])("keeps the focused route trigger mounted when enabled=%s changes its tier", initiallyEnabled => {
+    const client = testClient();
+    const table = (enabled: boolean) => <QueryClientProvider client={client}><ActionProvider><RoutesTable set={routeSet(enabled)} model={model} workload="generation" writable /></ActionProvider></QueryClientProvider>;
+    const { rerender } = render(table(initiallyEnabled));
+    const origin = screen.getByRole("button", { name: "Actions for route Upstream" });
+    origin.focus();
+    // A fetch promise/frame may settle before Query's observer notification
+    // commits. Regrouping must preserve the trigger that already regained focus.
+    rerender(table(!initiallyEnabled));
+    expect(origin.isConnected).toBe(true);
+    expect(screen.getByRole("button", { name: "Actions for route Upstream" })).toBe(origin);
+    expect(document.activeElement).toBe(origin);
+  });
+
   for (const source of ["retire", "narrow-retire", "review-disable", "review-enable", "route-menu", "route-menu-enable"] as const) {
-    it.each(["review-cancel", "cancel", "success"] as const)(`${source}: %s restores a connected trigger or fallback`, async outcome => {
+    it.each(["review-cancel", "cancel", "success", "success-before-render", "user-moved-focus"] as const)(`${source}: %s restores a connected trigger or fallback`, async outcome => {
+      const success = outcome !== "review-cancel" && outcome !== "cancel";
       if (source === "narrow-retire") viewport(390);
       const routeMenu = source.startsWith("route-menu"), reviewButton = source.startsWith("review-"), initiallyEnabled = !source.endsWith("-enable");
       const path = `${platformPath}/deployments/${record.id}`, client = testClient();
@@ -55,7 +86,7 @@ describe("menu-originated deployment review focus", () => {
         const enabled = useApi<typeof record>(path).data!.enabled;
         return <><output aria-label="Deployment status">{enabled ? "Enabled" : "Disabled"}</output>{routeMenu
           ? <RoutesTable set={routeSet(enabled)} model={model} workload="generation" writable />
-          : <DeploymentStatusActions record={{ ...record, enabled }} name="Upstream">{actions => <PageHeader title="Route" actions={actions} />}</DeploymentStatusActions>}</>;
+          : <DeploymentStatusActions record={{ ...record, enabled }} name="Upstream">{actions => <PageHeader title="Route" actions={actions} />}</DeploymentStatusActions>}<Button>Other action</Button></>;
       }
       const fetch = vi.fn().mockImplementation((_path: string, init: RequestInit) => {
         if (init.method === "POST") return Promise.resolve(Response.json({ ...impact, diff: [{ field: "enabled", before: initiallyEnabled, after: !initiallyEnabled }] }));
@@ -92,23 +123,39 @@ describe("menu-originated deployment review focus", () => {
       finish.focus();
       await user.keyboard("{Enter}");
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-      if (outcome === "success") {
+      if (success) {
         // The mutation closes confirmation while the invalidated GET is still
         // pending. Only then deliver the refreshed render that can remove or
         // remount the originating trigger (retire menu / route regrouping).
         expect(screen.getByLabelText("Deployment status").textContent).toBe(initiallyEnabled ? "Enabled" : "Disabled");
         await waitFor(() => expect(document.activeElement).toBe(origin));
         expect(origin.isConnected).toBe(true);
+        if (outcome === "user-moved-focus") screen.getByRole("button", { name: "Other action" }).focus();
+        const notifications: (() => void)[] = [];
+        if (outcome === "success-before-render") notifyManager.setScheduler(callback => { notifications.push(callback); });
         await act(async () => { finishRefetch(Response.json({ ...record, enabled: !initiallyEnabled })); });
+        if (outcome === "success-before-render") {
+          await waitFor(() => expect(client.isFetching()).toBe(0));
+          // Let restoration's frame run against the OLD render, then deliver
+          // Query's observer notifications. No elapsed-time race is required.
+          await act(async () => { await new Promise(requestAnimationFrame); });
+          expect(screen.getByLabelText("Deployment status").textContent).toBe(initiallyEnabled ? "Enabled" : "Disabled");
+          expect(document.activeElement).toBe(routeMenu ? origin : screen.getByRole("button", { name: /^Review changes$/ }));
+          expect(notifications.length).toBeGreaterThan(0);
+          notifyManager.setScheduler(defaultScheduler);
+          await act(async () => { for (const notify of notifications) notify(); });
+        }
         await waitFor(() => expect(screen.getByLabelText("Deployment status").textContent).toBe(initiallyEnabled ? "Disabled" : "Enabled"));
+        await act(async () => { await new Promise(requestAnimationFrame); });
+        if (routeMenu) expect(screen.getByRole("button", { name: triggerName })).toBe(origin);
       }
-      const destination = outcome === "success" ? screen.getByRole("button", { name: routeMenu ? triggerName : /^Review changes$/ }) : origin;
+      const destination = outcome === "user-moved-focus" ? screen.getByRole("button", { name: "Other action" }) : success ? screen.getByRole("button", { name: routeMenu ? triggerName : /^Review changes$/ }) : origin;
       await waitFor(() => expect(document.activeElement).toBe(destination));
       expect(destination.isConnected).toBe(true);
       expect(document.activeElement?.isConnected).toBe(true);
       expect(fetch).toHaveBeenCalledTimes(outcome === "cancel" ? 1 : 3);
       // #87: a toggle applies at the previewed revision; retire keeps DELETE.
-      if (outcome === "success") {
+      if (success) {
         expect(fetch.mock.calls[1][1].method).toBe(routeMenu || reviewButton ? "POST" : "DELETE");
         if (routeMenu || reviewButton) expect(String(fetch.mock.calls[1][0])).toMatch(/\/configuration\/apply$/);
       }
