@@ -189,7 +189,7 @@ fn leap_seconds_keep_fraction_offset_and_order() {
         let at = http::parse_rfc3339(input).unwrap();
         assert_eq!(format::utc_json(at), expected);
         assert_eq!(at.try_into_time(), Err(Error::LeapSecond));
-        assert_eq!(at.checked_add(SignedDuration::ZERO), Err(Error::LeapSecond));
+        assert_eq!(at.checked_add(SignedDuration::ZERO), Ok(at));
     }
     let regular = http::parse_rfc3339("2016-12-31T23:59:59.999999999Z").unwrap();
     let leap = http::parse_rfc3339("2016-12-31T23:59:60.999999999Z").unwrap();

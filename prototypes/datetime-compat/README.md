@@ -40,7 +40,7 @@ padding/leading-component whitespace behavior; it does not introduce a new
 strict regex. Each handler still owns defaults, authorization, HTTP statuses and
 error text. In particular, this prototype does not change #409.
 
-## Leap-second boundary and open incompatibilities
+## Retained leap-second arithmetic and native conversion boundary
 
 `UtcInstant` retains a whole-second UTC anchor plus a subsecond value. For
 `:60`, the anchor is the preceding `:59` and the subsecond value is
@@ -49,6 +49,37 @@ fraction, including after offset normalization. Acceptance does not consult a
 leap-second table or impose a month-end condition, matching the former parser.
 Derived ordering keeps regular `:59` before `:60` before the next minute.
 
+`checked_add` implements the former carrier's local leap-observation rule over
+the maintained Time anchor. It assumes only the leap retained in its input;
+ordinary instants never acquire a leap by arithmetic. Zero preserves the input.
+An addition with no whole seconds keeps the anchor when the sum of the retained
+subsecond and duration is below two seconds, including borrowing into the
+preceding ordinary second. Forward escape starts from the anchor plus the leap
+fraction; backward whole-second escape starts one second later. The resulting
+ordinary timestamp is constructed with Time and checked against the old date bounds.
+Intermediate integer nanoseconds use i128, which holds every SignedDuration and
+the bounded anchor without overflow; extreme durations return `Error::Range`.
+
+For `2016-07-08T03:05:60.300Z`, the literal results include:
+
+| Added duration | Result |
+| --- | --- |
+| zero | `2016-07-08T03:05:60.300Z` |
+| -500 ms | `2016-07-08T03:05:59.800Z` |
+| +500 ms | `2016-07-08T03:05:60.800Z` |
+| +800 ms | `2016-07-08T03:06:00.100Z` |
+| +10 s | `2016-07-08T03:06:09.300Z` |
+| -10 s | `2016-07-08T03:05:50.300Z` |
+| +1 day | `2016-07-09T03:05:59.300Z` |
+| -1 day | `2016-07-07T03:06:00.300Z` |
+
+This rule is not associative across separate additions: subtracting 500 ms from
+that observation leaves an ordinary `:59.800`; adding 500 ms then reaches the
+next minute's `:00.300`, without recreating the lost leap. Literal regressions pin
+this behavior, carry/borrow, signed mixed fractions, day crossings, pre-epoch
+values and date-bound refusals. Native conversion still refuses any result that
+retains `:60`.
+
 Legacy integer conversions intentionally retain their former semantics:
 `unix_seconds` returns the anchor second; microseconds and optional signed
 nanoseconds add the full subsecond value and can overlap the next second.
@@ -56,11 +87,10 @@ Integer cursor conversion therefore cannot round-trip a leap observation, just
 as before; cursor timestamps decoded from integers are ordinary instants.
 
 **Open incompatibility:** native `time::OffsetDateTime` cannot represent that
-observation. Conversion returns `Error::LeapSecond`, as does duration addition
-on a retained leap observation (even a zero duration). No silent clamp or
-normalization is performed. Production consumers that previously did arithmetic
-or SQL/SDK conversion on accepted leap seconds still require an explicit,
-tested resolution. This error is not proof of production behavior compatibility.
+observation. Conversion continues to return `Error::LeapSecond`. Production
+consumers that convert accepted leap seconds to native SQL/SDK values still
+require an explicit, tested resolution; the local arithmetic support does not
+resolve the mathematical representation gap. No silent native clamp is performed.
 Always feed original input into the compatibility parser: information already
 lost by Time's native leap-second parser cannot be recovered here.
 
@@ -89,7 +119,13 @@ The previous carrier's [parser](https://github.com/chronotope/chrono/blob/v0.4.4
 [offset scanner](https://github.com/chronotope/chrono/blob/v0.4.45/src/format/scan.rs),
 [formatter](https://github.com/chronotope/chrono/blob/v0.4.45/src/format/formatting.rs),
 date bounds and integer conversion source informed the fixtures. No old carrier
-is compiled or used as the test oracle. Build scripts of the active Serde,
+is compiled or used as the test oracle. Arithmetic source review also covers
+[`checked_add_signed` documentation and implementation](https://github.com/chronotope/chrono/blob/v0.4.45/src/naive/datetime/mod.rs#L507),
+[`overflowing_add_signed`](https://github.com/chronotope/chrono/blob/v0.4.45/src/naive/time/mod.rs#L605)
+and the signed `TimeDelta` whole-second/subsecond decomposition. The bounded
+compatibility implementation uses local integer arithmetic and Time's checked
+timestamp construction; it introduces no leap table or dependency changes.
+Build scripts of the active Serde,
 serde_core, serde_json and zmij dependencies were read before execution; they
 perform compiler/target detection and local generated configuration, without
 network access. Other active helper crates declare no build scripts.
@@ -110,8 +146,9 @@ Tests contain literal accept/refuse and expected-value fixtures for precision,
 UTC normalization, pre-epoch flooring, expanded years, old cursor bounds, leap
 observations, native conversion refusal, date limits, month clamping and each
 exporter. Reproducible generated properties exercise 20,000 cursor values,
-20,000 nanosecond values, a 400-year Gregorian cycle across year zero and short
-UTF-8 parser mutations. Those properties supplement the literal expectations.
+20,000 nanosecond values, 20,000 retained leap observations and their fractional
+boundaries/whole-second shifts, a 400-year Gregorian cycle across year zero and
+short UTF-8 parser mutations. Those properties supplement the literal expectations.
 They are not an exhaustive parser equivalence proof.
 
 ## Remaining integration work

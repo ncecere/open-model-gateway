@@ -80,13 +80,41 @@ impl UtcInstant {
         )
     }
 
-    /// Duration arithmetic on retained leap observations remains an integration gap.
-    /// Refuse rather than silently erase the observation through native conversion.
+    /// Adds a duration, accounting only for a leap second retained by this observation.
+    /// Fractional additions may keep that leap or borrow into its preceding second.
+    /// Once the result leaves that interval, it is ordinary and cannot recreate the leap.
+    /// This local rule is intentionally not associative across separate additions.
     pub fn checked_add(self, duration: SignedDuration) -> Result<Self, Error> {
+        if !self.is_leap_second() {
+            return Self::try_from_time(
+                self.try_into_time()?
+                    .checked_add(duration)
+                    .ok_or(Error::Range)?,
+            );
+        }
+
+        let shifted = i128::from(self.subsecond) + duration.whole_nanoseconds();
+        // A signed fractional duration is strictly between -1s and 1s. Its sum
+        // with a leap subsecond is positive; below 2s it keeps the same anchor.
+        if duration.whole_seconds() == 0 && shifted < 2_000_000_000 {
+            return Self::from_unix_parts(
+                self.unix_seconds(),
+                u32::try_from(shifted).map_err(|_| Error::Range)?,
+            );
+        }
+
+        // Forward escape starts from anchor + leap fraction; backward escape
+        // starts one second later. `shifted` already includes that extra second.
+        // No other leap seconds are assumed.
+        // i64 duration seconds plus the bounded anchor fit comfortably in i128.
+        let consumed = if duration.is_positive() {
+            1_000_000_000
+        } else {
+            0
+        };
+        let nanos = self.anchor.unix_timestamp_nanos() + shifted - consumed;
         Self::try_from_time(
-            self.try_into_time()?
-                .checked_add(duration)
-                .ok_or(Error::Range)?,
+            OffsetDateTime::from_unix_timestamp_nanos(nanos).map_err(|_| Error::Range)?,
         )
     }
 }
