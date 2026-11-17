@@ -350,6 +350,8 @@ pub enum NotRun {
     Cancelled,
     Expired,
     BudgetExceeded,
+    /// The batch's budget hold is no longer active (see `Stop::HoldUnavailable`).
+    HoldUnavailable,
     Failed,
     /// It ran, but its result was lost (the gateway stopped before storing it).
     ResultUnavailable,
@@ -360,6 +362,7 @@ impl NotRun {
             Self::Cancelled => "batch_cancelled",
             Self::Expired => "batch_expired",
             Self::BudgetExceeded => "budget_exceeded",
+            Self::HoldUnavailable => "batch_hold_unavailable",
             Self::Failed => "batch_failed",
             Self::ResultUnavailable => "result_unavailable",
         }
@@ -369,6 +372,9 @@ impl NotRun {
             Self::Cancelled => "This request was not run because the batch was cancelled.",
             Self::Expired => "This request was not run before the batch expired.",
             Self::BudgetExceeded => "This request was not run because a budget was exhausted.",
+            Self::HoldUnavailable => {
+                "This request was not run because the budget hold of the batch is no longer active. Create the batch again."
+            }
             Self::Failed => "This request was not run because the batch failed.",
             Self::ResultUnavailable => {
                 "This request was started, but the gateway stopped before its result was stored."

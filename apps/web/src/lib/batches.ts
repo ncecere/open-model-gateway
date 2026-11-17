@@ -97,6 +97,6 @@ export function lineOutcomeLabel(o: { state: string; code: string | null; lines:
   const code = o.code && o.code !== o.state ? o.code.replace(/_/g, " ") : null;
   return `${state}${code ? ` · ${code}` : ""} · ${o.lines.toLocaleString("en-US")} line${o.lines === 1 ? "" : "s"}`;
 }
-const reasons: Record<string, string> = { budget_exceeded: "A budget was exhausted", submission_failed: "The provider refused the batch", submission_interrupted: "The submission was interrupted", batch_failed: "The provider failed the batch" };
+const reasons: Record<string, string> = { hold_unavailable: "The batch budget hold is unavailable; remaining lines did not run", budget_exceeded: "A budget was exhausted", submission_failed: "The provider refused the batch", submission_interrupted: "The submission was interrupted", batch_failed: "The provider failed the batch" };
 export const stopReason = (code: string | null) => code ? reasons[code] ?? code.replace(/_/g, " ") : null;
 export const endpointLabel = (endpoint: string) => ({ "/v1/chat/completions": "Chat Completions", "/v1/responses": "Responses", "/v1/embeddings": "Embeddings", "/v1/messages": "Messages" } as Record<string, string>)[endpoint] ?? endpoint;

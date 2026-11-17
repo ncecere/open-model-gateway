@@ -8,6 +8,10 @@ pub(super) enum Stop {
     Cancelled,
     Expired,
     Budget,
+    /// The batch's envelope reservation is no longer pending (its lease ran
+    /// out before this release kept it for the life of the job): no line can
+    /// be admitted, so none is attempted.
+    HoldUnavailable,
     /// The run lost its claim or doubts its lease. Never a reason to end the
     /// batch: the run leaves it for the claim that holds it next.
     Lost,
@@ -27,6 +31,7 @@ pub(super) struct RunState {
     /// it holds now, before a takeover can refuse it.
     pub(super) doubt: tokio::sync::Notify,
     pub(super) budget: AtomicBool,
+    pub(super) hold_unavailable: AtomicBool,
     pub(super) busy_streak: AtomicU32,
     pub(super) pause_until: Mutex<Option<tokio::time::Instant>>,
     #[cfg(test)]
@@ -44,6 +49,7 @@ impl RunState {
             fenced: AtomicBool::default(),
             doubt: tokio::sync::Notify::new(),
             budget: AtomicBool::default(),
+            hold_unavailable: AtomicBool::default(),
             busy_streak: AtomicU32::default(),
             pause_until: Mutex::default(),
             #[cfg(test)]
@@ -79,6 +85,8 @@ impl RunState {
             Some(Stop::Cancelled)
         } else if Utc::now() >= job.created_at + job.completion_window() {
             Some(Stop::Expired)
+        } else if self.hold_unavailable.load(Ordering::SeqCst) {
+            Some(Stop::HoldUnavailable)
         } else {
             None
         }

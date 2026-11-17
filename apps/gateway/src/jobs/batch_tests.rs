@@ -852,9 +852,32 @@ async fn stale_plan_is_refused_then_replanned(
     sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version) VALUES($1,$2,9000000,9000000,200,9,1)").bind(new).bind(f.deployment).execute(&f.store.pool).await.unwrap();
     for native in [false, true] {
         let record = f.start();
+        let job = NewBatch {
+            id: Uuid::new_v4(),
+            workspace_id: f.principal.workspace_id,
+            api_key_id: f.principal.key_id,
+            user_id: f.principal.user_id,
+            deployment_id: record.deployment_id,
+            execution_id: record.id,
+            public_model: &plan.model,
+            provider: "openai",
+            poll_window: BATCH_POLL_WINDOW,
+            endpoint: BatchEndpoint::ChatCompletions,
+            mode: if native {
+                BatchMode::Native
+            } else {
+                BatchMode::Gateway
+            },
+            input_file_id: input.id,
+            work_file_id: plan.work_file,
+            retry_limit: 0,
+            requests: 1,
+            window_hours: 24,
+        };
         assert_eq!(
-            crate::governance::batch::admit_batch(&f.store, &record, &plan.groups, native, 600)
-                .await,
+            crate::governance::batch::admit_batch(&f.store, &record, &plan.groups, &job)
+                .await
+                .map(|admission| admission.map(|(hold, _)| hold)),
             Err(InferenceError::Configuration)
         );
     }
@@ -3180,4 +3203,5 @@ async fn memoized_refusal_classification_stays_per_line(pool: PgPool) {
     consistent(f).await;
 }
 
+mod envelope;
 mod fence;

@@ -13,6 +13,7 @@ use std::sync::Mutex;
 
 #[derive(Default)]
 struct Script {
+    video_hold: Option<Arc<FinalizeHold>>,
     videos: std::collections::VecDeque<UpstreamVideo>,
     batches: std::collections::VecDeque<UpstreamBatch>,
     calls: Vec<&'static str>,
@@ -79,6 +80,10 @@ impl ProviderAdapter for Fake {
         assert_eq!(target.upstream_model, "mock-model");
         assert_eq!(request.prompt, "a calm lake");
         self.call("create_video");
+        let hold = self.0.lock().unwrap().video_hold.clone();
+        if let Some(hold) = hold {
+            hold.pause().await;
+        }
         // Providers mint a unique id per job.
         self.next_video().map(|mut v| {
             v.id = UpstreamId::parse(&format!("video_{}", Uuid::new_v4().simple())).unwrap();
@@ -869,4 +874,188 @@ async fn a_job_record_failing_after_acceptance_is_a_settlement_failure(pool: PgP
         labels(&handle.signals()),
         [("job_settlement", "other_database")]
     );
+}
+
+/// #640: the video job row and the extension of its reservation's lease are
+/// one transaction. When the lease cannot be extended, no job row is left
+/// behind whose reservation a short lease would turn `unknown` while the
+/// provider's video is polled: the create fails and the reservation keeps the
+/// hold it was admitted with, for reconciliation.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_video_lease_that_cannot_be_extended_leaves_no_job_row(pool: PgPool) {
+    let f = fixture(pool).await;
+    video_setup(&f).await;
+    refuse_lease_extensions(&f.store.pool).await;
+    let fake = Fake::default();
+    let j = jobs(&f, &fake, false);
+    fake.push_video(upstream_video(JobState::Queued, Some(8)));
+    let request_id = Uuid::new_v4();
+    let handle = crate::db::diagnostics::Handle::new();
+    let created = crate::db::diagnostics::scope(
+        handle.clone(),
+        j.create_video(f.principal, video_request(), request_id),
+    )
+    .await;
+    assert_eq!(
+        crate::db::accounting_failure::tests::labels(&handle.signals()),
+        [("job_settlement", "other_database")]
+    );
+    assert!(matches!(
+        created,
+        Err(JobError::Inference(InferenceError::Storage))
+    ));
+    assert_eq!(fake.calls(), ["create_video"], "the provider accepted it");
+    let jobs_left: i64 = sqlx::query_scalar("SELECT count(*) FROM async_jobs")
+        .fetch_one(&f.store.pool)
+        .await
+        .unwrap();
+    assert_eq!(jobs_left, 0);
+    assert_eq!(amounts(&f, request_id).await.0, "pending");
+}
+
+/// Reject later lease-extension UPDATEs; initial final-lease INSERTs remain valid.
+pub(super) async fn refuse_lease_extensions(pool: &PgPool) {
+    sqlx::raw_sql(
+        r#"CREATE FUNCTION refuse_lease_extension_640() RETURNS trigger LANGUAGE plpgsql AS
+             $$ BEGIN
+                  IF NEW.lease_expires_at > OLD.lease_expires_at THEN
+                    RAISE EXCEPTION 'lease extension refused';
+                  END IF;
+                  RETURN NEW;
+                END $$;
+           CREATE TRIGGER refuse_lease_extension_640 BEFORE UPDATE ON governance_reservations
+             FOR EACH ROW EXECUTE FUNCTION refuse_lease_extension_640();"#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_failed_video_commit_is_a_settlement_failure_and_leaves_no_job(pool: PgPool) {
+    let f = fixture(pool).await;
+    video_setup(&f).await;
+    sqlx::raw_sql("CREATE FUNCTION refuse_job_commit_640() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'commit refused'; END $$; CREATE CONSTRAINT TRIGGER refuse_job_commit_640 AFTER INSERT ON async_jobs DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION refuse_job_commit_640()")
+        .execute(&f.store.pool).await.unwrap();
+    let fake = Fake::default();
+    let j = jobs(&f, &fake, false);
+    fake.push_video(upstream_video(JobState::Queued, Some(8)));
+    let request_id = Uuid::new_v4();
+    let handle = crate::db::diagnostics::Handle::new();
+    let created = crate::db::diagnostics::scope(
+        handle.clone(),
+        j.create_video(f.principal, video_request(), request_id),
+    )
+    .await;
+    assert!(matches!(
+        created,
+        Err(JobError::Inference(InferenceError::Storage))
+    ));
+    assert_eq!(
+        crate::db::accounting_failure::tests::labels(&handle.signals()),
+        [("job_settlement", "other_database")]
+    );
+    assert_eq!(fake.calls(), ["create_video"]);
+    let jobs: i64 = sqlx::query_scalar("SELECT count(*) FROM async_jobs")
+        .fetch_one(&f.store.pool)
+        .await
+        .unwrap();
+    assert_eq!(jobs, 0);
+    let (state, held, actual, _) = amounts(&f, request_id).await;
+    assert_eq!(state, "pending");
+    assert!(held.is_some_and(|h| h > 0));
+    assert_eq!(actual, None);
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn an_accepted_video_transaction_that_cannot_begin_is_a_settlement_failure(pool: PgPool) {
+    let f = fixture(pool).await;
+    f.store.pool.close().await;
+    let handle = crate::db::diagnostics::Handle::new();
+    let result = crate::db::diagnostics::scope(
+        handle.clone(),
+        crate::governance::jobs::accept_job(&f.store, Uuid::new_v4(), Utc::now(), async |_| Ok(())),
+    )
+    .await;
+    assert_eq!(result, Err(InferenceError::Storage));
+    assert_eq!(
+        crate::db::accounting_failure::tests::labels(&handle.signals()),
+        [("job_settlement", "pool_closed")]
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_video_reconciled_during_the_provider_call_is_recorded_and_finishes(pool: PgPool) {
+    let f = fixture(pool).await;
+    video_setup(&f).await;
+    let fake = Fake::default();
+    let hold = Arc::new(FinalizeHold::default());
+    hold.arm();
+    fake.0.lock().unwrap().video_hold = Some(hold.clone());
+    let j = jobs(&f, &fake, false);
+    fake.push_video(upstream_video(JobState::Queued, Some(8)));
+    let request_id = Uuid::new_v4();
+    let create = j.create_video(f.principal, video_request(), request_id);
+    let reconcile = async {
+        hold.reached().await;
+        sqlx::query("UPDATE governance_reservations SET lease_expires_at=now()-interval '1 second' WHERE execution_id=$1").bind(request_id).execute(&f.store.pool).await.unwrap();
+        assert_eq!(
+            crate::governance::reconcile_expired(&f.store, 100)
+                .await
+                .unwrap(),
+            1
+        );
+        hold.release();
+    };
+    let (job, ()) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(create, reconcile)
+    })
+    .await
+    .unwrap();
+    let job = job.unwrap();
+    assert_eq!(amounts(&f, request_id).await.0, "unknown");
+    fake.push_video(upstream_video(JobState::Completed, Some(8)));
+    let job = j.refresh_video(job).await.unwrap();
+    assert_eq!(job.state, "completed");
+    assert!(job.settled_at.is_some());
+    assert_eq!(amounts(&f, request_id).await.0, "unknown");
+    assert_eq!(amounts(&f, request_id).await.2, None);
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn an_accepted_video_global_prefix_failure_is_a_settlement_failure(pool: PgPool) {
+    let f = fixture(pool).await;
+    let limited = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                sqlx::query("SET lock_timeout='200ms'")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect_with((*f.store.pool.connect_options()).clone())
+        .await
+        .unwrap();
+    let store =
+        Store::new(limited).with_admission_mode(crate::governance::locks::AdmissionMode::Global);
+    let mut blocker = crate::db::begin(&f.store.pool).await.unwrap();
+    sqlx::query("SELECT id FROM installation WHERE singleton FOR NO KEY UPDATE")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let handle = crate::db::diagnostics::Handle::new();
+    let result = crate::db::diagnostics::scope(
+        handle.clone(),
+        crate::governance::jobs::accept_job(&store, Uuid::new_v4(), Utc::now(), async |_| Ok(())),
+    )
+    .await;
+    blocker.rollback().await.unwrap();
+    assert_eq!(result, Err(InferenceError::Storage));
+    assert_eq!(
+        crate::db::accounting_failure::tests::labels(&handle.signals()),
+        [("job_settlement", "lock_timeout")]
+    );
+    store.pool.close().await;
 }
