@@ -54,6 +54,10 @@ struct Script {
     coarse_unavailable_once: bool,
     /// Encoded native records of the last submission.
     submitted: Vec<Value>,
+    submission_error: Option<InferenceError>,
+    unique_upstream_ids: bool,
+    early_accept: bool,
+    encode_error: Option<InferenceError>,
     submissions: Vec<Vec<Value>>,
     batches: std::collections::VecDeque<UpstreamBatch>,
     /// Result lines a native batch returns (fake format).
@@ -315,6 +319,9 @@ impl ProviderAdapter for Fake {
         custom_id: &str,
         request: &BatchRequest,
     ) -> Result<Vec<u8>, InferenceError> {
+        if let Some(error) = self.script.lock().unwrap().encode_error {
+            return Err(error);
+        }
         let text = match request {
             BatchRequest::Chat(r) => r.messages[0].content.clone().unwrap_or_default(),
             BatchRequest::Embeddings(r) => r.input.join(","),
@@ -333,6 +340,9 @@ impl ProviderAdapter for Fake {
         _: BatchEndpoint,
         mut records: ByteStream,
     ) -> Result<UpstreamBatch, InferenceError> {
+        if self.script.lock().unwrap().early_accept {
+            return Ok(upstream(BatchStatus::Validating));
+        }
         let mut seen = Vec::new();
         while let Some(r) = records.next().await {
             seen.push(serde_json::from_slice::<Value>(&r?).unwrap());
@@ -341,7 +351,14 @@ impl ProviderAdapter for Fake {
         s.calls.push("submit");
         s.submissions.push(seen.clone());
         s.submitted = seen;
-        Ok(upstream(BatchStatus::Validating))
+        if let Some(error) = s.submission_error {
+            return Err(error);
+        }
+        let mut accepted = upstream(BatchStatus::Validating);
+        if s.unique_upstream_ids {
+            accepted.id = UpstreamId::parse(&format!("batch_{}", Uuid::new_v4().simple())).unwrap();
+        }
+        Ok(accepted)
     }
     async fn retrieve_batch(
         &self,
@@ -3205,3 +3222,5 @@ async fn memoized_refusal_classification_stays_per_line(pool: PgPool) {
 
 mod envelope;
 mod fence;
+
+mod accepted_failure_tests;

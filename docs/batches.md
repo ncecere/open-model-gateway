@@ -126,7 +126,7 @@ Results count toward the workspace's [storage](files-api.md) but never fail on i
 - **Settlement:** each line settles from its own usage. Unknown usage keeps that line's hold.
 - **End:** when the batch ends, the envelope settles at zero, which releases what no line used.
 
-**Native batches** settle once from the provider's aggregate usage, or from the sum of the decoded lines' usage when every succeeded line reported it. Otherwise the usage is unknown and the hold is retained. Cancelled and expired batches record any usage as evidence and keep the hold, as before ([async jobs](async-jobs.md#reservation-and-settlement)).
+**Native batches** settle once from the provider's aggregate usage, or from the sum of the decoded lines' usage when every succeeded line reported it. Otherwise the usage is unknown and the hold is retained. A provider-accepted batch later reported failed keeps unknown usage/cost even on an entirely free price, with any supplied usage preserved as evidence; this also applies to legacy passthrough batches. Cancelled and expired batches record any usage as evidence and keep the hold, as before ([async jobs](async-jobs.md#reservation-and-settlement)).
 
 ## Scheduling on self-hosted models
 
