@@ -5,16 +5,16 @@
 //! filters, visibility and the other log views are in `logs`.
 use super::logs::{self, FILTERED, LogQuery, LogScope, ROW, bind_filters};
 use super::*;
-use chrono::{DateTime, NaiveDate, Utc};
+use gateway_datetime_compat::{CalendarDate, UtcInstant};
 
-pub(super) fn strict_date(s: &str) -> Result<NaiveDate, ApiError> {
+pub(super) fn strict_date(s: &str) -> Result<CalendarDate, ApiError> {
     if s.len() != 10 {
         return Err(invalid());
     }
-    NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|_| invalid())
+    gateway_datetime_compat::http::parse_date_filter(s).map_err(|_| invalid())
 }
-pub(super) fn midnight(d: NaiveDate) -> DateTime<Utc> {
-    d.and_time(chrono::NaiveTime::MIN).and_utc()
+pub(super) fn midnight(d: CalendarDate) -> UtcInstant {
+    d.midnight().expect("midnight")
 }
 /// Data policy applied to a connection, from current server configuration
 /// (not a historical snapshot). Only OpenRouter has a configurable setting.
@@ -64,7 +64,7 @@ pub(super) async fn detail(
         "{} SELECT {ROW},started_at,workspace_id FROM roots",
         logs::roots(&scope, "e.root_request_id=$4")
     );
-    let (mut summary, started, ws): (Value, DateTime<Utc>, Uuid) = sqlx::query_as(&sql)
+    let (mut summary, started, ws): (Value, UtcInstant, Uuid) = sqlx::query_as(&sql)
         .bind(scope.workspace)
         .bind(scope.all)
         .bind(scope.user)

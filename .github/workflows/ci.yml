@@ -44,6 +44,31 @@ jobs:
       # cfg(not(feature = "integration-tests")) is not compiled in the run above (#502).
       - run: cargo clippy -p open-model-gateway --bins --lib --locked -- -D warnings
 
+  sdk-compat:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [oauth2, openidconnect]
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # 1.99.1, matches rust-toolchain.toml
+        with:
+          toolchain: "1.99.1"
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # Excluded upstream packages retain their tests/examples/docs. Seed their
+      # standalone test resolution with production versions, then add dev helpers.
+      - run: cp Cargo.lock vendor/${{ matrix.package }}/Cargo.lock
+      - run: cargo fmt --manifest-path vendor/${{ matrix.package }}/Cargo.toml -- --check
+      - run: cargo test --manifest-path vendor/${{ matrix.package }}/Cargo.toml --all-targets
+      - run: cargo test --manifest-path vendor/${{ matrix.package }}/Cargo.toml --all-features --all-targets
+      - run: cargo test --manifest-path vendor/${{ matrix.package }}/Cargo.toml --all-features --doc
+      - run: cargo clippy --manifest-path vendor/${{ matrix.package }}/Cargo.toml --all-targets -- -D warnings
+      - run: cargo clippy --manifest-path vendor/${{ matrix.package }}/Cargo.toml --all-features --all-targets -- -D warnings
+
   gateway-tests:
     runs-on: ubuntu-24.04
     strategy:
@@ -66,6 +91,7 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgres://gateway:gateway@localhost:5432/gateway
+      DATETIME_PG_URL: postgres://gateway:gateway@localhost:5432/gateway
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # 1.99.1, matches rust-toolchain.toml
@@ -97,6 +123,7 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgres://gateway:gateway@localhost:5432/gateway
+      DATETIME_PG_URL: postgres://gateway:gateway@localhost:5432/gateway
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Exact version from rust-toolchain.toml, not the floating 'stable' channel (#354);
@@ -149,7 +176,7 @@ jobs:
   # skipped, cancelled, missing or additional dependencies must not turn green.
   gateway:
     runs-on: ubuntu-24.04
-    needs: [gateway-lint, gateway-tests, gateway-special]
+    needs: [gateway-lint, gateway-tests, gateway-special, sdk-compat]
     if: always()
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

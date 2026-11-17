@@ -3,6 +3,7 @@
 //! alerts, replica exclusion and email delivery through a local mock relay.
 use super::*;
 use crate::email::mock::{self, Behaviour};
+use gateway_datetime_compat::UtcInstant;
 use sqlx::PgPool;
 
 #[path = "aged_hold_tests.rs"]
@@ -14,13 +15,13 @@ mod generation;
 #[path = "report_generation_bound_tests.rs"]
 mod report_generation_bounds;
 
-async fn expiry_now(s: &Seed) -> DateTime<Utc> {
+async fn expiry_now(s: &Seed) -> UtcInstant {
     sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&s.pool)
         .await
         .unwrap()
 }
-async fn expiry_tick(s: &Seed, now: DateTime<Utc>) -> Changes {
+async fn expiry_tick(s: &Seed, now: UtcInstant) -> Changes {
     let mut tx = s.pool.begin().await.unwrap();
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(EVALUATION_LOCK)
@@ -31,13 +32,13 @@ async fn expiry_tick(s: &Seed, now: DateTime<Utc>) -> Changes {
     tx.commit().await.unwrap();
     changes
 }
-async fn expiry_key(s: &Seed, expires: Option<DateTime<Utc>>) -> Uuid {
+async fn expiry_key(s: &Seed, expires: Option<UtcInstant>) -> Uuid {
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash,expires_at) VALUES($1,$2,$3,'Never serialize this key name',decode(repeat('12',32),'hex'),$4)")
         .bind(id).bind(s.team).bind(s.owner).bind(expires).execute(&s.pool).await.unwrap();
     id
 }
-async fn set_expiry(s: &Seed, key: Uuid, expires: Option<DateTime<Utc>>) {
+async fn set_expiry(s: &Seed, key: Uuid, expires: Option<UtcInstant>) {
     sqlx::query("UPDATE api_keys SET expires_at=$2 WHERE id=$1")
         .bind(key)
         .bind(expires)
@@ -50,8 +51,8 @@ async fn set_expiry(s: &Seed, key: Uuid, expires: Option<DateTime<Utc>>) {
 async fn key_expiry_exact_bands_and_first_urgent_only(pool: PgPool) {
     let s = seed(pool).await;
     let now = expiry_now(&s).await;
-    let day = chrono::Duration::days(1);
-    let us = chrono::Duration::microseconds(1);
+    let day = gateway_datetime_compat::SignedDuration::days(1);
+    let us = gateway_datetime_compat::SignedDuration::microseconds(1);
     let mut expected = Vec::new();
     for (delta, threshold) in [
         (day * 7 + us, None),
@@ -59,7 +60,7 @@ async fn key_expiry_exact_bands_and_first_urgent_only(pool: PgPool) {
         (day + us, Some(7)),
         (day, Some(1)),
         (us, Some(1)),
-        (chrono::Duration::zero(), None),
+        (gateway_datetime_compat::SignedDuration::ZERO, None),
         (-us, None),
     ] {
         let k = expiry_key(&s, Some(now + delta)).await;
@@ -93,11 +94,11 @@ async fn key_expiry_exact_bands_and_first_urgent_only(pool: PgPool) {
 async fn key_expiry_cycles_rotation_expiry_changes_and_silent_retirement(pool: PgPool) {
     let s = seed(pool).await;
     let now = expiry_now(&s).await;
-    let expiry = now + chrono::Duration::days(3);
+    let expiry = now + gateway_datetime_compat::SignedDuration::days(3);
     set_expiry(&s, s.key, Some(expiry)).await;
     assert_eq!(expiry_tick(&s, now).await.fired, 1);
     assert_eq!(
-        expiry_tick(&s, now + chrono::Duration::days(2)).await,
+        expiry_tick(&s, now + gateway_datetime_compat::SignedDuration::days(2)).await,
         Changes {
             fired: 1,
             resolved: 1
@@ -109,9 +110,19 @@ async fn key_expiry_cycles_rotation_expiry_changes_and_silent_retirement(pool: P
         "expired urgent incident clears"
     );
     // Extending an expiry retires the old cycle even if it is still in the warning band.
-    set_expiry(&s, s.key, Some(expiry + chrono::Duration::days(1))).await;
+    set_expiry(
+        &s,
+        s.key,
+        Some(expiry + gateway_datetime_compat::SignedDuration::days(1)),
+    )
+    .await;
     assert_eq!(expiry_tick(&s, now).await.fired, 1);
-    set_expiry(&s, s.key, Some(expiry + chrono::Duration::days(2))).await;
+    set_expiry(
+        &s,
+        s.key,
+        Some(expiry + gateway_datetime_compat::SignedDuration::days(2)),
+    )
+    .await;
     assert_eq!(
         expiry_tick(&s, now).await,
         Changes {
@@ -128,15 +139,23 @@ async fn key_expiry_cycles_rotation_expiry_changes_and_silent_retirement(pool: P
         },
         "restoring an old tuple never replays"
     );
-    let resolutions: Vec<(DateTime<Utc>, i32, String)> = sqlx::query_as("SELECT key_expires_at,threshold_days,resolution FROM alert_events WHERE api_key_id=$1 ORDER BY key_expires_at,threshold_days")
+    let resolutions: Vec<(UtcInstant, i32, String)> = sqlx::query_as("SELECT key_expires_at,threshold_days,resolution FROM alert_events WHERE api_key_id=$1 ORDER BY key_expires_at,threshold_days")
         .bind(s.key).fetch_all(&s.pool).await.unwrap();
     assert_eq!(
         resolutions,
         vec![
             (expiry, 1, "cleared".to_owned()),
             (expiry, 7, "superseded".to_owned()),
-            (expiry + chrono::Duration::days(1), 7, "cleared".to_owned()),
-            (expiry + chrono::Duration::days(2), 7, "cleared".to_owned()),
+            (
+                expiry + gateway_datetime_compat::SignedDuration::days(1),
+                7,
+                "cleared".to_owned()
+            ),
+            (
+                expiry + gateway_datetime_compat::SignedDuration::days(2),
+                7,
+                "cleared".to_owned()
+            ),
         ]
     );
     // Real credential rotation: same lineage, different credential id.
@@ -165,8 +184,13 @@ async fn key_expiry_workspace_rolling_cap_defers_without_starving_other_workspac
     let now = expiry_now(&s).await;
     // More than a global tick's worth, earlier than the quiet workspace's key.
     sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash,expires_at) SELECT gen_random_uuid(),$1,$2,'backlog',decode(repeat('23',32),'hex'),$3 FROM generate_series(1,601)")
-        .bind(s.team).bind(s.owner).bind(now+chrono::Duration::days(3)).execute(&s.pool).await.unwrap();
-    set_expiry(&s, s.personal_key, Some(now + chrono::Duration::days(4))).await;
+        .bind(s.team).bind(s.owner).bind(now+gateway_datetime_compat::SignedDuration::days(3)).execute(&s.pool).await.unwrap();
+    set_expiry(
+        &s,
+        s.personal_key,
+        Some(now + gateway_datetime_compat::SignedDuration::days(4)),
+    )
+    .await;
     assert_eq!(
         expiry_tick(&s, now).await.fired,
         101,
@@ -178,11 +202,14 @@ async fn key_expiry_workspace_rolling_cap_defers_without_starving_other_workspac
     let mut expected = vec![(s.team, 100), (s.personal, 1)];
     expected.sort();
     assert_eq!(counts, expected);
-    let later = now + chrono::Duration::hours(24);
+    let later = now + gateway_datetime_compat::SignedDuration::hours(24);
     assert_eq!(
-        expiry_tick(&s, later - chrono::Duration::microseconds(1))
-            .await
-            .fired,
+        expiry_tick(
+            &s,
+            later - gateway_datetime_compat::SignedDuration::microseconds(1)
+        )
+        .await
+        .fired,
         0,
         "still capped just inside the rolling window"
     );
@@ -221,7 +248,7 @@ async fn key_expiry_bounded_progress_does_not_starve_retirements(pool: PgPool) {
         sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) VALUES($1,$2,'owner','manual')")
             .bind(ws).bind(s.owner).execute(&s.pool).await.unwrap();
         sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash,expires_at) SELECT gen_random_uuid(),$1,$2,'backlog',decode(repeat('23',32),'hex'),$3 FROM generate_series(1,91)")
-            .bind(ws).bind(s.owner).bind(now+chrono::Duration::days(4)).execute(&s.pool).await.unwrap();
+            .bind(ws).bind(s.owner).bind(now+gateway_datetime_compat::SignedDuration::days(4)).execute(&s.pool).await.unwrap();
     }
     for n in [500, 500, 1, 0] {
         assert_eq!(expiry_tick(&s, now).await.fired, n);
@@ -249,7 +276,7 @@ async fn key_expiry_bounded_progress_does_not_starve_retirements(pool: PgPool) {
 async fn key_expiry_exclusions_and_reenable_without_replay(pool: PgPool) {
     let s = seed(pool).await;
     let now = expiry_now(&s).await;
-    let expiry = now + chrono::Duration::days(3);
+    let expiry = now + gateway_datetime_compat::SignedDuration::days(3);
     let revoked = expiry_key(&s, Some(expiry)).await;
     let disabled = expiry_key(&s, Some(expiry)).await;
     sqlx::query("UPDATE api_keys SET revoked_at=now() WHERE id=$1")
@@ -318,7 +345,7 @@ async fn key_expiry_concurrent_evaluation_restart_and_fencing(pool: PgPool) {
     set_expiry(
         &s,
         s.key,
-        Some(expiry_now(&s).await + chrono::Duration::hours(12)),
+        Some(expiry_now(&s).await + gateway_datetime_compat::SignedDuration::hours(12)),
     )
     .await;
     let stale = crate::leases::Fence {
@@ -345,7 +372,12 @@ async fn key_expiry_concurrent_evaluation_restart_and_fencing(pool: PgPool) {
 async fn key_expiry_live_delivery_suppresses_obsolete_and_hides_secrets(pool: PgPool) {
     let s = seed(pool).await;
     let now = expiry_now(&s).await;
-    set_expiry(&s, s.personal_key, Some(now + chrono::Duration::hours(12))).await;
+    set_expiry(
+        &s,
+        s.personal_key,
+        Some(now + gateway_datetime_compat::SignedDuration::hours(12)),
+    )
+    .await;
     let (port, mut rx) = mock::serve(Behaviour::default()).await;
     relay(&s, port).await;
     assert_eq!(evaluate(&s).await.fired, 1);
@@ -378,7 +410,11 @@ async fn key_expiry_live_delivery_suppresses_obsolete_and_hides_secrets(pool: Pg
         );
     }
     // A queued reminder becomes obsolete before send: never email it, even before the next evaluation.
-    let k = expiry_key(&s, Some(now + chrono::Duration::days(3))).await;
+    let k = expiry_key(
+        &s,
+        Some(now + gateway_datetime_compat::SignedDuration::days(3)),
+    )
+    .await;
     assert_eq!(evaluate(&s).await.fired, 1);
     sqlx::query("UPDATE api_keys SET revoked_at=now() WHERE id=$1")
         .bind(k)
@@ -416,7 +452,11 @@ async fn key_expiry_send_time_loss_and_terminal_outcomes(pool: PgPool) {
         "workspace",
     ] {
         let now = expiry_now(&s).await;
-        let k = expiry_key(&s, Some(now + chrono::Duration::days(3))).await;
+        let k = expiry_key(
+            &s,
+            Some(now + gateway_datetime_compat::SignedDuration::days(3)),
+        )
+        .await;
         assert_eq!(evaluate(&s).await.fired, 1, "{loss}");
         let sql = match loss {
             "revoked" => "UPDATE api_keys SET revoked_at=now() WHERE id=$1",
@@ -474,7 +514,11 @@ async fn key_expiry_send_time_loss_and_terminal_outcomes(pool: PgPool) {
     }
     // Superseded/cleared incidents and changed-band reminders also suppress old pending mail.
     let now = expiry_now(&s).await;
-    let k = expiry_key(&s, Some(now + chrono::Duration::days(3))).await;
+    let k = expiry_key(
+        &s,
+        Some(now + gateway_datetime_compat::SignedDuration::days(3)),
+    )
+    .await;
     assert_eq!(evaluate(&s).await.fired, 1);
     sqlx::query(
         "UPDATE alert_events SET resolved_at=now(),resolution='superseded' WHERE api_key_id=$1",
@@ -496,7 +540,11 @@ async fn key_expiry_send_time_loss_and_terminal_outcomes(pool: PgPool) {
     })
     .await;
     relay(&s, port).await;
-    expiry_key(&s, Some(now + chrono::Duration::hours(12))).await;
+    expiry_key(
+        &s,
+        Some(now + gateway_datetime_compat::SignedDuration::hours(12)),
+    )
+    .await;
     assert_eq!(evaluate(&s).await.fired, 1);
     assert_eq!(deliver_pending(&s.store, 10).await, 1);
     let status: (String, Option<String>) =
@@ -584,7 +632,7 @@ async fn key_expiry_service_recipients_are_current_owners_admins_not_platform_ro
     set_expiry(
         &s,
         k,
-        Some(expiry_now(&s).await + chrono::Duration::days(4)),
+        Some(expiry_now(&s).await + gateway_datetime_compat::SignedDuration::days(4)),
     )
     .await;
     assert_eq!(evaluate(&s).await.fired, 1);
@@ -614,7 +662,12 @@ async fn key_expiry_service_recipients_are_current_owners_admins_not_platform_ro
 async fn key_expiry_schema_rejects_ambiguous_shapes_and_mutable_attribution(pool: PgPool) {
     let s = seed(pool).await;
     let now = expiry_now(&s).await;
-    set_expiry(&s, s.key, Some(now + chrono::Duration::days(3))).await;
+    set_expiry(
+        &s,
+        s.key,
+        Some(now + gateway_datetime_compat::SignedDuration::days(3)),
+    )
+    .await;
     assert_eq!(evaluate(&s).await.fired, 1);
     for (column, value) in [
         ("api_key_id", "NULL"),
@@ -654,7 +707,7 @@ async fn key_expiry_job_transaction_itself_holds_fence_and_advisory_lock(pool: P
     set_expiry(
         &s,
         s.key,
-        Some(expiry_now(&s).await + chrono::Duration::days(3)),
+        Some(expiry_now(&s).await + gateway_datetime_compat::SignedDuration::days(3)),
     )
     .await;
     let leases = crate::leases::Leases::new();
@@ -678,7 +731,7 @@ async fn key_expiry_uses_database_time_in_its_own_job_not_before_rules(pool: PgP
     set_expiry(
         &s,
         s.key,
-        Some(expiry_now(&s).await + chrono::Duration::days(3)),
+        Some(expiry_now(&s).await + gateway_datetime_compat::SignedDuration::days(3)),
     )
     .await;
     budget(&s, "local", Some(s.team), "month", 100).await;
@@ -723,7 +776,7 @@ async fn key_expiry_rechecks_authority_between_smtp_recipients(pool: PgPool) {
     set_expiry(
         &s,
         s.key,
-        Some(expiry_now(&s).await + chrono::Duration::days(3)),
+        Some(expiry_now(&s).await + gateway_datetime_compat::SignedDuration::days(3)),
     )
     .await;
     let (port, mut rx, gate) = mock::serve_gated().await;
@@ -1670,7 +1723,7 @@ async fn outbox_backoff_and_five_attempt_exhaustion_use_database_clock(pool: PgP
         outbox_due(&s).await;
     }
     assert_eq!(deliver_pending(&s.store, 25).await, 1);
-    let (status, attempts, exhausted, due): (String, i32, i32, Option<DateTime<Utc>>) =
+    let (status, attempts, exhausted, due): (String, i32, i32, Option<UtcInstant>) =
         sqlx::query_as(
             "SELECT status,attempt_count,exhausted,next_attempt_at FROM alert_deliveries",
         )
@@ -2239,7 +2292,7 @@ async fn budget_alert_totals_equal_the_former_scans(pool: PgPool) {
         sqlx::query("INSERT INTO policy_budgets(layer,workspace_id,governance_key_id,period,amount_microusd) VALUES('key',$1,$2,$3,1000)").bind(s.team).bind(s.key).bind(period).execute(&s.pool).await.unwrap();
         sqlx::query("INSERT INTO policy_budgets(layer,kind,period,amount_microusd) VALUES('type','team',$1,1000)").bind(period).execute(&s.pool).await.unwrap();
     }
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+    let now: UtcInstant = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&s.pool)
         .await
         .unwrap();
@@ -2575,7 +2628,7 @@ async fn count_pool(pool: &PgPool, sql: &str) -> i64 {
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn admission_ceiling_fires_per_scope_and_names_only_shared_workspaces(pool: PgPool) {
     let s = seed(pool).await;
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT date_trunc('minute',clock_timestamp())")
+    let now: UtcInstant = sqlx::query_scalar("SELECT date_trunc('minute',clock_timestamp())")
         .fetch_one(&s.pool)
         .await
         .unwrap();

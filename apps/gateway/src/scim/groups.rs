@@ -1,14 +1,15 @@
 //! SCIM Groups and group-provenance synchronization: the stored row, membership,
 //! the reconciliation of affected users' grants, and the `/scim/v2/Groups` handlers.
 use super::*;
+use gateway_datetime_compat::UtcInstant;
 
 #[derive(sqlx::FromRow)]
 struct GroupRow {
     id: Uuid,
     display_name: String,
     external_id: Option<String>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    created_at: UtcInstant,
+    updated_at: UtcInstant,
 }
 
 impl GroupRow {

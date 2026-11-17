@@ -165,7 +165,7 @@ fn id_of(r: &Captured) -> Uuid {
 }
 
 /// Soft-delete the rules a vector set created (the same update the DELETE handler runs).
-async fn forget_rules(pool: &PgPool, since: chrono::DateTime<chrono::Utc>) {
+async fn forget_rules(pool: &PgPool, since: gateway_datetime_compat::UtcInstant) {
     sqlx::query("UPDATE alert_rules SET deleted_at=now(),enabled=false,updated_at=now() WHERE created_at>=$1 AND deleted_at IS NULL")
         .bind(since)
         .execute(pool)
@@ -391,9 +391,10 @@ pub(super) async fn webhooks(g: &Gateway, pool: &PgPool, observed: &mut Positive
         )
         .await;
     let path = format!("{WEBHOOKS}/{}", id_of(&made));
-    let until = (chrono::Utc::now() + chrono::Duration::hours(1))
-        .format("%Y-%m-%d %H:%M:%SZ")
-        .to_string();
+    let until = (gateway_datetime_compat::UtcInstant::now()
+        + gateway_datetime_compat::SignedDuration::hours(1))
+    .format("%Y-%m-%d %H:%M:%SZ")
+    .to_string();
     let valid = json!({"label":"Renamed","enabled":true,"current_secret_ref":"env:HOOK_CURRENT","previous_secret_ref":"env:HOOK_PREVIOUS","previous_secret_until":until});
     let rotating = g.send(&admin, "PATCH", &path, valid.clone()).await;
     assert!(rotating.status.is_success());
@@ -480,7 +481,7 @@ pub(super) async fn rules(
     team: Uuid,
     connection: Uuid,
 ) {
-    let since: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+    let since: gateway_datetime_compat::UtcInstant = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(pool)
         .await
         .unwrap();
@@ -1172,7 +1173,7 @@ pub(super) async fn pinned(g: &Gateway, pool: &PgPool, mail_port: u16) {
             (true, false),
         ),
     ];
-    let since: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+    let since: gateway_datetime_compat::UtcInstant = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(pool)
         .await
         .unwrap();
@@ -1236,9 +1237,10 @@ pub(super) async fn pinned_webhooks(g: &Gateway, pool: &PgPool) {
         .await;
     }
     // A mismatched pair is refused whatever is stored, and the schema says so.
-    let until = (chrono::Utc::now() + chrono::Duration::hours(1))
-        .format("%Y-%m-%d %H:%M:%SZ")
-        .to_string();
+    let until = (gateway_datetime_compat::UtcInstant::now()
+        + gateway_datetime_compat::SignedDuration::hours(1))
+    .format("%Y-%m-%d %H:%M:%SZ")
+    .to_string();
     for (label, body) in [
         (
             "null reference with an expiry",

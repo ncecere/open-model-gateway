@@ -35,7 +35,7 @@ libc = "0.2"
 zeroize = "1"
 http-body = "1"
 http-body-util = "0.1"
-chrono = { version = "0.4", features = ["serde"] }
+gateway-datetime-compat = { path = "../../crates/datetime", features = ["sqlx"] }
 async-stream = "0.3"
 futures-util = "0.3"
 # Browser WebSocket errors are erased by Axum; keep this pin paired with
@@ -70,7 +70,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 sha2 = "0.11"
 subtle = "2"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "uuid", "migrate", "macros", "json", "chrono"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "uuid", "migrate", "macros", "json", "time"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "time", "sync", "process", "fs", "io-util"] }
 # Realtime upstream WebSocket (independent of Axum's browser parser); TLS uses an
 # explicit ring-backed rustls config with webpki roots; no proxies, redirects or retries.

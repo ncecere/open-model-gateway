@@ -66,7 +66,7 @@ fn validate(input: &BulkInput) -> Result<(Targets, Vec<u8>), ApiError> {
 struct Operation {
     id: Uuid,
     payload_digest: Vec<u8>,
-    completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    completed_at: Option<gateway_datetime_compat::UtcInstant>,
 }
 
 /// The recorded operation, as the caller may read it. `outcome` is null only
@@ -78,12 +78,13 @@ async fn report(s: &Store, operation: Uuid, replayed: bool) -> Result<Value, Api
         "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
     )
     .await?;
-    let (key, completed_at): (String, Option<chrono::DateTime<chrono::Utc>>) = sqlx::query_as(
-        "SELECT idempotency_key,completed_at FROM configuration_bulk_operations WHERE id=$1",
-    )
-    .bind(operation)
-    .fetch_one(&mut *tx)
-    .await?;
+    let (key, completed_at): (String, Option<gateway_datetime_compat::UtcInstant>) =
+        sqlx::query_as(
+            "SELECT idempotency_key,completed_at FROM configuration_bulk_operations WHERE id=$1",
+        )
+        .bind(operation)
+        .fetch_one(&mut *tx)
+        .await?;
     let items: Vec<Value> = sqlx::query_scalar(
         "SELECT jsonb_build_object('id',deployment_id,'expected_revision',expected_revision::text,'outcome',outcome,'reason',reason,'revision',revision::text,'change_id',change_id) FROM configuration_bulk_items WHERE operation_id=$1 ORDER BY position",
     )

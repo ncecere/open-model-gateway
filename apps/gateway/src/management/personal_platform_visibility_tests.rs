@@ -346,7 +346,7 @@ async fn personal_workspace_policy_is_platform_managed_and_read_back(pool: PgPoo
 async fn personal_workspace_row_in_platform_cost_report_is_identity_and_totals_only(pool: PgPool) {
     let f = fixture(&pool).await;
     let h = Harness::new(&pool, &f).await;
-    let today = chrono::Utc::now().date_naive();
+    let today = gateway_datetime_compat::UtcInstant::now().date_naive();
     let path = format!(
         "/api/v1/platform/cost-report?start_date={today}&end_date={}",
         today.succ_opt().unwrap()
@@ -416,7 +416,7 @@ async fn personal_workspace_row_in_platform_usage_explore_is_identity_and_totals
 ) {
     let f = fixture(&pool).await;
     let h = Harness::new(&pool, &f).await;
-    let today = chrono::Utc::now().date_naive();
+    let today = gateway_datetime_compat::UtcInstant::now().date_naive();
     let range = format!(
         "start_date={today}&end_date={}&metric=requests",
         today.succ_opt().unwrap()
@@ -489,7 +489,7 @@ async fn personal_workspace_row_in_platform_storage_usage_is_identity_and_totals
 ) {
     let f = fixture(&pool).await;
     let h = Harness::new(&pool, &f).await;
-    let hour: chrono::DateTime<chrono::Utc> =
+    let hour: gateway_datetime_compat::UtcInstant =
         sqlx::query_scalar("SELECT date_trunc('day', now(), 'UTC') + interval '1 hour'")
             .fetch_one(&pool)
             .await
@@ -497,7 +497,7 @@ async fn personal_workspace_row_in_platform_storage_usage_is_identity_and_totals
     let gb_day = crate::filestore::usage::GB_DAY_BYTE_SECONDS;
     sqlx::query("INSERT INTO storage_usage_hours(workspace_id,purpose,hour_start,byte_seconds,file_count) VALUES($1,'user_file',$2,$3,1)")
         .bind(f.personal).bind(hour).bind(gb_day / 4).execute(&pool).await.unwrap();
-    let today = chrono::Utc::now().date_naive();
+    let today = gateway_datetime_compat::UtcInstant::now().date_naive();
     let path = format!(
         "/api/v1/platform/usage/storage?start_date={today}&end_date={}",
         today.succ_opt().unwrap()

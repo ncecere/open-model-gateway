@@ -68,8 +68,9 @@ impl UtcInstant {
     pub fn minute(self) -> u32 {
         u32::from(self.hms().1)
     }
+    /// Whole-second anchor; a leap observation is retained in the subsecond.
     pub fn second(self) -> u32 {
-        u32::from(self.hms().2)
+        u32::from(self.anchor.second())
     }
     pub fn checked_add_signed(self, d: SignedDuration) -> Option<Self> {
         self.checked_add(d).ok()

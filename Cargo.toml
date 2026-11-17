@@ -1,12 +1,25 @@
 [workspace]
 members = ["apps/gateway", "tools/mock-upstream", "tools/loadgen", "crates/datetime"]
+exclude = ["vendor/oauth2", "vendor/openidconnect"]
 resolver = "3"
 
-# Explicit upstream-base advisory coverage only; no vendored packages today.
+# Upstream-base advisory coverage for the locally maintained SDK ports.
 # Registration format and boundaries: docs/verification.md#supply-chain
-[workspace.metadata.vendored]
+[workspace.metadata.vendored.oauth2]
+name = "oauth2"
+version = "5.0.0"
+manifest = "vendor/oauth2/Cargo.toml"
+
+[workspace.metadata.vendored.openidconnect]
+name = "openidconnect"
+version = "4.1.0"
+manifest = "vendor/openidconnect/Cargo.toml"
 
 [profile.release]
 lto = "thin"
 codegen-units = 1
 strip = "debuginfo"
+
+[patch.crates-io]
+oauth2 = { path = "vendor/oauth2" }
+openidconnect = { path = "vendor/openidconnect" }

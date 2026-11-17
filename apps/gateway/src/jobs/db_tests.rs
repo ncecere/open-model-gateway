@@ -7,6 +7,7 @@ use crate::{
     governance::tests::db::{Fixture, amounts, fixture},
 };
 use async_trait::async_trait;
+use gateway_datetime_compat::UtcInstant;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use std::sync::Mutex;
@@ -179,7 +180,7 @@ pub(crate) fn upstream_video(state: JobState, seconds: Option<u32>) -> UpstreamV
         error: None,
     }
 }
-async fn lease(f: &Fixture, id: Uuid) -> chrono::DateTime<Utc> {
+async fn lease(f: &Fixture, id: Uuid) -> gateway_datetime_compat::UtcInstant {
     sqlx::query_scalar("SELECT lease_expires_at FROM governance_reservations WHERE execution_id=$1")
         .bind(id)
         .fetch_one(&f.store.pool)
@@ -208,7 +209,7 @@ async fn video_reserves_highest_tier_and_settles_actual_seconds_once(pool: PgPoo
         amounts(&f, request_id).await,
         ("pending".into(), Some(4_000_000), None, false)
     );
-    assert!(lease(&f, request_id).await > Utc::now() + TimeDelta::hours(5));
+    assert!(lease(&f, request_id).await > UtcInstant::now() + TimeDelta::hours(5));
     // Poll: in progress, then completed with the actual duration and tier.
     fake.push_video(upstream_video(JobState::InProgress, Some(8)));
     sqlx::query("UPDATE async_jobs SET next_poll_at=now()")
@@ -974,7 +975,12 @@ async fn an_accepted_video_transaction_that_cannot_begin_is_a_settlement_failure
     let handle = crate::db::diagnostics::Handle::new();
     let result = crate::db::diagnostics::scope(
         handle.clone(),
-        crate::governance::jobs::accept_job(&f.store, Uuid::new_v4(), Utc::now(), async |_| Ok(())),
+        crate::governance::jobs::accept_job(
+            &f.store,
+            Uuid::new_v4(),
+            UtcInstant::now(),
+            async |_| Ok(()),
+        ),
     )
     .await;
     assert_eq!(result, Err(InferenceError::Storage));
@@ -1048,7 +1054,12 @@ async fn an_accepted_video_global_prefix_failure_is_a_settlement_failure(pool: P
     let handle = crate::db::diagnostics::Handle::new();
     let result = crate::db::diagnostics::scope(
         handle.clone(),
-        crate::governance::jobs::accept_job(&store, Uuid::new_v4(), Utc::now(), async |_| Ok(())),
+        crate::governance::jobs::accept_job(
+            &store,
+            Uuid::new_v4(),
+            UtcInstant::now(),
+            async |_| Ok(()),
+        ),
     )
     .await;
     blocker.rollback().await.unwrap();

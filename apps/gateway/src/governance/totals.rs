@@ -5,7 +5,7 @@
 //! every reservation/execution write, so totals cannot drift from a code path
 //! that forgets them. `verify` compares them with a full scan.
 use super::BudgetPeriod;
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
@@ -47,7 +47,7 @@ pub(crate) const INSTALLATION_SPEND: &str = "SELECT coalesce(sum(t.settled_micro
 pub(crate) const RESERVATION_COUNTS: &str = "SELECT coalesce(sum(t.pending),0)::bigint,coalesce(sum(t.unknown),0)::bigint FROM budget_totals t WHERE t.scope_kind='workspace' AND t.period='lifetime' AND t.period_start='epoch'";
 impl BudgetPeriod {
     /// Start of the bucket holding admissions at `at` (the epoch for lifetime).
-    pub fn bucket_start(self, at: DateTime<Utc>) -> DateTime<Utc> {
+    pub fn bucket_start(self, at: UtcInstant) -> UtcInstant {
         self.window(at).0
     }
 }
@@ -65,7 +65,7 @@ pub(crate) struct Consumption {
 pub(crate) async fn read(
     tx: &mut Transaction<'_, Postgres>,
     windows: &[(Scope, BudgetPeriod)],
-    at: DateTime<Utc>,
+    at: UtcInstant,
 ) -> Result<Vec<Consumption>, sqlx::Error> {
     if windows.is_empty() {
         return Ok(Vec::new());
@@ -135,7 +135,7 @@ impl BudgetReport {
 pub(crate) async fn read_budget_report(
     tx: &mut Transaction<'_, Postgres>,
     windows: &[(Scope, BudgetPeriod)],
-    at: DateTime<Utc>,
+    at: UtcInstant,
 ) -> Result<Vec<Option<BudgetReport>>, sqlx::Error> {
     if windows.is_empty() {
         return Ok(Vec::new());
@@ -205,7 +205,7 @@ pub(crate) async fn budget_consumption(
     workspace: Uuid,
     lineage: Option<Uuid>,
     period: BudgetPeriod,
-    at: DateTime<Utc>,
+    at: UtcInstant,
 ) -> Result<(String, bool), sqlx::Error> {
     let c = read(tx, &[(Scope::of(workspace, lineage), period)], at).await?;
     let c = c.first().copied().unwrap_or_default();
@@ -249,7 +249,7 @@ pub struct Mismatch {
     pub scope_kind: String,
     pub scope_id: Uuid,
     pub period: String,
-    pub period_start: DateTime<Utc>,
+    pub period_start: UtcInstant,
     /// `settled,held,reservations,pending,unknown,unresolved,unreserved,
     /// held_unknown,unresolved_unknown` as maintained.
     pub maintained: String,
@@ -334,8 +334,8 @@ pub(crate) async fn scan_consumption(
     tx: &mut Transaction<'_, Postgres>,
     workspace: Option<Uuid>,
     lineage: Option<Uuid>,
-    start: DateTime<Utc>,
-    end: DateTime<Utc>,
+    start: UtcInstant,
+    end: UtcInstant,
 ) -> Result<(String, bool), sqlx::Error> {
     sqlx::query_as(r#"WITH accounting AS (
       SELECT workspace_id,api_key_id,admitted_at budget_at,state,held_microusd,actual_microusd,unbounded_cost FROM governance_reservations

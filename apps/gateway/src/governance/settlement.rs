@@ -1,11 +1,12 @@
 //! Settlement of one attempt: the reservation row, usage evidence, valuation
 //! under the pinned price, and the ledger entry.
 use super::*;
+use gateway_datetime_compat::UtcInstant;
 #[derive(sqlx::FromRow)]
 pub(super) struct Reservation {
     pub(super) workspace_id: Uuid,
     pub(super) api_key_id: Uuid,
-    pub(super) admitted_at: DateTime<Utc>,
+    pub(super) admitted_at: UtcInstant,
     pub(super) deployment_id: Uuid,
     pub(super) price_id: Option<Uuid>,
     pub(super) state: String,
@@ -365,7 +366,7 @@ pub(super) async fn pinned_value(
 pub(super) async fn ledger(
     tx: &mut Tx<'_>,
     id: Uuid,
-    admitted_at: Option<DateTime<Utc>>,
+    admitted_at: Option<UtcInstant>,
     kind: &str,
     amount: Option<i64>,
     usage: Usage,

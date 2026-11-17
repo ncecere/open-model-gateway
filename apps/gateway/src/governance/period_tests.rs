@@ -1,13 +1,14 @@
 //! Budget rotation periods: UTC windows, per-layer composition and history.
 use super::*;
 use BudgetPeriod::{Day, Lifetime, Month, Week};
-use chrono::TimeZone;
-fn at(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32) -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(y, m, d, h, min, s).unwrap()
+use gateway_datetime_compat::UtcInstant;
+
+fn at(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32) -> UtcInstant {
+    crate::timestamp::from_ymd_and_hms(y, m, d, h, min, s).unwrap()
 }
 #[test]
 fn windows_are_half_open_utc_day_iso_week_and_calendar_month() {
-    let ms = chrono::TimeDelta::milliseconds(1);
+    let ms = gateway_datetime_compat::SignedDuration::milliseconds(1);
     // UTC midnight.
     assert_eq!(
         Day.window(at(2026, 10, 8, 0, 0, 0) - ms),
@@ -45,7 +46,9 @@ fn windows_are_half_open_utc_day_iso_week_and_calendar_month() {
         (at(2028, 2, 1, 0, 0, 0), at(2028, 3, 1, 0, 0, 0))
     );
     assert_eq!(
-        Month.window(at(2026, 4, 30, 23, 59, 59) + chrono::TimeDelta::seconds(1)),
+        Month.window(
+            at(2026, 4, 30, 23, 59, 59) + gateway_datetime_compat::SignedDuration::seconds(1)
+        ),
         (at(2026, 5, 1, 0, 0, 0), at(2026, 6, 1, 0, 0, 0))
     );
 }
@@ -56,7 +59,7 @@ fn periods_round_trip_and_lifetime_spans_all_admissions() {
     }
     assert_eq!(BudgetPeriod::parse("year"), None);
     let (start, end) = Lifetime.window(at(2026, 10, 8, 12, 0, 0));
-    assert_eq!(start, DateTime::<Utc>::UNIX_EPOCH);
+    assert_eq!(start, UtcInstant::UNIX_EPOCH);
     assert_eq!(end, at(9999, 1, 1, 0, 0, 0));
 }
 #[cfg(feature = "integration-tests")]
@@ -67,7 +70,7 @@ mod db {
     /// A settled synthetic attempt admitted at SQL expression `when`.
     async fn spend(f: &Fixture, when: &str, actual: i64) -> Uuid {
         let id = Uuid::new_v4();
-        let t: DateTime<Utc> = sqlx::query_scalar(&format!("SELECT {when}"))
+        let t: UtcInstant = sqlx::query_scalar(&format!("SELECT {when}"))
             .fetch_one(&f.store.pool)
             .await
             .unwrap();
@@ -145,7 +148,7 @@ mod db {
             at(2028, 2, 29, 12, 0, 0),
         ] {
             for p in [Day, Week, Month] {
-                let start: DateTime<Utc> =
+                let start: UtcInstant =
                     sqlx::query_scalar("SELECT date_trunc($1,$2::timestamptz,'UTC')")
                         .bind(p.as_str())
                         .bind(t)
@@ -226,7 +229,7 @@ mod db {
             .unwrap();
         assert_eq!(admit_once(&f).await, DENIED);
         let snapshot = |pool: PgPool| async move {
-            sqlx::query_as::<_, (Uuid, String, Option<i64>, Option<i64>, DateTime<Utc>)>(
+            sqlx::query_as::<_, (Uuid, String, Option<i64>, Option<i64>, UtcInstant)>(
                 "SELECT execution_id,state,held_microusd,actual_microusd,admitted_at FROM governance_reservations ORDER BY execution_id",
             )
             .fetch_all(&pool)
@@ -450,7 +453,7 @@ mod db {
             assert!(sqlx::query(bad).execute(&pool).await.is_err(), "{bad}");
         }
         assert_eq!(
-            sqlx::query_scalar::<_, Option<chrono::DateTime<Utc>>>(
+            sqlx::query_scalar::<_, Option<gateway_datetime_compat::UtcInstant>>(
                 "SELECT disabled_at FROM api_keys"
             )
             .fetch_one(&pool)

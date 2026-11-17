@@ -1,12 +1,13 @@
 //! Pure scheduling rules: time windows (overnight spans, DST boundaries),
 //! the Prometheus reader, load thresholds and settings validation.
-use chrono::TimeZone;
+
+use gateway_datetime_compat::UtcInstant;
 use serde_json::json;
 
 use super::*;
 
-fn utc(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(y, mo, d, h, mi, 0).unwrap()
+fn utc(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> UtcInstant {
+    crate::timestamp::from_ymd_and_hms(y, mo, d, h, mi, 0).unwrap()
 }
 fn window(tz: &str, days: &[&str], start: &str, end: &str) -> CompiledWindow {
     TimeWindow {

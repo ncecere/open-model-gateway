@@ -24,7 +24,7 @@ async fn occurrence_body_at(
     owner: &BrowserPrincipal,
     ws: Option<Uuid>,
     body: Option<Value>,
-    now: Option<chrono::DateTime<chrono::Utc>>,
+    now: Option<gateway_datetime_compat::UtcInstant>,
 ) -> (Uuid, Uuid, String) {
     let kind = if ws == Some(f.personal) {
         "personal"
@@ -52,7 +52,7 @@ async fn occurrence_body_at(
     .unwrap();
     let body = match body {
         Some(mut body) => {
-            let observed: chrono::DateTime<chrono::Utc> =
+            let observed: gateway_datetime_compat::UtcInstant =
                 sqlx::query_scalar("SELECT clock_timestamp()")
                     .fetch_one(pool)
                     .await
@@ -275,7 +275,7 @@ async fn scheduled_reports_read_uses_one_clock_at_expiry(pool: PgPool) {
     let leases = Leases::new();
     leases.renew_once(&pool).await;
     let fence = leases.held(Lease::ReportScheduler).unwrap();
-    let now = past + chrono::Duration::days(7);
+    let now = past + gateway_datetime_compat::SignedDuration::days(7);
     let claim =
         crate::scheduled_reports::claim_at(&Store::new(pool.clone()), &fence, schedule, now)
             .await

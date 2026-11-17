@@ -31,12 +31,13 @@ mod store;
 pub mod types;
 pub mod video;
 
+use gateway_datetime_compat::UtcInstant;
 use std::{
     sync::{Arc, OnceLock},
     time::Duration,
 };
 
-use chrono::{TimeDelta, Utc};
+use gateway_datetime_compat::SignedDuration as TimeDelta;
 use uuid::Uuid;
 
 use crate::{
@@ -417,7 +418,9 @@ impl Jobs {
         }
         let pending = store::reservation_pending(&self.store, job.execution_id).await?;
         if pending {
-            let elapsed = (Utc::now() - job.created_at).num_milliseconds().max(0) as u64;
+            let elapsed = (UtcInstant::now() - job.created_at)
+                .whole_milliseconds()
+                .max(0) as u64;
             let record = ExecutionFinish {
                 id: job.execution_id,
                 outcome: finish.outcome,

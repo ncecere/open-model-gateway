@@ -8,6 +8,7 @@ use crate::{
         workload::{OutputReservation, WorkloadAdmission},
     },
 };
+use gateway_datetime_compat::UtcInstant;
 
 type StoredUsage = (
     Option<i64>,
@@ -251,7 +252,7 @@ async fn accepted_failed_legacy_batch_preserves_unknown_usage(pool: PgPool) {
                 public_model: "company/smart",
                 provider: "openai",
                 upstream_id: &upstream_id,
-                poll_deadline_at: Utc::now() + TimeDelta::hours(24),
+                poll_deadline_at: UtcInstant::now() + TimeDelta::hours(24),
                 video_seconds: None,
                 video_size: None,
                 batch_endpoint: Some("/v1/chat/completions"),

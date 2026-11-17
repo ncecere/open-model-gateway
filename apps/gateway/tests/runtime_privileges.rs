@@ -1122,13 +1122,14 @@ async fn alert_evaluation_runs_as_runtime(pool: &PgPool) {
     // observed flake (`fired: 9` instead of 10). The rule's other,
     // independent trigger -- 5% or more of a scope's admissions waiting at
     // least its lock-wait threshold -- does not have that race: recording it
-    // for a minute strictly before `Utc::now()` (never the still-open
+    // for a minute strictly before `UtcInstant::now()` (never the still-open
     // current minute, which `ceiling_conditions`'s half-open window always
     // excludes) means it lands inside the rule's window relative to *any*
     // `clock_timestamp()` evaluate_once could observe here, giving the same
     // single incident a deterministic second path that does not depend on
     // which minute evaluation lands in.
-    let pressure_at = chrono::Utc::now() - chrono::Duration::minutes(1);
+    let pressure_at = gateway_datetime_compat::UtcInstant::now()
+        - gateway_datetime_compat::SignedDuration::minutes(1);
     for _ in 0..40 {
         open_model_gateway::governance::pressure::record(
             pressure_at,
@@ -1688,7 +1689,7 @@ async fn history_partitions_run_as_runtime(pool: &PgPool) {
         "{report:?}"
     );
     assert!(report.created.iter().all(|(_, p)| p.contains("_p20")));
-    let refused = partitions::ensure_at(&runtime, 3, chrono::Utc::now())
+    let refused = partitions::ensure_at(&runtime, 3, gateway_datetime_compat::UtcInstant::now())
         .await
         .unwrap();
     assert!(refused.error.is_some(), "{refused:?}");

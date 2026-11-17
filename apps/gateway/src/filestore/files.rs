@@ -12,13 +12,16 @@
 //! (see `quota::reserve`); the reservation counts against the workspace's stacked
 //! `storage_bytes` limit until the file commits (then its size counts) or is
 //! abandoned. Concurrent uploads therefore never jointly exceed the quota.
+mod expiry;
+use expiry::{expiry_millis, expiry_sql};
+
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
 
-use chrono::{DateTime, Utc};
 use futures::StreamExt;
+use gateway_datetime_compat::UtcInstant;
 use uuid::Uuid;
 
 use super::{
@@ -148,10 +151,6 @@ pub struct StorageUse {
 /// `stored_files f` and `installation_settings s`. NULL means no expiry.
 pub(crate) const RETENTION_SQL: &str = "CASE f.purpose WHEN 'batch_input' THEN s.file_batch_retention_days WHEN 'batch_output' THEN s.file_batch_retention_days WHEN 'video_output' THEN s.file_video_retention_days WHEN 'user_file' THEN s.file_user_files_retention_days WHEN 'export' THEN s.file_export_retention_days END";
 
-fn expiry_sql() -> String {
-    format!("least(f.expires_at, f.created_at + make_interval(days => {RETENTION_SQL}))")
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileError {
     /// No store configured, or the purpose is turned off in Admin › Settings › Storage.
@@ -262,11 +261,11 @@ pub struct NewFile {
     pub content_type: Option<String>,
     /// Optional explicit expiry (for example a client-requested `expires_after`);
     /// the purpose retention still applies if it is sooner. Must be in the future.
-    pub expires_at: Option<DateTime<Utc>>,
+    pub expires_at: Option<UtcInstant>,
     /// Optional expiry relative to the row's `created_at` (OpenAI
     /// `expires_after` with anchor `created_at`); combines with `expires_at`
     /// by taking the sooner. Must be positive.
-    pub expires_after: Option<chrono::TimeDelta>,
+    pub expires_after: Option<gateway_datetime_compat::SignedDuration>,
     /// Reject uploads above this many plaintext bytes.
     pub max_bytes: Option<u64>,
     /// OpenAI purpose shown by the Files API. `None` derives it (`batch`,
@@ -335,9 +334,9 @@ pub struct StoredFile {
     pub size_bytes: u64,
     pub sha256: [u8; 32],
     pub encryption_key_id: String,
-    pub created_at: DateTime<Utc>,
+    pub created_at: UtcInstant,
     /// Effective expiry; `None` never expires (branding).
-    pub expires_at: Option<DateTime<Utc>>,
+    pub expires_at: Option<UtcInstant>,
     /// OpenAI purpose for files the Files API shows (batch input/output and
     /// user files); `None` for exports, branding and video outputs.
     pub api_purpose: Option<String>,
@@ -387,8 +386,8 @@ struct Row {
     size_bytes: Option<i64>,
     sha256: Option<Vec<u8>>,
     encryption_key_id: String,
-    created_at: DateTime<Utc>,
-    effective_expires_at: Option<DateTime<Utc>>,
+    created_at: UtcInstant,
+    effective_expires_at: Option<UtcInstant>,
     api_purpose: Option<String>,
 }
 
@@ -504,10 +503,10 @@ fn staged_key(new: &NewFile) -> Result<ObjectKey, FileError> {
     if new.created_by_api_key_id.is_some() && new.workspace_id.is_none() {
         return Err(FileError::Invalid);
     }
-    if new.expires_at.is_some_and(|at| at <= Utc::now())
+    if new.expires_at.is_some_and(|at| at <= UtcInstant::now())
         || new
             .expires_after
-            .is_some_and(|d| d <= chrono::TimeDelta::zero())
+            .is_some_and(|d| d <= gateway_datetime_compat::SignedDuration::ZERO)
     {
         return Err(FileError::Invalid);
     }
@@ -630,7 +629,7 @@ impl FileStorage {
         filename: Option<&str>,
         content_type: Option<&str>,
     ) -> Result<(), FileError> {
-        let expires_after_ms = new.expires_after.map(|d| d.num_milliseconds());
+        let expires_after_ms = expiry_millis(new.expires_after)?;
         sqlx::query("INSERT INTO stored_files(id,object_key,purpose,workspace_id,created_by_user_id,created_by_api_key_id,filename,content_type,backend,encryption_key_id,expires_at,api_purpose) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,least($11::timestamptz,now()+make_interval(secs => $13::bigint/1000.0)),$12)")
             .bind(key.id())
             .bind(key.as_str())
@@ -691,19 +690,20 @@ impl FileStorage {
         &self,
         mut staged: StagedFile,
         api_purpose_now: Option<&str>,
-        expires_after: Option<chrono::TimeDelta>,
+        expires_after: Option<gateway_datetime_compat::SignedDuration>,
     ) -> Result<StoredFile, FileError> {
         let purpose = staged.purpose();
         let api = api_purpose_now
             .map(|p| api_purpose(purpose, Some(p)))
             .transpose()?
             .flatten();
+        let expires_after_ms = expiry_millis(expires_after)?;
         let committed = sqlx::query("UPDATE stored_files SET size_bytes=$2,sha256=$3,committed_at=clock_timestamp(),api_purpose=coalesce(api_purpose,$4),expires_at=least(expires_at,created_at+make_interval(secs => $5::bigint/1000.0)) WHERE id=$1 AND committed_at IS NULL AND deleted_at IS NULL")
             .bind(staged.key.id())
             .bind(i64::try_from(staged.size).map_err(|_| FileError::Invalid)?)
             .bind(staged.sha256.as_slice())
             .bind(api)
-            .bind(expires_after.map(|d| d.num_milliseconds()))
+            .bind(expires_after_ms)
             .execute(&self.db.pool)
             .await;
         staged.guard.armed = false;

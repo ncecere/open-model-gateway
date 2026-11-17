@@ -16,7 +16,7 @@ pub struct Readiness {
 }
 
 /// Next-due time and schedule id of the scheduler's last keyset page (per process).
-pub(crate) type ReportScanFrontier = (chrono::DateTime<chrono::Utc>, uuid::Uuid);
+pub(crate) type ReportScanFrontier = (gateway_datetime_compat::UtcInstant, uuid::Uuid);
 
 #[derive(Clone)]
 pub struct Store {
@@ -63,7 +63,7 @@ pub struct Store {
     /// Production builds have no override: admission always reads the
     /// database clock (see [`Store::admission_now`]).
     #[cfg(any(test, feature = "integration-tests"))]
-    admission_clock: std::sync::Arc<std::sync::OnceLock<chrono::DateTime<chrono::Utc>>>,
+    admission_clock: std::sync::Arc<std::sync::OnceLock<gateway_datetime_compat::UtcInstant>>,
 }
 
 // Keep this inventory in step with future enterprise migrations. Preflight rejects
@@ -486,7 +486,7 @@ impl Store {
     pub(crate) async fn admission_now(
         &self,
         conn: &mut PgConnection,
-    ) -> sqlx::Result<chrono::DateTime<chrono::Utc>> {
+    ) -> sqlx::Result<gateway_datetime_compat::UtcInstant> {
         #[cfg(any(test, feature = "integration-tests"))]
         if let Some(at) = self.admission_clock.get() {
             return Ok(*at);
@@ -499,7 +499,7 @@ impl Store {
     /// The pinned test admission instant, if any (never in production
     /// builds): admission reads the database clock in one of its own
     /// statements and lets this override it, like [`Store::admission_now`].
-    pub(crate) fn admission_override(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+    pub(crate) fn admission_override(&self) -> Option<gateway_datetime_compat::UtcInstant> {
         #[cfg(any(test, feature = "integration-tests"))]
         if let Some(at) = self.admission_clock.get() {
             return Some(*at);
@@ -513,7 +513,9 @@ impl Store {
     /// per-minute rate assertions cannot straddle a minute boundary. Leases
     /// and budget periods use the same instant. Freezing twice is an error.
     #[cfg(any(test, feature = "integration-tests"))]
-    pub async fn freeze_admission_clock(&self) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
+    pub async fn freeze_admission_clock(
+        &self,
+    ) -> anyhow::Result<gateway_datetime_compat::UtcInstant> {
         let now = sqlx::query_scalar("SELECT clock_timestamp()")
             .fetch_one(&self.pool)
             .await?;
@@ -526,7 +528,10 @@ impl Store {
     /// Tests only: pin admission time (for this store and all its clones) at
     /// `at`, e.g. either side of a minute boundary. Pinning twice is an error.
     #[cfg(any(test, feature = "integration-tests"))]
-    pub fn pin_admission_clock(&self, at: chrono::DateTime<chrono::Utc>) -> anyhow::Result<()> {
+    pub fn pin_admission_clock(
+        &self,
+        at: gateway_datetime_compat::UtcInstant,
+    ) -> anyhow::Result<()> {
         self.admission_clock
             .set(at)
             .map_err(|_| anyhow::anyhow!("admission clock is already frozen"))

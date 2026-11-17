@@ -1,5 +1,5 @@
 //! UTC accounting periods; IANA civil time affects only the due instant.
-use chrono::{DateTime, Datelike, Months, NaiveDate, TimeDelta, Utc};
+use gateway_datetime_compat::{CalendarDate, SignedDuration as TimeDelta, UtcInstant};
 use jiff::tz::TimeZone;
 
 #[derive(Clone, Debug)]
@@ -11,9 +11,9 @@ pub(crate) struct Calendar {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Occurrence {
-    pub start: DateTime<Utc>,
-    pub end: DateTime<Utc>,
-    pub due: DateTime<Utc>,
+    pub start: UtcInstant,
+    pub end: UtcInstant,
+    pub due: UtcInstant,
 }
 fn invalid() -> sqlx::Error {
     sqlx::Error::Protocol("invalid report calendar".into())
@@ -31,29 +31,25 @@ impl Calendar {
             minute: (minutes % 60) as i8,
         })
     }
-    fn boundary(&self, now: DateTime<Utc>) -> Result<DateTime<Utc>, sqlx::Error> {
+    fn boundary(&self, now: UtcInstant) -> Result<UtcInstant, sqlx::Error> {
         let d = now.date_naive();
         let d = if self.monthly {
             d.with_day(1)
         } else {
             d.checked_sub_signed(TimeDelta::days(i64::from(
-                d.weekday().num_days_from_monday(),
+                d.weekday().number_days_from_monday(),
             )))
         }
         .ok_or_else(invalid)?;
         midnight(d)
     }
-    pub(crate) fn shift(
-        &self,
-        end: DateTime<Utc>,
-        forward: bool,
-    ) -> Result<DateTime<Utc>, sqlx::Error> {
+    pub(crate) fn shift(&self, end: UtcInstant, forward: bool) -> Result<UtcInstant, sqlx::Error> {
         let d = end.date_naive();
         let d = if self.monthly {
             if forward {
-                d.checked_add_months(Months::new(1))
+                d.checked_add_months(1).ok()
             } else {
-                d.checked_sub_months(Months::new(1))
+                d.checked_add_months(-1).ok()
             }
         } else {
             d.checked_add_signed(TimeDelta::days(if forward { 7 } else { -7 }))
@@ -63,10 +59,10 @@ impl Calendar {
     }
     /// First daily preference strictly after closure. Compatible disambiguation
     /// shifts gaps forward by their size and chooses the earlier fold only.
-    pub(crate) fn delivery_after(&self, end: DateTime<Utc>) -> Result<DateTime<Utc>, sqlx::Error> {
+    pub(crate) fn delivery_after(&self, end: UtcInstant) -> Result<UtcInstant, sqlx::Error> {
         let ts = jiff::Timestamp::from_second(end.timestamp()).map_err(|_| invalid())?;
         let local = ts.to_zoned(self.zone.clone());
-        let mut d = NaiveDate::from_ymd_opt(
+        let mut d = CalendarDate::from_ymd_opt(
             i32::from(local.year()),
             local.month() as u32,
             local.day() as u32,
@@ -87,7 +83,7 @@ impl Calendar {
             .map_err(|_| invalid())?;
             let zoned = self.zone.to_zoned(civil).map_err(|_| invalid())?;
             let due =
-                DateTime::from_timestamp(zoned.timestamp().as_second(), 0).ok_or_else(invalid)?;
+                UtcInstant::from_timestamp(zoned.timestamp().as_second(), 0).ok_or_else(invalid)?;
             if due > end {
                 return Ok(due);
             }
@@ -95,7 +91,7 @@ impl Calendar {
         }
         Err(invalid())
     }
-    fn occurrence(&self, end: DateTime<Utc>) -> Result<Occurrence, sqlx::Error> {
+    fn occurrence(&self, end: UtcInstant) -> Result<Occurrence, sqlx::Error> {
         Ok(Occurrence {
             start: self.shift(end, false)?,
             end,
@@ -106,8 +102,8 @@ impl Calendar {
     /// completed period, even when changing cadence.
     pub(crate) fn next_after(
         &self,
-        now: DateTime<Utc>,
-        floor: Option<DateTime<Utc>>,
+        now: UtcInstant,
+        floor: Option<UtcInstant>,
     ) -> Result<Occurrence, sqlx::Error> {
         let mut end = self.boundary(now.max(floor.unwrap_or(now)))?;
         loop {
@@ -118,20 +114,20 @@ impl Calendar {
             end = self.shift(end, true)?;
         }
     }
-    pub(crate) fn latest_complete(&self, now: DateTime<Utc>) -> Result<Occurrence, sqlx::Error> {
+    pub(crate) fn latest_complete(&self, now: UtcInstant) -> Result<Occurrence, sqlx::Error> {
         self.occurrence(self.boundary(now)?)
     }
-    pub(crate) fn skipped(&self, first: DateTime<Utc>, last: DateTime<Utc>) -> i64 {
+    pub(crate) fn skipped(&self, first: UtcInstant, last: UtcInstant) -> i64 {
         if self.monthly {
             i64::from(
                 (last.year() - first.year()) * 12 + last.month() as i32 - first.month() as i32,
             )
             .max(0)
         } else {
-            (last - first).num_days().div_euclid(7).max(0)
+            (last - first).whole_days().div_euclid(7).max(0)
         }
     }
 }
-fn midnight(d: NaiveDate) -> Result<DateTime<Utc>, sqlx::Error> {
-    Ok(d.and_hms_opt(0, 0, 0).ok_or_else(invalid)?.and_utc())
+fn midnight(d: CalendarDate) -> Result<UtcInstant, sqlx::Error> {
+    Ok(d.midnight().map_err(|_| invalid())?)
 }

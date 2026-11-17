@@ -2,7 +2,7 @@
 name = "gateway-datetime-compat"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.99.1"
+rust-version = "1.94.1"
 publish = false
 license = "MIT"
 

@@ -2,6 +2,7 @@
 //! additive metric, grouping, scope and filter, before and after late
 //! changes to rolled hours.
 use super::*;
+use gateway_datetime_compat::UtcInstant;
 
 async fn explore_in(
     f: &Fixture,
@@ -62,11 +63,11 @@ async fn explore_from_rollups_equals_the_raw_scan(pool: PgPool) {
         }
     }
     assert!(hours >= 200, "{hours}");
-    let today = Utc::now().date_naive();
+    let today = UtcInstant::now().date_naive();
     let range = format!(
         "start_date={}&end_date={}",
-        today - chrono::TimeDelta::days(11),
-        today + chrono::TimeDelta::days(1)
+        today - gateway_datetime_compat::SignedDuration::days(11),
+        today + gateway_datetime_compat::SignedDuration::days(1)
     );
     let check = |label: &'static str| {
         let f = &f;

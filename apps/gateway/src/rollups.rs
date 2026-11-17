@@ -13,7 +13,7 @@
 //! which are not additive) and the spend-spike alert baseline.
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 use serde::Serialize;
 
 /// Hours recomputed per run at most.
@@ -30,7 +30,7 @@ pub struct RollupReport {
     /// Hours still due after this run (time budget or batch limit).
     pub remaining: i64,
     /// Hours ending at or before this instant were eligible.
-    pub bound: Option<DateTime<Utc>>,
+    pub bound: Option<UtcInstant>,
 }
 
 /// Latest hour end the job may roll: an hour ago, and no later than the
@@ -58,8 +58,8 @@ pub async fn run_once(
 ) -> Result<RollupReport, sqlx::Error> {
     let started = Instant::now();
     let pool = &store.pool;
-    let bound: DateTime<Utc> = sqlx::query_scalar(BOUND).fetch_one(pool).await?;
-    let due: Vec<DateTime<Utc>> = sqlx::query_scalar(&format!("{DUE} LIMIT $2"))
+    let bound: UtcInstant = sqlx::query_scalar(BOUND).fetch_one(pool).await?;
+    let due: Vec<UtcInstant> = sqlx::query_scalar(&format!("{DUE} LIMIT $2"))
         .bind(bound)
         .bind(BATCH_HOURS + 1)
         .fetch_all(pool)
@@ -100,7 +100,7 @@ pub async fn run_once(
 /// had been rolled before).
 pub async fn roll_hour(
     store: &crate::store::Store,
-    hour: DateTime<Utc>,
+    hour: UtcInstant,
     fence: Option<&crate::leases::Fence>,
 ) -> Result<(u64, bool), sqlx::Error> {
     let mut tx = crate::db::begin_with_setup(

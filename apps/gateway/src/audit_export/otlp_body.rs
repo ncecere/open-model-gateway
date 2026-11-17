@@ -3,7 +3,7 @@ use super::*;
 
 /// Nanoseconds since the Unix epoch as a decimal string (the protobuf JSON
 /// mapping of a 64-bit integer); `0` (unknown) outside its range.
-fn unix_nanos(at: chrono::DateTime<chrono::Utc>) -> String {
+fn unix_nanos(at: gateway_datetime_compat::UtcInstant) -> String {
     at.timestamp_nanos_opt().unwrap_or(0).to_string()
 }
 
@@ -30,7 +30,10 @@ fn log_record(time: String, observed: &str, body: String, attributes: Vec<Value>
 /// The OTLP/HTTP JSON request body for a payload and how many records it
 /// holds: one LogRecord per event, its body the event object the webhook
 /// sends; a heartbeat or test is one record.
-pub(super) fn otlp_body(payload: &Payload, now: chrono::DateTime<chrono::Utc>) -> (Value, usize) {
+pub(super) fn otlp_body(
+    payload: &Payload,
+    now: gateway_datetime_compat::UtcInstant,
+) -> (Value, usize) {
     let observed = unix_nanos(now);
     let (installation, records) = match payload {
         Payload::Events {
@@ -43,11 +46,8 @@ pub(super) fn otlp_body(payload: &Payload, now: chrono::DateTime<chrono::Utc>) -
                 .map(|event| {
                     let time = event["occurred_at"]
                         .as_str()
-                        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-                        .map_or_else(
-                            || "0".to_owned(),
-                            |t| unix_nanos(t.with_timezone(&chrono::Utc)),
-                        );
+                        .and_then(|t| gateway_datetime_compat::http::parse_rfc3339(t).ok())
+                        .map_or_else(|| "0".to_owned(), |t| unix_nanos(t));
                     log_record(
                         time,
                         &observed,

@@ -3338,3 +3338,17 @@ test("prune-dev-images deletes only old versions whose tags are all dev-<12 hex>
     assert.notDeepEqual(pruneSelection(mutated, PRUNE_FIXTURE), ["1", "2", "13"]);
   }
 });
+
+function assertNoChrono(lock) {
+  const sections = lock.match(/^\[\[package\]\]$/gm) ?? [];
+  const names = [...lock.matchAll(/^\[\[package\]\]\nname = "([^"]+)"$/gm)].map(match => match[1]);
+  assert.equal(names.length, sections.length, "every locked package must be inventoried");
+  assert.ok(names.length > 0);
+  assert.ok(!names.includes("chrono"), "Chrono is unmaintained; preserve the complete maintained date dependency graph (#674)");
+}
+
+test("the complete locked date dependency graph excludes Chrono, including inactive targets", () => {
+  assert.throws(() => assertNoChrono('[[package]]\nname = "chrono"\nversion = "0.4.45"\n'), /Chrono is unmaintained/);
+  assert.throws(() => assertNoChrono('[[package]]\n# hidden name\nname = "chrono"\n'), /every locked package/);
+  assertNoChrono(readFileSync(join(root, "Cargo.lock"), "utf8"));
+});

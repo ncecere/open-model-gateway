@@ -120,9 +120,10 @@ async fn a_campaign_snapshots_live_shared_access(pool: PgPool) {
     assert_eq!(c["item_count"], 4);
     assert!(c["closed_at"].is_null());
     // Due in 14 days by default.
-    let due: chrono::DateTime<chrono::Utc> = c["due_at"].as_str().unwrap().parse().unwrap();
-    let created: chrono::DateTime<chrono::Utc> = c["created_at"].as_str().unwrap().parse().unwrap();
-    assert_eq!((due - created).num_days(), 14);
+    let due: gateway_datetime_compat::UtcInstant = c["due_at"].as_str().unwrap().parse().unwrap();
+    let created: gateway_datetime_compat::UtcInstant =
+        c["created_at"].as_str().unwrap().parse().unwrap();
+    assert_eq!((due - created).whole_days(), 14);
     // Personal workspaces are never reviewed; Team and Project are.
     assert_eq!(
         keyed(&items(&f, &c).await),

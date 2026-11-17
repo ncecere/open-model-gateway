@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 use openidconnect::{JsonWebKey, JsonWebKeySet, core::CoreJsonWebKey};
 use tokio::sync::Mutex;
 
@@ -91,9 +91,9 @@ struct State {
     expires: Instant,
     /// Last fetch attempt (successful or not).
     last_attempt: Instant,
-    refreshed_at: DateTime<Utc>,
-    fresh_until: DateTime<Utc>,
-    last_failure_at: Option<DateTime<Utc>>,
+    refreshed_at: UtcInstant,
+    fresh_until: UtcInstant,
+    last_failure_at: Option<UtcInstant>,
     consecutive_failures: u32,
     /// Bumped on every attempt; lets waiters skip a fetch someone else just made.
     generation: u64,
@@ -119,9 +119,9 @@ pub(crate) enum Freshness {
 #[derive(Debug, Clone)]
 pub(crate) struct JwksStatus {
     pub keys: usize,
-    pub refreshed_at: DateTime<Utc>,
-    pub fresh_until: DateTime<Utc>,
-    pub last_failure_at: Option<DateTime<Utc>>,
+    pub refreshed_at: UtcInstant,
+    pub fresh_until: UtcInstant,
+    pub last_failure_at: Option<UtcInstant>,
     pub state: Freshness,
 }
 
@@ -143,14 +143,15 @@ impl JwksCache {
         }
         let ttl = policy.ttl(fetched.max_age);
         let at = now();
-        let wall = Utc::now();
+        let wall = UtcInstant::now();
         Ok(Self {
             state: RwLock::new(State {
                 keys: fetched.keys,
                 expires: at + ttl,
                 last_attempt: at,
                 refreshed_at: wall,
-                fresh_until: wall + chrono::Duration::from_std(ttl).unwrap_or_default(),
+                fresh_until: wall
+                    + gateway_datetime_compat::SignedDuration::try_from(ttl).unwrap_or_default(),
                 last_failure_at: None,
                 consecutive_failures: 0,
                 generation: 0,
@@ -214,15 +215,16 @@ impl JwksCache {
         match result {
             Ok(fetched) if usable(&fetched.keys) => {
                 let ttl = self.policy.ttl(fetched.max_age);
-                let wall = Utc::now();
+                let wall = UtcInstant::now();
                 state.keys = fetched.keys;
                 state.expires = now + ttl;
                 state.refreshed_at = wall;
-                state.fresh_until = wall + chrono::Duration::from_std(ttl).unwrap_or_default();
+                state.fresh_until = wall
+                    + gateway_datetime_compat::SignedDuration::try_from(ttl).unwrap_or_default();
                 state.consecutive_failures = 0;
             }
             _ => {
-                state.last_failure_at = Some(Utc::now());
+                state.last_failure_at = Some(UtcInstant::now());
                 state.consecutive_failures = state.consecutive_failures.saturating_add(1);
                 tracing::warn!(
                     failures = state.consecutive_failures,

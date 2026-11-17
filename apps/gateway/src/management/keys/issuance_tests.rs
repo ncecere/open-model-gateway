@@ -440,8 +440,9 @@ async fn the_window_edge_is_exact_for_a_given_now(pool: PgPool) {
     use crate::management::keys::issuance::{Holder, usage};
     let f = fixture(&pool).await;
     // A fixed "now": rows one second either side of the window start, and on it.
-    let since = chrono::Utc::now() - chrono::Duration::hours(24);
-    let one = chrono::Duration::seconds(1);
+    let since = gateway_datetime_compat::UtcInstant::now()
+        - gateway_datetime_compat::SignedDuration::hours(24);
+    let one = gateway_datetime_compat::SignedDuration::seconds(1);
     for (user, created) in [
         (f.member.user_id, since + one),
         (f.member.user_id, since),
@@ -503,7 +504,8 @@ async fn window_counts_bound_the_workspace_created_index_on_created_at(pool: PgP
         .execute(&pool)
         .await
         .unwrap();
-    let since = chrono::Utc::now() - chrono::Duration::hours(24);
+    let since = gateway_datetime_compat::UtcInstant::now()
+        - gateway_datetime_compat::SignedDuration::hours(24);
     for holder in [
         Holder::User(f.member.user_id),
         Holder::Service(Uuid::new_v4()),
@@ -1285,9 +1287,9 @@ async fn key_issuance_view_shows_the_callers_budget_and_admins_the_workspace(poo
     let (_, _, refused) = create(&f, &f.member, f.team).await;
     // The view and the refusal agree on when the budget frees up.
     let retry = refused["error"]["retry_after_seconds"].as_i64().unwrap();
-    let next: chrono::DateTime<chrono::Utc> =
+    let next: gateway_datetime_compat::UtcInstant =
         serde_json::from_value(v["holder"]["next_available_at"].clone()).unwrap();
-    let wait = (next - chrono::Utc::now()).num_seconds();
+    let wait = (next - gateway_datetime_compat::UtcInstant::now()).whole_seconds();
     assert!((wait - retry).abs() <= 3, "{wait} {retry}");
     // The workspace owner sees the workspace's total as well as their own use.
     let (status, _, v) = call_h(&f.s, &f.owner, "GET", &path, Value::Null).await;

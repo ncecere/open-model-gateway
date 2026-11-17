@@ -9,7 +9,7 @@ use crate::{
     store::Store,
 };
 use calendar::{Calendar, Occurrence};
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 use serde_json::{Value, json};
 use sqlx::{Postgres, Transaction};
 use std::time::Duration;
@@ -77,10 +77,10 @@ const DEADLINE: Duration = Duration::from_secs(10);
 enum SchedulingClock {
     Database,
     #[cfg(all(test, feature = "integration-tests"))]
-    Fixed(DateTime<Utc>),
+    Fixed(UtcInstant),
 }
 impl SchedulingClock {
-    async fn now(self, tx: &mut Transaction<'_, Postgres>) -> Result<DateTime<Utc>, sqlx::Error> {
+    async fn now(self, tx: &mut Transaction<'_, Postgres>) -> Result<UtcInstant, sqlx::Error> {
         match self {
             Self::Database => {
                 sqlx::query_scalar("SELECT clock_timestamp()")
@@ -103,9 +103,9 @@ struct Schedule {
     timezone: String,
     delivery_time: String,
     configuration_revision: i64,
-    next_period_end: Option<DateTime<Utc>>,
-    last_period_end: Option<DateTime<Utc>>,
-    next_run_at: Option<DateTime<Utc>>,
+    next_period_end: Option<UtcInstant>,
+    last_period_end: Option<UtcInstant>,
+    next_run_at: Option<UtcInstant>,
 }
 const COLUMNS: &str = "id,workspace_id,cost_center_id,scope_kind,created_by,cadence,timezone,left(delivery_time::text,5) delivery_time,configuration_revision,next_period_end,last_period_end,next_run_at";
 impl Schedule {
@@ -200,7 +200,7 @@ pub(super) async fn claim_at(
     store: &Store,
     fence: &Fence,
     id: Uuid,
-    now: DateTime<Utc>,
+    now: UtcInstant,
 ) -> Result<Option<Claim>, sqlx::Error> {
     claim_with_clock(store, fence, id, SchedulingClock::Fixed(now)).await
 }
@@ -298,7 +298,7 @@ pub(crate) async fn complete(
     if !current {
         return Ok(false);
     }
-    let observed: DateTime<Utc> = body["observed_at"]
+    let observed: UtcInstant = body["observed_at"]
         .as_str()
         .and_then(|v| v.parse().ok())
         .ok_or_else(|| sqlx::Error::Protocol("invalid report observation".into()))?;
@@ -345,7 +345,7 @@ async fn select_tick_with_clock(
         .report_dispatch
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    let mut candidates: Vec<(DateTime<Utc>, Uuid)> = if let Some((due, id)) = frontier {
+    let mut candidates: Vec<(UtcInstant, Uuid)> = if let Some((due, id)) = frontier {
         sqlx::query_as(SELECT_CANDIDATES_AFTER)
             .bind(cutoff)
             .bind(CANDIDATE_BATCH)
@@ -428,7 +428,7 @@ pub async fn tick(store: &Store, fence: &Fence) -> Result<usize, sqlx::Error> {
 pub(super) async fn tick_at(
     store: &Store,
     fence: &Fence,
-    now: DateTime<Utc>,
+    now: UtcInstant,
 ) -> Result<usize, sqlx::Error> {
     tick_with_clock(store, fence, SchedulingClock::Fixed(now)).await
 }

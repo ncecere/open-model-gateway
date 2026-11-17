@@ -2,7 +2,7 @@
 //! workspace-wide budget windows where the caller administers the workspace.
 use super::*;
 use crate::governance::BudgetPeriod;
-use chrono::{DateTime, Months, Utc};
+use gateway_datetime_compat::UtcInstant;
 
 /// Usage of the caller's human keys, as decimal strings. Token sums are the
 /// observed values (a lower bound when `unknown_token_attempts` is nonzero).
@@ -39,13 +39,11 @@ pub(super) async fn summary(
 ) -> ApiResult {
     let (mut tx, rows) = me_tx(&s, &u).await?;
     let ids: Vec<Uuid> = rows.iter().map(|r| r.0).collect();
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+    let now: UtcInstant = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut *tx)
         .await?;
     let (cur_start, cur_end) = BudgetPeriod::Month.window(now);
-    let prev_start = cur_start
-        .checked_sub_months(Months::new(1))
-        .ok_or_else(invalid)?;
+    let prev_start = cur_start.checked_add_months(-1).ok().ok_or_else(invalid)?;
     let grouped: Vec<(Uuid, bool, Value)> = if q.totals_only {
         vec![]
     } else {
@@ -95,7 +93,7 @@ pub(super) async fn summary(
         workspaces.push(json!({"workspace_id":id,"name":name,"kind":kind,"role":role,"active_keys":active.iter().find(|a|a.0==*id).map_or(0,|a|a.1).to_string(),"current":pick(Some(*id),true),"previous":pick(Some(*id),false),"budgets":budgets}));
     }
     tx.commit().await?;
-    let date = |d: DateTime<Utc>| d.date_naive().to_string();
+    let date = |d: UtcInstant| d.date_naive().to_string();
     Ok(Json(
         json!({"currency":"USD","basis":"configured_rate_estimate","observed_at":now,"period":{"current":{"start_date":date(cur_start),"end_date":date(cur_end)},"previous":{"start_date":date(prev_start),"end_date":date(cur_start)}},"totals":{"current":pick(None,true),"previous":pick(None,false)},"workspaces":workspaces}),
     ))

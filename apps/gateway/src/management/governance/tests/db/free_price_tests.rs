@@ -1,4 +1,5 @@
 use super::*;
+use crate::timestamp::TimestampFormat as _;
 
 const PATH: &str = "/api/v1/platform/reservations/resolve-free-price";
 
@@ -212,7 +213,7 @@ async fn free_price_v3_missing_unknown_priced_and_selectors(pool: PgPool) {
         v3(&f,|v|{v[0]=json!({"meter":"input_tokens","microusd_per_batch":"1","batch":1000000,"unit_label":"/M tokens","sku_label":"Input"});}).await,
     ] { unknown(&f,Some(price),Some(0)).await; }
     let admin = user(f.owner, true);
-    let month = Utc::now().format("%Y-%m").to_string();
+    let month = UtcInstant::now().format("%Y-%m").to_string();
     let selectors =
         json!({"month":month,"workspace_id":f.principal.workspace_id,"deployment_id":f.deployment});
     assert_eq!(
@@ -246,9 +247,9 @@ async fn free_price_v3_missing_unknown_priced_and_selectors(pool: PgPool) {
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn free_price_resolution_unblocks_history_archive(pool: PgPool) {
     use crate::archive::{Group, Month, Refusal, Request, archive_as_of};
-    use chrono::{DateTime, Months};
+    use gateway_datetime_compat::UtcInstant;
     let f = fixture(pool).await;
-    let upper: DateTime<Utc> = sqlx::query_scalar(
+    let upper: UtcInstant = sqlx::query_scalar(
         "SELECT legacy_upper FROM history_partitions WHERE parent='inference_executions'",
     )
     .fetch_one(&f.store.pool)
@@ -257,7 +258,7 @@ async fn free_price_resolution_unblocks_history_archive(pool: PgPool) {
     crate::partitions::ensure_at(&f.store.pool, 6, upper)
         .await
         .unwrap();
-    let month = upper + Months::new(1);
+    let month = upper.checked_add_months(1).unwrap();
     let free = f.price(0).await;
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,attempt_number,started_at) VALUES($1,$2,$3,$4,'company/smart','openai',true,'failed',$1,1,$5)").bind(id).bind(f.principal.workspace_id).bind(f.principal.key_id).bind(f.deployment).bind(month).execute(&f.store.pool).await.unwrap();
@@ -271,7 +272,7 @@ async fn free_price_resolution_unblocks_history_archive(pool: PgPool) {
         drop: false,
         retention_months: 1,
     };
-    let later = month + Months::new(3);
+    let later = month.checked_add_months(3).unwrap();
     assert!(matches!(
         archive_as_of(&f.store.pool, &req, later)
             .await

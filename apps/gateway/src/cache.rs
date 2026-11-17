@@ -33,7 +33,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use chrono::{DateTime, Utc};
+use gateway_datetime_compat::UtcInstant;
 use uuid::Uuid;
 
 use crate::{
@@ -144,7 +144,7 @@ pub struct KeyEntry {
     pub principal: Principal,
     /// Checked locally on every hit; admission checks it again with the
     /// database clock.
-    pub expires_at: Option<DateTime<Utc>>,
+    pub expires_at: Option<UtcInstant>,
 }
 
 /// Routing configuration of one public model as seen by one workspace:

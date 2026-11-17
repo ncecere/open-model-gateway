@@ -1,4 +1,5 @@
 use super::*;
+use crate::timestamp::TimestampFormat as _;
 const WEBHOOKS: &str = "/api/v1/platform/alerts/webhooks";
 #[path = "webhook_delivery_api_tests.rs"]
 mod delivery_api;
@@ -272,7 +273,7 @@ async fn webhook_running_gateway_sessions_scopes_rotation_and_revocation(pool: P
         json!({"previous_secret_ref":"env:HOOK_OLD"}),
         json!({"previous_secret_ref":"file:/secret"}),
         json!({"current_secret_ref":"env:OPENAI_API_KEY"}),
-        json!({"previous_secret_ref":"env:HOOK_OLD","previous_secret_until":(chrono::Utc::now()+chrono::Duration::hours(25)).to_rfc3339()}),
+        json!({"previous_secret_ref":"env:HOOK_OLD","previous_secret_until":(gateway_datetime_compat::UtcInstant::now()+gateway_datetime_compat::SignedDuration::hours(25)).to_rfc3339()}),
     ] {
         assert_eq!(
             client
@@ -286,7 +287,7 @@ async fn webhook_running_gateway_sessions_scopes_rotation_and_revocation(pool: P
             400
         );
     }
-    assert_eq!(client.patch(format!("{base}{path}")).bearer_auth(&write).json(&json!({"enabled":true,"previous_secret_ref":"env:HOOK_OLD","previous_secret_until":(chrono::Utc::now()+chrono::Duration::hours(1)).to_rfc3339()})).send().await.unwrap().status(),200);
+    assert_eq!(client.patch(format!("{base}{path}")).bearer_auth(&write).json(&json!({"enabled":true,"previous_secret_ref":"env:HOOK_OLD","previous_secret_until":(gateway_datetime_compat::UtcInstant::now()+gateway_datetime_compat::SignedDuration::hours(1)).to_rfc3339()})).send().await.unwrap().status(),200);
     assert_eq!(
         browser(
             reqwest::Method::POST,

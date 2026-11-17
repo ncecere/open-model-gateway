@@ -1,11 +1,12 @@
 //! Explicit zero-cost resolution; usage is never inferred from a free price.
 use super::*;
 use crate::governance::locks::{self, Scope};
-use chrono::{DateTime, Months, NaiveDate, Utc};
+use crate::timestamp::TimestampFormat as _;
+use gateway_datetime_compat::UtcInstant;
 use sqlx::{Postgres, Transaction};
 
 const MAX_CANDIDATES: usize = 10_000;
-type MonthBounds = (DateTime<Utc>, DateTime<Utc>);
+type MonthBounds = (UtcInstant, UtcInstant);
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Resolve {
@@ -27,17 +28,15 @@ impl Resolve {
         if month.len() != 7 {
             return Err(invalid());
         }
-        let start =
-            NaiveDate::parse_from_str(&format!("{month}-01"), "%Y-%m-%d").map_err(|_| invalid())?;
+        let start = gateway_datetime_compat::http::parse_date_filter(&format!("{month}-01"))
+            .map_err(|_| invalid())?;
         if start.format("%Y-%m").to_string() != *month || month.starts_with("0000") {
             return Err(invalid());
         }
-        let end = start
-            .checked_add_months(Months::new(1))
-            .ok_or_else(invalid)?;
+        let end = start.checked_add_months(1).ok().ok_or_else(invalid)?;
         Ok(Some((
-            start.and_hms_opt(0, 0, 0).ok_or_else(invalid)?.and_utc(),
-            end.and_hms_opt(0, 0, 0).ok_or_else(invalid)?.and_utc(),
+            start.midnight().map_err(|_| invalid())?,
+            end.midnight().map_err(|_| invalid())?,
         )))
     }
     fn validate(&self) -> Result<(), ApiError> {
@@ -76,7 +75,7 @@ struct Candidate {
     deployment_id: Uuid,
     price_id: Uuid,
     price_tier: String,
-    admitted_at: DateTime<Utc>,
+    admitted_at: UtcInstant,
     workload_kind: String,
 }
 // No private projection ever leaves this module. A zero hold alone is not proof:
@@ -94,7 +93,7 @@ async fn candidates(
     tx: &mut Transaction<'_, Postgres>,
     p: &Resolve,
     ids: Option<&[Uuid]>,
-    ats: Option<&[DateTime<Utc>]>,
+    ats: Option<&[UtcInstant]>,
     lock: bool,
 ) -> Result<Vec<Candidate>, ApiError> {
     let bounds = p.bounds()?;
