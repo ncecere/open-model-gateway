@@ -247,3 +247,46 @@ pub(super) async fn latest_price(
         .await
         .map_err(storage)
 }
+
+/// Entirely free immutable pricing, under the reservation's pinned tier.
+/// Missing rates/versions and unsupported tiers never establish eligibility.
+pub(crate) async fn entirely_free_price(
+    tx: &mut Tx<'_>,
+    price: Uuid,
+    deployment: Uuid,
+    tier: &str,
+    video: bool,
+) -> Result<bool, InferenceError> {
+    let p = price_version(tx, price, deployment).await?.tiered(tier)?;
+    Ok(match p.pricing_version {
+        1 => !video && p.token_rates()? == (0, 0),
+        2 => {
+            !video
+                && p.token_rates()? == (0, 0)
+                && p.rates()?.rates().iter().all(|r| {
+                    matches!(
+                        r,
+                        CacheRate::NotApplicable
+                            | CacheRate::Priced {
+                                microusd_per_million: 0
+                            }
+                    )
+                })
+        }
+        3 => {
+            let lines = p.lines()?.0;
+            lines.all_free_or_not_applicable()
+                && lines.1.is_empty()
+                && lines
+                    .0
+                    .iter()
+                    .all(|l| l.rate.is_none_or(|r| r.microusd_per_batch == 0))
+                && (!video
+                    || lines
+                        .0
+                        .iter()
+                        .any(|l| l.meter == billing::v3::Meter::OutputVideoSecondsMs))
+        }
+        _ => false,
+    })
+}

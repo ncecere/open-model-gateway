@@ -1,0 +1,199 @@
+{
+  "schemas": {
+    "FreePriceResolutionInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "apply": {
+              "type": "boolean",
+              "default": false
+            },
+            "month": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^([1-9][0-9]{3}|0[1-9][0-9]{2}|00[1-9][0-9]|000[1-9])-(0[1-9]|1[0-2])$"
+            },
+            "workspace_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            "deployment_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            "expected_count": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^(0|[1-9][0-9]{0,3}|10000)$"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 150,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "if": {
+            "required": [
+              "apply"
+            ],
+            "properties": {
+              "apply": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "expected_count",
+              "reason"
+            ],
+            "properties": {
+              "expected_count": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "boolean",
+              "default": false
+            },
+            {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^([1-9][0-9]{3}|0[1-9][0-9]{2}|00[1-9][0-9]|000[1-9])-(0[1-9]|1[0-2])$"
+            },
+            {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^(0|[1-9][0-9]{0,3}|10000)$"
+            },
+            {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 150,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+            }
+          ],
+          "minItems": 6,
+          "maxItems": 6,
+          "items": false,
+          "if": {
+            "prefixItems": [
+              {
+                "const": true
+              }
+            ]
+          },
+          "then": {
+            "prefixItems": [
+              {
+                "type": "boolean",
+                "default": false
+              },
+              {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^([1-9][0-9]{3}|0[1-9][0-9]{2}|00[1-9][0-9]|000[1-9])-(0[1-9]|1[0-2])$"
+              },
+              {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              },
+              {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              },
+              {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,3}|10000)$"
+              },
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 150,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "FreePriceResolutionResult": {
+      "type": "object",
+      "properties": {
+        "eligible_count": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,3}|10000)$"
+        },
+        "resolved_count": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,3}|10000)$"
+        }
+      },
+      "required": [
+        "eligible_count",
+        "resolved_count"
+      ],
+      "additionalProperties": false
+    },
+    "post_api_v1_platform_reservations_resolve_free_priceRequest": {
+      "$ref": "#/components/schemas/FreePriceResolutionInput"
+    },
+    "post_api_v1_platform_reservations_resolve_free_priceResponse": {
+      "$ref": "#/components/schemas/FreePriceResolutionResult"
+    }
+  }
+}

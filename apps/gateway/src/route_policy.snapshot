@@ -243,6 +243,7 @@ POST	/api/v1/platform/deployments/{id}/configuration/apply	PlatformWrite	denied
 POST	/api/v1/platform/deployments/{id}/configuration/restore-preview	PlatformWrite	denied
 GET	/api/v1/platform/deployments/{id}/configuration/history	PlatformRead	denied
 GET	/api/v1/platform/deployments/{id}/configuration/history/{change}	PlatformRead	denied
+POST	/api/v1/platform/reservations/resolve-free-price	PlatformWrite	denied
 GET	/api/v1/platform/holds	PlatformRead	scope:platform:read
 GET	/api/v1/platform/audit	PlatformRead	scope:platform:read
 GET	/api/v1/platform/server-policy	PlatformRead	scope:platform:read

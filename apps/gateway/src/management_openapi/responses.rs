@@ -88,6 +88,7 @@ pub(crate) const SLICE6_AREAS: &[&str] = &[
     "workspaces/{ws}/requests",
     "workspaces/{ws}/service-accounts",
 ];
+pub(crate) const FREE_PRICE_AREAS: &[&str] = &["platform/reservations"];
 pub(crate) const AREA_GROUPS: &[(&str, &[&str])] = &[
     ("IDENTITY_SELF_SERVICE_AREAS", IDENTITY_SELF_SERVICE_AREAS),
     ("SLICE3_AREAS", SLICE3_AREAS),
@@ -95,6 +96,7 @@ pub(crate) const AREA_GROUPS: &[(&str, &[&str])] = &[
     ("SLICE2_AREAS", SLICE2_AREAS),
     ("SLICE5_AREAS", SLICE5_AREAS),
     ("SLICE6_AREAS", SLICE6_AREAS),
+    ("FREE_PRICE_AREAS", FREE_PRICE_AREAS),
 ];
 
 /// Whether an area's schemas are complete and gated by an executed fixture group.
@@ -1225,7 +1227,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(count, 272);
+        assert_eq!(count, 273);
     }
     #[test]
     fn management_openapi_response_rejects_incomplete_completed_slot() {
