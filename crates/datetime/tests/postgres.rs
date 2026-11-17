@@ -65,12 +65,13 @@ async fn scalar_optional_array_expression_refusals_preserve_null() {
             "{literal}"
         );
     }
-    let (date, instant, dates, instants): (
+    type NullableValues = (
         Option<CalendarDate>,
         Option<UtcInstant>,
         Vec<Option<CalendarDate>>,
         Vec<Option<UtcInstant>>,
-    ) = sqlx::query_as(
+    );
+    let (date, instant, dates, instants): NullableValues = sqlx::query_as(
         "SELECT NULL::date, NULL::timestamptz, ARRAY[NULL::date], ARRAY[NULL::timestamptz]",
     )
     .fetch_one(&mut db)

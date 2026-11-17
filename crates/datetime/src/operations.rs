@@ -75,7 +75,7 @@ impl UtcInstant {
         self.checked_add(d).ok()
     }
     pub fn checked_sub_signed(self, d: SignedDuration) -> Option<Self> {
-        self.checked_add(-d).ok()
+        self.checked_add(d.checked_neg()?).ok()
     }
     pub fn signed_duration_since(self, earlier: Self) -> SignedDuration {
         // The old carrier counts only the leap observations at the two endpoints,
