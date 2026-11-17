@@ -26,6 +26,11 @@ NULL while returning an error for an invalid non-NULL value. Encoding uses signe
 whole microseconds from PostgreSQL's 2000 epoch, truncating toward that epoch,
 including the former leap-subsecond encoding. No schema or grant changes occur.
 
+Text TIMESTAMPTZ uses a separate PostgreSQL ISO adapter: whole-hour offsets such
+as `+00` and `-08` receive their omitted minute component before bounded timestamp
+parsing. Whole and fractional seconds, positive/negative offsets, nullable values
+and text-array elements normalize to UTC through the same carrier decoder.
+
 Source review anchors: [SQLx datetime codecs](https://github.com/launchbadge/sqlx/blob/v0.8.6/sqlx-postgres/src/types/time/datetime.rs),
 [DATE codec](https://github.com/launchbadge/sqlx/blob/v0.8.6/sqlx-postgres/src/types/time/date.rs),
 [former Chrono codec](https://github.com/launchbadge/sqlx/blob/v0.8.6/sqlx-postgres/src/types/chrono/datetime.rs),
@@ -37,7 +42,6 @@ leap arithmetic, HTTP grammars and PostgreSQL scalar/optional/array refusals.
 Run `cargo test -p gateway-datetime-compat`. Real database tests require
 `--features postgres-tests --test postgres` and explicitly selected
 `DATETIME_PG_PORT`, `DATETIME_PG_USERNAME`, `DATETIME_PG_PASSWORD`,
-`DATETIME_PG_DBNAME` variables (or an explicit `DATETIME_PG_URL`, as selected by
-CI) for a fresh PostgreSQL 17 database forwarded on
+`DATETIME_PG_DBNAME` variables for a fresh PostgreSQL 17 database forwarded on
 127.0.0.1. They never use an ambient installation DATABASE_URL. Use the Spark
 skill and `kspark` for disposable databases; never plain kubectl.

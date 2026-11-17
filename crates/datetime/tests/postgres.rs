@@ -172,6 +172,78 @@ async fn scalar_bounds_wrong_types_and_empty_arrays() {
 }
 
 #[tokio::test]
+async fn text_protocol_whole_seconds_offsets_nullable_and_arrays() {
+    let mut db = database().await;
+    use sqlx::Executor;
+    for (zone, literal, rendered, seconds, nanos) in [
+        (
+            "UTC",
+            "2024-02-29 00:00:00+00",
+            "2024-02-29 00:00:00+00",
+            1_709_164_800,
+            0,
+        ),
+        (
+            "UTC",
+            "1969-12-31 23:59:59+00",
+            "1969-12-31 23:59:59+00",
+            -1,
+            0,
+        ),
+        (
+            "UTC",
+            "1969-12-31 23:59:59.999999+00",
+            "1969-12-31 23:59:59.999999+00",
+            -1,
+            999_999_000,
+        ),
+        (
+            "Asia/Kathmandu",
+            "2000-01-01 00:00:00+00",
+            "2000-01-01 05:45:00+05:45",
+            946_684_800,
+            0,
+        ),
+        (
+            "America/Los_Angeles",
+            "2000-01-01 00:00:00+00",
+            "1999-12-31 16:00:00-08",
+            946_684_800,
+            0,
+        ),
+    ] {
+        db.execute(format!("SET TIME ZONE '{zone}'").as_str())
+            .await
+            .unwrap();
+        let sql = format!(
+            "SELECT value AS at, value::text AS rendered, ARRAY[value, NULL::timestamptz] AS times,
+             NULL::timestamptz AS absent FROM (SELECT TIMESTAMPTZ '{literal}' AS value) AS input"
+        );
+        let row = db.fetch_one(sqlx::raw_sql(&sql)).await.unwrap();
+        assert!(matches!(
+            row.try_get_raw("at").unwrap().format(),
+            sqlx::postgres::PgValueFormat::Text
+        ));
+        assert_eq!(row.try_get::<String, _>("rendered").unwrap(), rendered);
+        let expected = UtcInstant::from_unix_parts(seconds, nanos).unwrap();
+        assert_eq!(row.try_get::<UtcInstant, _>("at").unwrap(), expected);
+        assert_eq!(
+            row.try_get::<Option<UtcInstant>, _>("at").unwrap(),
+            Some(expected)
+        );
+        assert_eq!(
+            row.try_get::<Vec<Option<UtcInstant>>, _>("times").unwrap(),
+            vec![Some(expected), None]
+        );
+        assert_eq!(
+            row.try_get::<Option<UtcInstant>, _>("absent").unwrap(),
+            None
+        );
+        assert!(row.try_get::<UtcInstant, _>("absent").is_err());
+    }
+}
+
+#[tokio::test]
 async fn text_protocol_safe_refusal_and_ordinary_values() {
     let mut db = database().await;
     use sqlx::Executor;

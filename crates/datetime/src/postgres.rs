@@ -14,6 +14,18 @@ fn epoch_date() -> Date {
 }
 const PG_EPOCH_SECONDS: i64 = 946_684_800;
 
+fn text_instant(text: &str) -> Result<UtcInstant, Error> {
+    // PostgreSQL ISO text omits minutes in whole-hour offsets (+00 or -08).
+    // Complete that SQL spelling before the bounded timestamp parser normalizes UTC.
+    let (_, clock) = text.split_once(' ').ok_or(Error::Syntax)?;
+    let offset_start = clock.find(['+', '-']).ok_or(Error::Syntax)?;
+    if clock[offset_start..].len() == 3 {
+        crate::http::parse_rfc3339(&format!("{text}:00"))
+    } else {
+        crate::http::parse_rfc3339(text)
+    }
+}
+
 impl Type<Postgres> for CalendarDate {
     fn type_info() -> PgTypeInfo {
         <Date as Type<Postgres>>::type_info()
@@ -87,9 +99,7 @@ impl<'r> Decode<'r, Postgres> for UtcInstant {
                     .ok_or(Error::Range)?;
                 Ok(UtcInstant::try_from_time(at)?)
             }
-            PgValueFormat::Text => Ok(UtcInstant::try_from_time(<OffsetDateTime as Decode<
-                Postgres,
-            >>::decode(value)?)?),
+            PgValueFormat::Text => Ok(text_instant(value.as_str()?)?),
         }
     }
 }
