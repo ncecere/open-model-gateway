@@ -191,9 +191,29 @@ text/tool output is limited to 4 MiB, 256 content blocks, and 128 tool calls.
 Requests are also bounded. Inference requests use one SDK attempt, no reqwest
 retries (the connection pool may re-dispatch a request it never wrote; see
 [Lost connections](operations.md#lost-connections-483)), no redirects, no ambient proxy, a 10-second connection limit, a 60-second
-read/stream-event limit, and a 300-second transport/operation deadline. Existing
-gateway deadlines can cancel sooner. No adapter producer task is spawned;
-dropping the returned stream drops the AWS receiver and upstream response body.
+active-read limit. Non-stream Converse retains its 300-second total
+transport/SDK operation deadline. ConverseStream has no total HTTP-body timer:
+the engine's actual per-request deadline bounds its lifetime and drops transport
+even when the downstream reader stops polling. The SDK's 300-second operation
+timeout ends when stream headers are returned; it does not time the returned
+receiver. No startup environment timeout is copied into the adapter as a request
+deadline.
+
+ConverseStream's header wait and active HTTP-body reads remain bounded by
+60 seconds, including pre-stream error bodies. Streaming body reads poll for
+ready bytes before checking their timer, so queued data is accepted after a
+reader pause. Each chunk's progress starts a fresh read budget before AWS frame
+assembly. There is no separate whole-event `recv()` timer: that would include
+unpolled backpressure when only a partial frame is queued, and could reject a
+healthy frame whose remaining bytes arrive promptly after the reader resumes.
+The wire/body bounds and engine watchdog still bound incomplete or dribbling
+frames. The pinned Bedrock SDK (1.152.0) installs stalled-stream protection for
+non-stream Converse, but not ConverseStream. Streaming stall and lifetime bounds
+come from the raw-read timer and engine watchdog above. Genuine active-read
+timeouts fail the stream; engine deadline cancellation and client disconnect remain
+health-neutral. Unknown usage and retained holds follow the ordinary
+failed/cancelled stream rules. No adapter producer task is spawned; dropping the
+returned stream drops the AWS receiver and upstream response body.
 Clients/credential caches are reused per region, identity and endpoint, with at most 64 cached clients.
 
 Errors exposed by the adapter are gateway error enums only. No AWS response body,
