@@ -5,6 +5,7 @@ mod deadline_stream;
 mod embeddings;
 pub mod error;
 pub(crate) mod evidence;
+mod hand_off;
 pub mod images;
 pub mod realtime;
 pub mod repository;

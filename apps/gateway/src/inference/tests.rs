@@ -26,6 +26,9 @@ struct MemoryRepository {
     gate_finish: AtomicBool,
     gate_entered: tokio::sync::Notify,
     gate_release: tokio::sync::Notify,
+    /// `route_result` never returns; `health_entered` fires when it starts.
+    gate_health: AtomicBool,
+    health_entered: tokio::sync::Notify,
     plan: Mutex<Option<crate::routing::RoutePlan>>,
     attempts: Mutex<Vec<(Uuid, i32)>>,
     health: Mutex<Vec<Option<InferenceError>>>,
@@ -51,6 +54,10 @@ impl InferenceRepository for MemoryRepository {
         _: Uuid,
         error: Option<InferenceError>,
     ) -> Result<(), InferenceError> {
+        if self.gate_health.load(Ordering::SeqCst) {
+            self.health_entered.notify_one();
+            std::future::pending::<()>().await;
+        }
         self.health.lock().unwrap().push(error);
         Ok(())
     }
@@ -67,15 +74,15 @@ impl InferenceRepository for MemoryRepository {
     }
     async fn finish(&self, record: &ExecutionFinish) -> Result<(), InferenceError> {
         self.finish_calls.fetch_add(1, Ordering::SeqCst);
+        if self.gate_finish.load(Ordering::SeqCst) {
+            self.gate_entered.notify_one();
+            self.gate_release.notified().await;
+        }
         if self.fail_finish.load(Ordering::SeqCst) {
             return Err(InferenceError::Storage);
         }
         if self.hang_finish.load(Ordering::SeqCst) {
             std::future::pending::<()>().await;
-        }
-        if self.gate_finish.load(Ordering::SeqCst) {
-            self.gate_entered.notify_one();
-            self.gate_release.notified().await;
         }
         self.finishes.lock().unwrap().push(ExecutionFinish {
             id: record.id,
@@ -921,7 +928,7 @@ async fn diagnostic_drop_settlement_registers_before_spawn_and_outlives_scope() 
 /// the request, not the write: the attempt the upstream reported complete is
 /// settled as succeeded with its usage, exactly once, and nothing queues a
 /// cancellation for it.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn dropping_the_request_during_the_settlement_write_still_settles_it() {
     let (engine, repository, adapter) = fixture(Mode::Complete, EngineLimits::default());
     repository.gate_finish.store(true, Ordering::SeqCst);
@@ -937,7 +944,8 @@ async fn dropping_the_request_during_the_settlement_write_still_settles_it() {
     timeout(Duration::from_secs(5), repository.finished.notified())
         .await
         .expect("the write finishes after its request was dropped");
-    // A second, cancelling write would have to be queued by now.
+    // The clock is paused: it advances only once every task is idle, so a
+    // second, cancelling write would have run by now.
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(repository.finish_calls.load(Ordering::SeqCst), 1);
     let finishes = repository.finishes.lock().unwrap();
@@ -949,7 +957,7 @@ async fn dropping_the_request_during_the_settlement_write_still_settles_it() {
 
 /// The same for a streamed response whose final usage was received: the
 /// consumer is dropped while the settlement at `Done` is in flight.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn dropping_the_stream_during_the_final_settlement_write_still_settles_it() {
     let (engine, repository, _) = fixture(Mode::Stream, EngineLimits::default());
     repository.gate_finish.store(true, Ordering::SeqCst);
@@ -981,7 +989,7 @@ async fn dropping_the_stream_during_the_final_settlement_write_still_settles_it(
 
 /// A drop before the upstream outcome is complete is unchanged: one detached
 /// cancellation with unknown usage, never a success.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn dropping_the_stream_before_the_final_usage_still_cancels_with_unknown_usage() {
     let (engine, repository, _) = fixture(Mode::Pending, EngineLimits::default());
     let notified = repository.finished.notified();
@@ -1000,6 +1008,132 @@ async fn dropping_the_stream_before_the_final_usage_still_cancels_with_unknown_u
     assert_eq!(finishes[0].outcome, Outcome::Cancelled);
     assert_eq!(finishes[0].usage.input_tokens, None);
     assert_eq!(finishes[0].usage.output_tokens, None);
+}
+
+/// A write that fails fast after its request was dropped is reported once
+/// (one log line and operational event per failure), is not retried and
+/// queues no cancellation: the reservation is left to reconciliation.
+#[tokio::test(start_paused = true)]
+async fn a_detached_write_that_fails_fast_is_reported_once_and_not_retried() {
+    let capture = crate::log_capture_test::Capture::start();
+    let (engine, repository, _) = fixture(Mode::Complete, EngineLimits::default());
+    repository.gate_finish.store(true, Ordering::SeqCst);
+    repository.fail_finish.store(true, Ordering::SeqCst);
+    let id = Uuid::new_v4();
+    tokio::select! {
+        _ = engine.execute(principal(), request(false), id) => panic!("the write is gated"),
+        _ = repository.gate_entered.notified() => {}
+    }
+    repository.gate_release.notify_one();
+    let line = format!("{id}");
+    timeout(Duration::from_secs(5), async {
+        while !capture.text().contains(&line) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the failed write is reported");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let reports = capture
+        .text()
+        .lines()
+        .filter(|l| l.contains(&line) && l.contains("inference finalization failed"))
+        .count();
+    assert_eq!(reports, 1);
+    assert_eq!(repository.finish_calls.load(Ordering::SeqCst), 1);
+    assert!(repository.finishes.lock().unwrap().is_empty());
+}
+
+/// A request dropped after its write completed, while the routing-health
+/// update runs, writes nothing more: no second settlement and no cancellation.
+#[tokio::test(start_paused = true)]
+async fn dropping_between_the_write_and_the_health_update_writes_nothing_more() {
+    let (engine, repository, _) = fixture(Mode::Complete, EngineLimits::default());
+    repository.gate_health.store(true, Ordering::SeqCst);
+    tokio::select! {
+        _ = engine.execute(principal(), request(false), Uuid::new_v4()) => {
+            panic!("the health update is gated")
+        }
+        _ = repository.health_entered.notified() => {}
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(repository.finish_calls.load(Ordering::SeqCst), 1);
+    let finishes = repository.finishes.lock().unwrap();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].outcome, Outcome::Succeeded);
+    assert!(repository.health.lock().unwrap().is_empty());
+}
+
+/// A non-chat workload settles through the same guard: dropped during the
+/// write, it still settles as succeeded with its input-only usage.
+#[tokio::test(start_paused = true)]
+async fn dropping_an_embeddings_request_during_the_write_still_settles_it() {
+    let (mut engine, repository, _) = fixture(Mode::Complete, EngineLimits::default());
+    engine
+        .registry
+        .register(Arc::new(EmbeddingAdapter { malformed: false }))
+        .unwrap();
+    {
+        let mut targets = repository.deployments.lock().unwrap();
+        targets[0].provider = "embedding_mock".into();
+        targets[0].supported_protocols = vec!["embeddings".into()];
+    }
+    repository.gate_finish.store(true, Ordering::SeqCst);
+    let embedding = EmbeddingRequest {
+        model: "public/alias".into(),
+        input: vec!["text".into()],
+        dimensions: Some(2),
+    };
+    tokio::select! {
+        _ = engine.execute_embeddings(principal(), embedding, Uuid::new_v4()) => {
+            panic!("the write is gated")
+        }
+        _ = repository.gate_entered.notified() => {}
+    }
+    repository.gate_release.notify_one();
+    timeout(Duration::from_secs(5), repository.finished.notified())
+        .await
+        .expect("the write finishes after its request was dropped");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(repository.finish_calls.load(Ordering::SeqCst), 1);
+    let finishes = repository.finishes.lock().unwrap();
+    assert_eq!(finishes[0].outcome, Outcome::Succeeded);
+    assert_eq!(finishes[0].usage.input_tokens, Some(3));
+    assert_eq!(finishes[0].usage.output_tokens, Some(0));
+}
+
+/// The detached write keeps its request's concurrency slot until it ends: a
+/// second request is refused while it hangs and admitted after the deadline.
+#[tokio::test(start_paused = true)]
+async fn a_detached_write_holds_the_concurrency_slot_until_its_deadline() {
+    let (engine, repository, _) = fixture(
+        Mode::Complete,
+        EngineLimits {
+            max_concurrent: 1,
+            ..EngineLimits::default()
+        },
+    );
+    repository.hang_finish.store(true, Ordering::SeqCst);
+    tokio::select! {
+        _ = engine.execute(principal(), request(false), Uuid::new_v4()) => {
+            panic!("the write hangs")
+        }
+        _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+    }
+    assert!(matches!(
+        engine
+            .execute(principal(), request(false), Uuid::new_v4())
+            .await,
+        Err(InferenceError::Busy)
+    ));
+    tokio::time::sleep(SETTLEMENT_DEADLINE).await;
+    repository.hang_finish.store(false, Ordering::SeqCst);
+    assert!(
+        engine
+            .execute(principal(), request(false), Uuid::new_v4())
+            .await
+            .is_ok()
+    );
 }
 
 /// The detached settlement keeps the deadline: a write stuck after the

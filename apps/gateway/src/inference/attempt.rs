@@ -1,11 +1,7 @@
 //! One request's route eligibility and its attempts: admission, the upstream
 //! call, settlement of each outcome and the streamed-response tracker.
+use super::hand_off::HandOff;
 use super::*;
-use std::{
-    future::Future,
-    pin::Pin,
-    task::{Context, Poll},
-};
 use tracing::Instrument;
 
 impl Engine {
@@ -564,9 +560,10 @@ impl ExecutionGuard {
     ///   it, and releases its connection.
     /// - The write holds the request's concurrency permit until it ends, so
     ///   detached writes are bounded by `EngineLimits::max_concurrent` and by
-    ///   the deadline. A graceful shutdown waits for them through the pool
-    ///   close, which waits for checked-out connections, like the
-    ///   cancellation settlement.
+    ///   the deadline. Closing the pool at a graceful shutdown waits only for
+    ///   writes that already hold a connection, like the cancellation
+    ///   settlement; one still queued on the settlement gate or waiting for a
+    ///   connection gets `PoolClosed` and is left to reconciliation.
     /// - It runs in the request's span, so a failure is logged with the same
     ///   fields while the span is alive.
     pub(super) async fn settle_to_completion(
@@ -614,62 +611,6 @@ impl ExecutionGuard {
             .in_current_span(),
         )
         .await
-    }
-}
-
-/// Polls `future` in place on the caller's task. If the caller is dropped
-/// before it finishes, the rest of it is polled to its end on a spawned task
-/// instead, with nothing waiting for the result. Without a runtime to spawn
-/// on, an unfinished future is dropped like any other.
-struct HandOff<F>
-where
-    F: Future + Send + 'static,
-    F::Output: Send + 'static,
-{
-    future: Option<Pin<Box<F>>>,
-}
-impl<F> HandOff<F>
-where
-    F: Future + Send + 'static,
-    F::Output: Send + 'static,
-{
-    fn new(future: F) -> Self {
-        Self {
-            future: Some(Box::pin(future)),
-        }
-    }
-}
-impl<F> Future for HandOff<F>
-where
-    F: Future + Send + 'static,
-    F::Output: Send + 'static,
-{
-    type Output = F::Output;
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
-        // Taken while polled: a future that panics is never resumed by `Drop`.
-        let mut future = self.future.take().expect("polled after completion");
-        match future.as_mut().poll(cx) {
-            Poll::Ready(output) => Poll::Ready(output),
-            Poll::Pending => {
-                self.future = Some(future);
-                Poll::Pending
-            }
-        }
-    }
-}
-impl<F> Drop for HandOff<F>
-where
-    F: Future + Send + 'static,
-    F::Output: Send + 'static,
-{
-    fn drop(&mut self) {
-        if let Some(future) = self.future.take()
-            && let Ok(runtime) = tokio::runtime::Handle::try_current()
-        {
-            runtime.spawn(async move {
-                future.await;
-            });
-        }
     }
 }
 

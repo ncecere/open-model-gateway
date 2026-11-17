@@ -242,8 +242,9 @@ money.
      claim is `INSERT ... ON CONFLICT DO NOTHING` (`store::claim_line`).
    Suggested fix: carry `runner_id` (and a bumped epoch) in every runner write, or fence them like
    0029.
-2. **A cancelled or failed settlement write turns a fully reported success into `unknown`:
-   confirmed by reading, by design for the timeout case, low severity. The client-disconnect case is
+2. **A failed or timed-out settlement write turns a fully reported success into `unknown`
+   (a client disconnect used to do so too, fixed in #639): confirmed by reading, by design for the
+   timeout case, low severity. The client-disconnect case is
    fixed (#639): `finish` now hands a write that is still in flight when its request is dropped to a spawned
    task, so a disconnect no longer drops it (database tests drop the request, and the
    stream consumer, while the settlement waits on a row lock held by the test).** As found, `finish`

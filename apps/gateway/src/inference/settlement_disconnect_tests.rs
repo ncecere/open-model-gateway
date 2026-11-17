@@ -141,29 +141,37 @@ async fn world(pool: PgPool, behaviour: Behaviour, hold: bool) -> World {
     }
 }
 
-/// Waits until PostgreSQL itself reports a backend waiting for a lock: the
-/// settlement statement is then in flight and blocked.
-async fn settlement_is_waiting(pool: &PgPool) {
+/// Waits until PostgreSQL itself reports the settlement's own statement
+/// (the reservation lock) waiting for a lock, and returns when it saw that.
+/// The settlement deadline (3 s) runs from the moment the write was built,
+/// so this polls tightly and the caller releases the lock at once.
+async fn settlement_is_waiting(pool: &PgPool) -> Instant {
     timeout(Duration::from_secs(10), async {
         loop {
             let waiting: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'",
+                "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM governance_reservations r%FOR UPDATE OF r%'",
             )
             .fetch_one(pool)
             .await
             .unwrap();
             if waiting > 0 {
-                return;
+                return Instant::now();
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
     .await
-    .expect("the settlement waits on the held reservation row");
+    .expect("the settlement waits on the held reservation row")
 }
 
-/// Releases the lock the test owns, within the settlement deadline.
-async fn release(world: &World) {
+/// Releases the lock the test owns. `waiting` is when the settlement was
+/// seen waiting: the write must still be inside its 3 s deadline, or the
+/// test measures the harness, not the product.
+async fn release(world: &World, waiting: Instant) {
+    assert!(
+        waiting.elapsed() < Duration::from_secs(1),
+        "the harness was too slow to release the lock inside the settlement deadline"
+    );
     let mut connection = world.blocker.lock().await.take().unwrap();
     sqlx::query("ROLLBACK")
         .execute(&mut connection)
@@ -251,10 +259,10 @@ async fn a_dropped_request_still_settles_a_complete_response(pool: PgPool) {
                 .await
         }
     });
-    settlement_is_waiting(&world.fixture.store.pool).await;
+    let waiting = settlement_is_waiting(&world.fixture.store.pool).await;
     request_task.abort();
     assert!(matches!(request_task.await, Err(error) if error.is_cancelled()));
-    release(&world).await;
+    release(&world, waiting).await;
     assert_settled_with_reported_usage(&resolved(&world, id).await);
 }
 
@@ -275,10 +283,10 @@ async fn a_dropped_stream_still_settles_after_its_final_usage(pool: PgPool) {
         panic!("expected a stream")
     };
     let consumer = tokio::spawn(async move { while output.next().await.is_some() {} });
-    settlement_is_waiting(&world.fixture.store.pool).await;
+    let waiting = settlement_is_waiting(&world.fixture.store.pool).await;
     consumer.abort();
     assert!(matches!(consumer.await, Err(error) if error.is_cancelled()));
-    release(&world).await;
+    release(&world, waiting).await;
     assert_settled_with_reported_usage(&resolved(&world, id).await);
 }
 
