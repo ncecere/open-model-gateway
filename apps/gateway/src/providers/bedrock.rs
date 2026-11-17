@@ -41,7 +41,9 @@ const MAX_TOOLS: usize = 128;
 
 pub struct BedrockAdapter {
     http: aws_smithy_runtime_api::client::http::SharedHttpClient,
+    streaming_http: aws_smithy_runtime_api::client::http::SharedHttpClient,
     clients: Mutex<BTreeMap<String, Client>>,
+    timeouts: transport::Timeouts,
     /// Profile and endpoint allowlists, read from the environment at startup.
     policy: auth::Policy,
     #[cfg(test)]
@@ -51,7 +53,9 @@ pub struct BedrockAdapter {
 impl BedrockAdapter {
     pub fn new() -> anyhow::Result<Self> {
         Ok(Self {
-            http: transport::client()?,
+            http: transport::client(transport::Timeouts::default(), false)?,
+            streaming_http: transport::client(transport::Timeouts::default(), true)?,
+            timeouts: transport::Timeouts::default(),
             clients: Mutex::new(BTreeMap::new()),
             policy: auth::Policy::from_env(),
             #[cfg(test)]
@@ -66,7 +70,7 @@ impl BedrockAdapter {
     /// builds the same shape inline since it already has field access.
     #[cfg(test)]
     pub(crate) fn for_test(base: &str) -> Self {
-        Self::for_test_transport(base, transport::client().unwrap())
+        Self::for_test_with_timeouts(base, transport::Timeouts::default())
     }
 
     #[cfg(test)]
@@ -74,26 +78,17 @@ impl BedrockAdapter {
         base: &str,
         http: aws_smithy_runtime_api::client::http::SharedHttpClient,
     ) -> Self {
-        let mut adapter = Self::new().unwrap();
-        adapter.http = http;
-        let config = aws_sdk_bedrockruntime::Config::builder()
-            .behavior_version(BehaviorVersion::v2026_01_12())
-            .region(Region::new("us-east-1"))
-            .credentials_provider(aws_sdk_bedrockruntime::config::Credentials::new(
-                "AKIDLOCALTEST",
-                "local-not-a-secret",
-                Some("local-session-token".into()),
-                None,
-                "local-test",
-            ))
-            .endpoint_url(base)
-            .http_client(adapter.http.clone())
-            .retry_config(RetryConfig::standard().with_max_attempts(1))
-            .build();
-        Self {
-            test_client: Some(Client::from_conf(config)),
-            ..adapter
-        }
+        Self::for_test_clients(base, transport::Timeouts::default(), http.clone(), http)
+    }
+
+    #[cfg(test)]
+    fn for_test_with_timeouts(base: &str, timeouts: transport::Timeouts) -> Self {
+        Self::for_test_clients(
+            base,
+            timeouts,
+            transport::client(timeouts, false).unwrap(),
+            transport::client(timeouts, true).unwrap(),
+        )
     }
 
     async fn client(&self, plan: &auth::Plan) -> Client {
@@ -145,13 +140,14 @@ impl BedrockAdapter {
                     .load_timeout(Duration::from_secs(5))
                     .build(),
             )
-            .timeout_config(
-                TimeoutConfig::builder()
-                    .connect_timeout(Duration::from_secs(10))
-                    .read_timeout(Duration::from_secs(60))
-                    .operation_timeout(Duration::from_secs(300))
-                    .build(),
-            )
+            .timeout_config(self.operation_timeouts())
+            .build()
+    }
+    fn operation_timeouts(&self) -> TimeoutConfig {
+        TimeoutConfig::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .read_timeout(self.timeouts.read)
+            .operation_timeout(self.timeouts.total)
             .build()
     }
 }
@@ -193,6 +189,13 @@ impl ProviderAdapter for BedrockAdapter {
                 .set_system(input.system)
                 .inference_config(input.inference)
                 .set_tool_config(input.tools)
+                // Operation settings and the credential cache stay shared. Only
+                // the streaming HTTP body omits the fixed total lifetime cap.
+                .customize()
+                .config_override(
+                    aws_sdk_bedrockruntime::Config::builder()
+                        .http_client(self.streaming_http.clone()),
+                )
                 .send()
                 .await
                 .map_err(|e| sdk_messages_error(e, request.messages_options.is_some()))?;

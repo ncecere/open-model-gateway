@@ -14,7 +14,10 @@ use std::time::Duration;
 pub(super) const WIRE_LIMIT: usize = 8 * 1024 * 1024;
 
 #[derive(Clone)]
-struct Connector(crate::egress::HttpClient);
+struct Connector {
+    client: crate::egress::HttpClient,
+    streaming_read: Option<Duration>,
+}
 impl std::fmt::Debug for Connector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("BedrockBoundedConnector")
@@ -28,7 +31,8 @@ fn failure() -> ConnectorError {
 }
 impl HttpConnector for Connector {
     fn call(&self, request: HttpRequest) -> HttpConnectorFuture {
-        let client = self.0.clone();
+        let client = self.client.clone();
+        let streaming_read = self.streaming_read;
         HttpConnectorFuture::new(async move {
             let method =
                 reqwest::Method::from_bytes(request.method().as_bytes()).map_err(|_| failure())?;
@@ -45,7 +49,18 @@ impl HttpConnector for Connector {
                 }
                 builder = builder.header(name, value);
             }
-            let response = builder.send().await.map_err(|error| {
+            // Bound the active wait for headers without attaching a wall-clock
+            // timer to the returned streaming response body.
+            let response = if let Some(read) = streaming_read {
+                tokio::time::timeout(read, builder.send())
+                    .await
+                    .map_err(|_| {
+                        ConnectorError::timeout(Box::new(std::io::Error::other("Provider timeout")))
+                    })?
+            } else {
+                builder.send().await
+            }
+            .map_err(|error| {
                 crate::egress::UpstreamClient::Bedrock.lost_before_response(&error);
                 if error.is_timeout() {
                     ConnectorError::timeout(Box::new(std::io::Error::other("Provider timeout")))
@@ -75,7 +90,15 @@ impl HttpConnector for Connector {
                 let mut size = 0usize;
                 let mut guard = super::wire::StreamGuard::default();
                 let mut complete = Vec::new();
-                while let Some(chunk) = stream.next().await {
+                loop {
+                    // Ready bytes win over an elapsed timer when a reader resumes.
+                    // Each chunk's progress starts a fresh active-read budget,
+                    // including partial AWS frames buffered by the wire guard.
+                    let next = if let Some(read) = streaming_read {
+                        tokio::time::timeout(read, stream.next()).await
+                            .map_err(|_| super::wire::Failure::Timeout)?
+                    } else { stream.next().await };
+                    let Some(chunk) = next else { break; };
                     let chunk = chunk.map_err(|e| super::wire::Failure::read(&e))?;
                     if chunk.len() > WIRE_LIMIT - size { Err(super::wire::Failure::Invalid)?; }
                     size += chunk.len();
@@ -114,24 +137,53 @@ impl HttpConnector for Connector {
     }
 }
 
-pub(super) fn client() -> anyhow::Result<SharedHttpClient> {
+#[derive(Clone, Copy)]
+pub(super) struct Timeouts {
+    pub read: Duration,
+    pub total: Duration,
+}
+impl Default for Timeouts {
+    fn default() -> Self {
+        Self {
+            read: Duration::from_secs(60),
+            total: Duration::from_secs(300),
+        }
+    }
+}
+
+pub(super) fn client(timeouts: Timeouts, streaming: bool) -> anyhow::Result<SharedHttpClient> {
     // SDK config cannot override these bounded settings. No redirects, hidden retries,
     // ambient proxies or detached producer tasks. Dropping the body cancels its socket work.
     // Every resolved address must pass the egress policy (#33).
-    let client =
+    let builder =
         crate::egress::client_builder(crate::egress::resolver(crate::egress::Purpose::Provider))
             .connect_timeout(Duration::from_secs(10))
-            .pool_idle_timeout(crate::egress::UpstreamClient::Bedrock.pool_idle_timeout())
-            .read_timeout(Duration::from_secs(60))
-            .timeout(Duration::from_secs(300))
-            .build()
-            .map_err(|_| anyhow::anyhow!("Unable to initialize provider transport"))?;
-    let connector = SharedHttpConnector::new(Connector(client));
+            .pool_idle_timeout(crate::egress::UpstreamClient::Bedrock.pool_idle_timeout());
+    // ConverseStream's lifetime belongs to the engine watchdog. A reqwest total
+    // timer also runs while the consumer is idle and would falsely fail a healthy
+    // stream at this fixed boundary. Keep the total cap for non-stream Converse.
+    // The ready-first active body-read timer replaces reqwest's timer-first
+    // read timer. Its budget resets on wire progress, before frame assembly.
+    let builder = if streaming {
+        builder
+    } else {
+        builder.read_timeout(timeouts.read).timeout(timeouts.total)
+    };
+    let client = builder
+        .build()
+        .map_err(|_| anyhow::anyhow!("Unable to initialize provider transport"))?;
+    let connector = SharedHttpConnector::new(Connector {
+        client,
+        streaming_read: streaming.then_some(timeouts.read),
+    });
     Ok(http_client_fn(move |_, _| connector.clone()))
 }
 
 #[cfg(test)]
 pub(super) fn for_test(client: crate::egress::HttpClient) -> SharedHttpClient {
-    let connector = SharedHttpConnector::new(Connector(client));
+    let connector = SharedHttpConnector::new(Connector {
+        client,
+        streaming_read: None,
+    });
     http_client_fn(move |_, _| connector.clone())
 }

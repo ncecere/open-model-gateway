@@ -343,9 +343,10 @@ pub(super) fn decode(
     Box::pin(async_stream::try_stream! {
         let mut state = State { limit: Some(limit), ..State::default() };
         loop {
-            // Explicit deadline for recv: SDK operation timeout ends when response headers arrive.
-            let next = tokio::time::timeout(Duration::from_secs(60), receiver.recv()).await
-                .map_err(|_| InferenceError::Timeout)?
+            // The transport bounds active body reads. Timing the whole SDK
+            // receive would also time unpolled backpressure while a partial
+            // frame is queued, even when its remaining bytes arrive promptly.
+            let next = receiver.recv().await
                 .map_err(|error| receive_error(&error, messages))?;
             match next {
                 Some(event) => for event in state.push(event)? { yield event; },
