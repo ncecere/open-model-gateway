@@ -250,7 +250,11 @@ suite_lib() {
     return
   fi
   names=$(mktemp "$OMG_TMP/lib-names.XXXXXX")
-  ( cd "$SRC" && "${LIB[@]}" -- --list --format terse 2>/dev/null ) | sed -n 's/: test$//p' | LC_ALL=C sort >"$names"
+  if ! ( cd "$SRC" && "${LIB[@]}" -- --list --format terse 2>/dev/null ) | sed -n 's/: test$//p' | LC_ALL=C sort >"$names"; then
+    rm -f "$names"
+    echo "cannot list the gateway library tests"
+    return 1
+  fi
   mark "lib-inventory tests=$(wc -l <"$names")"
   [ -s "$names" ] || { echo "no lib tests listed"; return 1; }
   for ((index = 0; index < OMG_LIB_SHARDS; index++)); do
@@ -273,6 +277,19 @@ integration_test_args() { # one `--test <name>` per gateway test target, minus t
   '
 }
 
+exact_probe() { # a dedicated exact test must run once; libtest succeeds even if the name matches nothing
+  local out code
+  out=$(mktemp "$OMG_TMP/exact-probe.XXXXXX") || return 1
+  "$@" 2>&1 | tee "$out"
+  code=$?
+  if ! awk '/^test result: / { results++; if ($0 ~ /^test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out(; finished in [0-9.]+s)?$/) ok++ } END { exit !(results == 1 && ok == 1) }' "$out"; then
+    echo "expected exactly one passing probe"
+    code=1
+  fi
+  rm -f "$out"
+  return "$code"
+}
+
 suite_integration() {
   local bad=0 selected
   prepare_npm integration || return 1
@@ -287,8 +304,8 @@ suite_integration() {
   step integration targets with_db cargo test -p open-model-gateway --all-features --no-fail-fast $selected --bins || bad=1
   step integration runtime-privileges with_db cargo test -p open-model-gateway --all-features --test runtime_privileges || bad=1
   step integration runtime-privileges-ignored with_db cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored --test-threads=1 || bad=1
-  step integration key-issuance-contention with_db env RUST_TEST_NOCAPTURE=1 cargo test -p open-model-gateway --all-features --lib management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement -- --ignored --exact || bad=1
-  step integration anthropic-terminal with_db cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact || bad=1
+  step integration key-issuance-contention exact_probe with_db env RUST_TEST_NOCAPTURE=1 cargo test -p open-model-gateway --all-features --lib management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement -- --ignored --exact || bad=1
+  step integration anthropic-terminal exact_probe with_db cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact || bad=1
   step integration tools with_loopback_db cargo test --workspace --exclude open-model-gateway --all-features --no-fail-fast || bad=1
   step integration doctests with_db cargo test -p open-model-gateway --all-features --doc || bad=1
   return "$bad"

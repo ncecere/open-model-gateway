@@ -352,13 +352,15 @@ def expected_problems(suite, parsed):
     """Reasons a run that exited 0 still did not run what the suite means: steps missing, no test executed."""
     problems = []
     finished = {(s["suite"], s["name"]) for s in parsed["steps"]}
+    # npm dependencies are installed once and reused by later suites in the same pod.
+    npm_installed = any(s["suite"] in SUITE_PARTS[suite] and s["name"] == "npm-ci" and s["exit"] == 0 for s in parsed["steps"])
     for part in SUITE_PARTS[suite]:
         required = list(REQUIRED_STEPS.get(part, ()))
         if part == "lib":
             ran_filtered = ("lib", "filtered") in finished
             required += ["filtered"] if ran_filtered else [f"shard-{i}" for i in range(LIB_SHARDS)]
         for name in required:
-            if (part, name) not in finished:
+            if not (npm_installed if name == "npm-ci" else (part, name) in finished):
                 problems.append(f"step {part}/{name} did not run")
         if part in TEST_SUITES and parsed["suites"].get(part, {}).get("passed", 0) == 0:
             problems.append(f"suite {part} executed no tests")
@@ -471,6 +473,7 @@ def check_writable(path):
     with os.fdopen(fd, "w") as handle:
         if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
             raise SparkError(f"{path} is not a regular file")
+        os.fchmod(handle.fileno(), 0o600)
 
 
 def write_private(path, text):
@@ -481,6 +484,7 @@ def write_private(path, text):
     with os.fdopen(fd, "w") as handle:
         if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
             raise SparkError(f"{path} is not a regular file")
+        os.fchmod(handle.fileno(), 0o600)
         handle.write(text)
 
 
@@ -818,7 +822,6 @@ class SparkTest:
         nonce = lease.get("nonce")
         seen = stuck_since = no_pod_since = None
         failures = 0
-        started_job = False
         while True:
             try:
                 current = self.lease(slot)
@@ -826,12 +829,9 @@ class SparkTest:
                     raise SparkError(f"the lease of slot {slot} no longer belongs to {name!r}: it was removed (`down`) or the slot was reused; the result is not read from another run")
                 job = self.job_json(slot)
                 if not job:
-                    if started_job:
-                        raise SparkError(f"the job of {name!r} vanished (deleted by `down` or by hand); run kept: `down {name}`")
-                    phase = "preparing"
-                    pod = None
+                    # start() creates the Job synchronously before wait() is called.
+                    raise SparkError(f"the job of {name!r} vanished (deleted by `down` or by hand); run kept: `down {name}`")
                 else:
-                    started_job = True
                     pod, _ = self.pod_info(slot)
                     phase = job_phase(job, pod, self.current_step(slot) if pod and pod.get("status", {}).get("phase") == "Running" else None)
                 failures = 0

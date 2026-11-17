@@ -238,6 +238,21 @@ class Shards(Pod):
         self.assertEqual(result.returncode, 1)
         self.assertIn("no lib tests listed", result.stdout)
 
+    def test_a_failed_listing_with_partial_output_never_runs_a_partial_inventory(self):
+        stub = self.noderoot / "bin" / "cargo"
+        stub.write_text(stub.read_text().replace('cat "$STUB_LISTING"; exit 0', 'head -n 8 "$STUB_LISTING"; exit 1'))
+        result = self.run_script()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("cannot list the gateway library tests", result.stdout)
+        self.assertFalse([c for c in self.stub_calls() if "-- --exact " in c])
+
+    def test_all_suites_share_one_successful_npm_installation(self):
+        result = self.run_script(OMG_SUITE="all", timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout[-3000:])
+        summary = self.summary(result.stdout, "all")
+        self.assertEqual((summary["result"], tool.result_exit(summary)), ("passed", 0), summary)
+        self.assertEqual(self.stub_calls().count("npm ci"), 1)
+
     def test_a_filter_runs_unsharded(self):
         result = self.run_script(OMG_TEST_ARGS="--ignored some_test")
         self.assertEqual(result.returncode, 0, result.stdout)
@@ -260,6 +275,20 @@ class Integration(Pod):
         self.assertEqual(result.returncode, 1)
         self.assertIn("no gateway integration test targets selected", result.stdout)
         self.assertFalse([c for c in self.stub_calls() if c.startswith("cargo test")], "no test ran")
+
+    def test_a_missing_exact_integration_probe_fails_even_when_other_tests_pass(self):
+        stub = self.noderoot / "bin" / "cargo"
+        original = stub.read_text()
+        for probe in ("key_issuance_contention_measurement", "terminal_fidelity_official_sdks_and_priced_http_evidence"):
+            with self.subTest(probe=probe):
+                zero = f'if [[ "$args" == *"{probe}"* ]]; then echo "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2491 filtered out; finished in 0.00s"; exit 0; fi\n'
+                stub.write_text(original.replace('args="$*"\n', 'args="$*"\n' + zero))
+                result = self.run_script(OMG_SUITE="integration", timeout=120)
+                self.assertNotEqual(result.returncode, 0, result.stdout[-3000:])
+                self.assertIn("expected exactly one passing probe", result.stdout)
+                parsed = tool.parse_log(result.stdout, NONCE)
+                summary = tool.build_summary("t", "integration", "main", self.commit, parsed, "failed", {}, 1)
+                self.assertEqual((summary["result"], tool.result_exit(summary)), ("failed", 1))
 
     def test_the_targets_exclude_the_two_that_have_their_own_steps_and_the_commands_are_those_of_ci(self):
         result = self.run_script(OMG_SUITE="integration", timeout=120)
@@ -469,7 +498,7 @@ class Lifecycle(Pod):
     def test_the_golden_log_of_a_real_spark_run_is_read_as_it_was(self):
         golden = ROOT / "tests" / "fixtures" / "spark-test"
         meta = json.loads((golden / "golden.json").read_text())
-        log = (golden / "golden.log").read_text()
+        log = "".join(json.loads((golden / "golden-log.json").read_text()))
         parsed = tool.parse_log(log, meta["nonce"])
         summary = tool.build_summary("golden", meta["suite"], "main", meta["commit"], parsed, "complete", {}, meta["wall_seconds"])
         self.assertEqual({key: summary[key] for key in meta["expect"]}, meta["expect"])

@@ -905,6 +905,16 @@ class Waiting(unittest.TestCase):
             self.waiter(cluster).wait("probe", "s1", lease())
         self.assertIn("vanished", str(caught.exception))
 
+    def test_a_job_missing_on_the_first_poll_ends_the_wait(self):
+        cluster = Cluster(namespaces={"s1"}, leases={"s1": lease()}, job=None)
+        now = [10_000]
+        def bounded_sleep(seconds):
+            now[0] += seconds
+            self.assertLess(now[0], 10_120, "missing Job kept waiting")
+        waiter = tool.SparkTest(CONFIG, runner=cluster, clock=lambda: now[0], sleep=bounded_sleep)
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(tool.SparkError, "vanished"):
+            waiter.wait("probe", "s1", lease())
+
     def test_a_lease_that_is_gone_or_belongs_to_another_run_ends_the_wait(self):
         for replacement in (None, lease("probe", nonce="ffffffffffffffff"), lease("other"), {**lease(), "sha": "f" * 40}):
             leases = {} if replacement is None else {"s1": replacement}
@@ -1096,6 +1106,21 @@ class Reading(unittest.TestCase):
             path = Path(folder) / "ok.json"
             tool.write_summary(str(path), {"a": 1})
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
+    def test_existing_output_files_become_private_before_writing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "existing"
+            for operation in ("check", "write"):
+                with self.subTest(operation=operation):
+                    path.write_text("keep")
+                    path.chmod(0o644)
+                    if operation == "check":
+                        tool.check_writable(path)
+                        self.assertEqual(path.read_text(), "keep")
+                    else:
+                        tool.write_private(path, "new")
+                        self.assertEqual(path.read_text(), "new")
+                    self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
     def test_a_saved_log_is_sanitised_and_redacted(self):
         secret = json.loads(tool.superuser_secret())["stringData"]["password"]
