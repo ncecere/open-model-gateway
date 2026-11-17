@@ -18,7 +18,7 @@ For reproducible releases, build/tag the image with the Git commit and promote t
 
 For pull requests and branches, CI's `staging-image` job builds a Linux image, runs the isolated migration/runtime-permission/HTTPS/restore smoke without real credentials, then `npm run test:container` on the same image.
 
-On pushes to `main` and `v*` tags, once the tests pass, `.github/workflows/image.yml` publishes `ghcr.io/ncecere/open-model-gateway`:
+On pushes to `main` and `v*` tags, once the tests pass, `.github/workflows/image.yml` publishes `ghcr.io/bitop-dev/open-model-gateway`. The next release after v0.18.0 is the first release under this path; [historical images retain their original path and identity](#image-paths-and-signature-identities).
 
 1. The `build` job builds each architecture (linux/amd64, linux/arm64) on a native runner, with SBOM and provenance attestations, and pushes it **by digest only**, without a tag. It can write packages, so it runs nothing from outside this repository except `actions/checkout` and the `docker/*` build, login and Buildx actions. Its job outputs are the two digests.
 2. The `verify` job, one per architecture, has a read-only token (`contents: read`, `packages: read`). It pulls that exact digest, which must report the `Cargo.toml` version (`docker run --rm IMAGE --version`, exec form). It then runs this rehearsal (`init`, `db`, `migrate`, `up`, `verify`, HTTPS readiness through `local-ca`, `restore-check`) with `GATEWAY_IMAGE` set to the digest, and checks that the gateway container ran it. The runtime contract test (`tests/container-image.test.mjs`) then runs on the digest, and a Trivy scan fails on fixable HIGH or CRITICAL findings. Trivy is a pinned release binary (version and SHA-256 in `image.yml`), not an action.
@@ -33,7 +33,31 @@ The workflow can also be run by hand on `main` or a `v*` tag; other refs are ref
 gh workflow run image.yml --ref main
 ```
 
-The job summary prints the digest and the `cosign verify` command. Verify the signature and promote by digest ([verifying the images](releases/v0.3.0.md#verifying-the-images)). The workflow does not deploy to a host or change provider settings. Configure a registry credential helper on the target host if the package is private; do not place registry tokens in Compose or Git. Each architecture is rehearsed on GitHub's runners only; acceptance on your own target hosts is still needed.
+The job summary prints the digest and the `cosign verify` command. Verify the signature and promote by digest ([image paths and signature identities](#image-paths-and-signature-identities)). The workflow does not deploy to a host or change provider settings. Configure a registry credential helper on the target host if the package is private; do not place registry tokens in Compose or Git. Each architecture is rehearsed on GitHub's runners only; acceptance on your own target hosts is still needed.
+
+## Image paths and signature identities
+
+The repository moved to `bitop-dev`; existing container packages stayed with `ncecere`. Published releases through **v0.18.0** keep their original path and signing identity. The next release and new `main`/development builds use `bitop-dev`. A missing tag at the new path is not a reason to use an older image or accept a different certificate. Historical release notes remain authoritative for their own releases.
+
+For a new release after v0.18.0, take its exact tag and digest from the GitHub Release:
+
+```sh
+cosign verify ghcr.io/bitop-dev/open-model-gateway@sha256:<digest> \
+  --certificate-identity https://github.com/bitop-dev/open-model-gateway/.github/workflows/image.yml@refs/tags/<tag> \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+For a historical release, for example v0.18.0, use that release's original digest:
+
+```sh
+cosign verify ghcr.io/ncecere/open-model-gateway@sha256:<digest> \
+  --certificate-identity https://github.com/ncecere/open-model-gateway/.github/workflows/image.yml@refs/tags/v0.18.0 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Use cosign v3 or newer and the **exact identity**, not a pattern accepting either owner. Development images (`dev-<sha12>` and `dev-<sha12>-arm64`) are unsigned and skip the release scan/rehearsal. `main` images use `@refs/heads/main` in the certificate identity instead of a release tag. The loadtest image is a separate development artifact at `ghcr.io/bitop-dev/open-model-gateway-loadtest`.
+
+At release preparation, update the chart's `image.repository` to `ghcr.io/bitop-dev/open-model-gateway` together with the release tag and chart versions. The current chart still defaults to v0.18.0 at its original path. Set repository and verified digest together in rollout values, including migration jobs; for rollback, retain the old repository/digest pair and follow the release's database restore requirements. See [next-release upgrade guidance](releases/unreleased.md#upgrade).
 
 ## First local HTTPS rehearsal
 

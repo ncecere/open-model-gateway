@@ -29,10 +29,16 @@ for cmd in "${tools[@]}"; do
   command -v "$cmd" >/dev/null || fail "${cmd} is not installed"
 done
 
-repo_slug=ncecere/open-model-gateway
-image="ghcr.io/${repo_slug}"
-ref="${image}@${DIGEST}"
+repo_slug=bitop-dev/open-model-gateway
 base="${TAG%%-*}" # v0.3.0-rc.1 -> v0.3.0
+# Repository links moved, but historical package names and certificate identities did not.
+source_slug="$repo_slug"
+IFS=. read -r major minor patch <<< "${base#v}"
+if (( 10#$major == 0 && (10#$minor < 18 || (10#$minor == 18 && 10#$patch == 0)) )); then
+  source_slug=ncecere/open-model-gateway
+fi
+image="ghcr.io/${source_slug}"
+ref="${image}@${DIGEST}"
 notes_src="docs/releases/${base}.md"
 [ -f "$notes_src" ] || fail "no release notes: ${notes_src}"
 if [ "$dry_run" = 1 ]; then
@@ -91,7 +97,7 @@ notes="${work}/notes.md"
   echo
   echo '```sh'
   echo "cosign verify ${ref} \\"
-  echo "  --certificate-identity https://github.com/${repo_slug}/.github/workflows/image.yml@refs/tags/${TAG} \\"
+  echo "  --certificate-identity https://github.com/${source_slug}/.github/workflows/image.yml@refs/tags/${TAG} \\"
   echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com"
   echo '```'
   echo

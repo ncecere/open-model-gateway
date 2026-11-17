@@ -1,6 +1,6 @@
 # Provider-reported cost reconciliation
 
-Compare uploaded **Anthropic Claude Platform Cost Report** charges with frozen aggregates of OMG's configured-rate estimates in the dashboard or browser-session API. This is **provider-reported cost reconciliation**, not a verified invoice, a complete payable balance, or customer invoicing. The #48 scope is Anthropic-only and USD-only. There are no automated provider pulls, organization credentials, outbound fetches, or changes to estimated costs or holds. OpenAI Costs export support is follow-up [#393](https://github.com/ncecere/open-model-gateway/issues/393).
+Compare uploaded **Anthropic Claude Platform Cost Report** charges with frozen aggregates of OMG's configured-rate estimates in the dashboard or browser-session API. This is **provider-reported cost reconciliation**, not a verified invoice, a complete payable balance, or customer invoicing. The #48 scope is Anthropic-only and USD-only. There are no automated provider pulls, organization credentials, outbound fetches, or changes to estimated costs or holds. OpenAI Costs export support is follow-up [#393](https://github.com/bitop-dev/open-model-gateway/issues/393).
 
 **Mapping limit: each effective provider workspace/account binding maps to exactly one OMG connection in this slice. A provider workspace fed by multiple OMG connections must remain shared/unallocated; this slice cannot combine those connections into one fully covered comparison. Never attest exclusive coverage for only one of those connections.**
 

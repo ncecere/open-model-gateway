@@ -23,7 +23,7 @@ CONTROL = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("oci_layout", CONTROL / "oci-layout.py")
 layout = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(layout)
-IMAGES = {"ghcr.io/ncecere/open-model-gateway", "ghcr.io/ncecere/open-model-gateway-loadtest"}
+IMAGES = {"ghcr.io/bitop-dev/open-model-gateway", "ghcr.io/bitop-dev/open-model-gateway-loadtest"}
 SOURCE_COMMIT = "9b1fc815f6b7fba743f08b9b5c5846639cc11d3c"
 
 

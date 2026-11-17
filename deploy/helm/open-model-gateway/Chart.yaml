@@ -5,9 +5,9 @@ type: application
 version: 0.18.0
 appVersion: "0.18.0"
 kubeVersion: ">=1.29.0-0"
-home: https://github.com/ncecere/open-model-gateway
+home: https://github.com/bitop-dev/open-model-gateway
 sources:
-  - https://github.com/ncecere/open-model-gateway
+  - https://github.com/bitop-dev/open-model-gateway
 keywords:
   - llm-gateway
   - ai-gateway

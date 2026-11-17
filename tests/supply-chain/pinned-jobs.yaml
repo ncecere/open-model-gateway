@@ -23,7 +23,7 @@ workflows:
     permissions:
       contents: read
     env:
-      IMAGE: ghcr.io/ncecere/open-model-gateway
+      IMAGE: ghcr.io/bitop-dev/open-model-gateway
   .github/workflows/branch-images.yml:
     name: branch-images
     on:
@@ -178,7 +178,7 @@ jobs:
           run: |
             set -euo pipefail
             [[ "${EVENT}" = workflow_dispatch && "${PROBE}" = true ]]
-            [[ "${GITHUB_REPOSITORY}" = ncecere/open-model-gateway && "${IMAGE}" = ghcr.io/ncecere/open-model-gateway ]]
+            [[ "${GITHUB_REPOSITORY}" = bitop-dev/open-model-gateway && "${IMAGE}" = ghcr.io/bitop-dev/open-model-gateway ]]
             [[ "${REF_TYPE}" = branch && "${GITHUB_REF}" = refs/heads/?* && "${GITHUB_REF}" != refs/heads/main ]]
             [[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ && "${GITHUB_WORKFLOW_SHA}" = "${GITHUB_SHA}" ]]
         - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -262,7 +262,7 @@ jobs:
           run: |
             set -euo pipefail
             [[ "${EVENT}" = workflow_dispatch && "${PROBE}" = true ]]
-            [[ "${GITHUB_REPOSITORY}" = ncecere/open-model-gateway && "${IMAGE}" = ghcr.io/ncecere/open-model-gateway ]]
+            [[ "${GITHUB_REPOSITORY}" = bitop-dev/open-model-gateway && "${IMAGE}" = ghcr.io/bitop-dev/open-model-gateway ]]
             [[ "${REF_TYPE}" = branch && "${GITHUB_REF}" = refs/heads/?* && "${GITHUB_REF}" != refs/heads/main ]]
             [[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ && "${GITHUB_WORKFLOW_SHA}" = "${GITHUB_SHA}" ]]
             [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ && "${CHILD}" =~ ^sha256:[0-9a-f]{64}$ && "${CHILD}" != "${DIGEST}" ]]
@@ -321,7 +321,7 @@ jobs:
           run: |
             set -euo pipefail
             [[ "${EVENT}" = workflow_dispatch && "${PROBE}" = true ]]
-            [[ "${GITHUB_REPOSITORY}" = ncecere/open-model-gateway && "${IMAGE}" = ghcr.io/ncecere/open-model-gateway ]]
+            [[ "${GITHUB_REPOSITORY}" = bitop-dev/open-model-gateway && "${IMAGE}" = ghcr.io/bitop-dev/open-model-gateway ]]
             [[ "${REF_TYPE}" = branch && "${GITHUB_REF}" = refs/heads/?* && "${GITHUB_REF}" != refs/heads/main ]]
             [[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ && "${GITHUB_WORKFLOW_SHA}" = "${GITHUB_SHA}" ]]
             [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ && "${CHILD}" =~ ^sha256:[0-9a-f]{64}$ && "${CHILD}" != "${DIGEST}" ]]
@@ -538,7 +538,7 @@ jobs:
         artifact_id: ${{ needs.build.outputs.artifact_id_linux_amd64 }}
         root_digest: ${{ needs.build.outputs.digest_linux_amd64 }}
         platform: linux/amd64
-        image_repository: ghcr.io/ncecere/open-model-gateway
+        image_repository: ghcr.io/bitop-dev/open-model-gateway
         source_revision: ${{ github.sha }}
   - file: .github/workflows/image.yml
     job: import-arm64
@@ -553,7 +553,7 @@ jobs:
         artifact_id: ${{ needs.build.outputs.artifact_id_linux_arm64 }}
         root_digest: ${{ needs.build.outputs.digest_linux_arm64 }}
         platform: linux/arm64
-        image_repository: ghcr.io/ncecere/open-model-gateway
+        image_repository: ghcr.io/bitop-dev/open-model-gateway
         source_revision: ${{ github.sha }}
   - file: .github/workflows/image.yml
     job: verify
@@ -941,7 +941,7 @@ jobs:
         artifact_id: ${{ needs.build.outputs.artifact_id_linux_amd64 }}
         root_digest: ${{ needs.build.outputs.digest_linux_amd64 }}
         platform: linux/amd64
-        image_repository: ghcr.io/ncecere/open-model-gateway
+        image_repository: ghcr.io/bitop-dev/open-model-gateway
         source_revision: ${{ needs.build.outputs.source_revision_linux_amd64 }}
   - file: .github/workflows/branch-images.yml
     job: import-arm64
@@ -956,7 +956,7 @@ jobs:
         artifact_id: ${{ needs.build.outputs.artifact_id_linux_arm64 }}
         root_digest: ${{ needs.build.outputs.digest_linux_arm64 }}
         platform: linux/arm64
-        image_repository: ghcr.io/ncecere/open-model-gateway
+        image_repository: ghcr.io/bitop-dev/open-model-gateway
         source_revision: ${{ needs.build.outputs.source_revision_linux_arm64 }}
   - file: .github/workflows/branch-images.yml
     job: publish
@@ -971,7 +971,7 @@ jobs:
         contents: read
         packages: write
       env:
-        IMAGE: ghcr.io/ncecere/open-model-gateway
+        IMAGE: ghcr.io/bitop-dev/open-model-gateway
         DIGEST_AMD64: ${{ needs.import-amd64.outputs.digest }}
         DIGEST_ARM64: ${{ needs.import-arm64.outputs.digest }}
         SOURCE_REVISION: ${{ needs.build.outputs.source_revision_linux_amd64 }}
@@ -1120,7 +1120,7 @@ jobs:
         artifact_id: ${{ needs.build.outputs.artifact_id }}
         root_digest: ${{ needs.build.outputs.digest }}
         platform: linux/amd64
-        image_repository: ghcr.io/ncecere/open-model-gateway-loadtest
+        image_repository: ghcr.io/bitop-dev/open-model-gateway-loadtest
         source_revision: ${{ needs.build.outputs.source_revision }}
   - file: .github/workflows/loadtest-image.yml
     job: publish
@@ -1134,7 +1134,7 @@ jobs:
         contents: read
         packages: write
       env:
-        IMAGE: ghcr.io/ncecere/open-model-gateway-loadtest
+        IMAGE: ghcr.io/bitop-dev/open-model-gateway-loadtest
         DIGEST: ${{ needs.import.outputs.digest }}
         SOURCE_REVISION: ${{ needs.build.outputs.source_revision }}
       steps:
@@ -1240,7 +1240,7 @@ jobs:
             [[ "${ROOT_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
             [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
             case "${PLATFORM}" in linux/amd64|linux/arm64) ;; *) exit 1 ;; esac
-            case "${IMAGE}" in ghcr.io/ncecere/open-model-gateway|ghcr.io/ncecere/open-model-gateway-loadtest) ;; *) exit 1 ;; esac
+            case "${IMAGE}" in ghcr.io/bitop-dev/open-model-gateway|ghcr.io/bitop-dev/open-model-gateway-loadtest) ;; *) exit 1 ;; esac
             umask 077
             image_dir=$(mktemp -d "${RUNNER_TEMP}/oci-image.XXXXXXXX")
             echo "IMAGE_DIR=${image_dir}" >> "$GITHUB_ENV"
@@ -1317,7 +1317,7 @@ jobs:
             [[ "${ROOT_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
             [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
             case "${PLATFORM}" in linux/amd64|linux/arm64) ;; *) exit 1 ;; esac
-            case "${IMAGE}" in ghcr.io/ncecere/open-model-gateway|ghcr.io/ncecere/open-model-gateway-loadtest) ;; *) exit 1 ;; esac
+            case "${IMAGE}" in ghcr.io/bitop-dev/open-model-gateway|ghcr.io/bitop-dev/open-model-gateway-loadtest) ;; *) exit 1 ;; esac
             umask 077
             image_dir=$(mktemp -d "${RUNNER_TEMP}/oci-image.XXXXXXXX")
             tool_dir=$(mktemp -d "${RUNNER_TEMP}/oci-tool.XXXXXXXX")
@@ -1393,7 +1393,7 @@ jobs:
         packages: write
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        OWNER: ${{ github.repository_owner }}
+        OWNER: bitop-dev
         PACKAGES: |
           open-model-gateway
           open-model-gateway-loadtest
@@ -1410,7 +1410,7 @@ jobs:
             while read -r package; do
               [ -n "$package" ] || continue
               echo "## $package"
-              versions="$(gh api --paginate "/users/$OWNER/packages/container/$package/versions?per_page=100" | jq -s 'add // []')"
+              versions="$(gh api --paginate "/orgs/$OWNER/packages/container/$package/versions?per_page=100" | jq -s 'add // []')"
               # candidates: tagged, every tag is dev-<12 hex>[-arm64], older than the cutoff
               ids="$(jq -r --arg cutoff "$cutoff" '
                 .[] | select((.metadata.container.tags | length) > 0)
@@ -1424,7 +1424,7 @@ jobs:
                 if [ "$DRY_RUN" = true ]; then
                   echo "would delete $id ($tags)"
                 else
-                  gh api -X DELETE "/users/$OWNER/packages/container/$package/versions/$id"
+                  gh api -X DELETE "/orgs/$OWNER/packages/container/$package/versions/$id"
                   echo "deleted $id ($tags)"
                 fi
                 deleted=$((deleted + 1))

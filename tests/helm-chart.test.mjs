@@ -582,7 +582,7 @@ test("an extraEgress rule for the OTLP collector port renders in the egress Netw
 // scripts/spark-env.py installs the chart with deploy/spark/values.yaml (#599). Chart drift that
 // would break that path (a renamed value, a changed role Secret key, a new migrate step) fails here.
 test("the Spark test platform's values render the database and migrate Job it relies on (#599)", () => {
-  const rendered = helmTemplate(["-n", "coder-03-omg-x", "-f", join(root, "deploy/spark/values.yaml"), "--set", `image.digest=sha256:${"a".repeat(64)}`]);
+  const rendered = helmTemplate(["-n", "coder-03-omg-x", "-f", join(root, "deploy/spark/values.yaml"), "--set", "image.repository=ghcr.io/bitop-dev/open-model-gateway", "--set", `image.digest=sha256:${"a".repeat(64)}`]);
   const [gateway] = docsOfKind(rendered, "Deployment");
   assert.match(gateway, /^  replicas: 0$/m, "the chart's gateway stays off; deploy/spark/demo.yaml runs the loopback demo gateway");
   const [cluster] = docsOfKind(rendered, "Cluster");
@@ -600,7 +600,7 @@ test("the Spark test platform's values render the database and migrate Job it re
   assert.equal(docsOfKind(rendered, "NetworkPolicy").length, 0);
   const [job] = docsOfKind(rendered, "Job");
   assert.match(job, /^  name: omg-migrate-1$/m);
-  assert.match(job, new RegExp(`image: ghcr\\.io/ncecere/open-model-gateway@sha256:${"a".repeat(64)}`));
+  assert.match(job, new RegExp(`image: ghcr\\.io/bitop-dev/open-model-gateway@sha256:${"a".repeat(64)}`));
   assert.deepEqual([...job.matchAll(/^\s+args: (\[.*\])$/gm)].map(m => m[1]), ['["wait-for-database"]', '["migrate"]', '["grants", "apply"]'], "wait, migrate, then the runtime grants");
   assert.match(job, /name: OMG_DB_MIGRATOR_USERNAME[\s\S]*name: omg-migrator-role/);
 });
@@ -925,4 +925,17 @@ test("block scalars, and an exempt Job that does more than migrate, are caught (
   assert.equal(isMigrateJob(job("omg-test-open-model-gateway-migrate-1", "loadgen", step("m", '["migrate"]'))), false);
   assert.equal(isMigrateJob(job("omg-test-open-model-gateway-migrate-1", "migrate", step("m", '["migrate"]')).replace("kind: Job", "kind: CronJob")), false);
   assert.equal(isMigrateJob(job("omg-test-open-model-gateway-migrate-1x", "migrate", step("m", '["migrate"]'))), false);
+});
+
+// Repository overrides must reach both workloads: an organization digest is not pullable from the historical account.
+test("gateway and migrate steps use the selected repository and digest together", () => {
+  for (const owner of ["ncecere", "bitop-dev"]) {
+    const repository = `ghcr.io/${owner}/open-model-gateway`;
+    const digest = `sha256:${"b".repeat(64)}`;
+    const rendered = helmTemplate([...profiles["external-db"], "--set", "migrations.run=true",
+      "--set", `image.repository=${repository}`, "--set", `image.digest=${digest}`]);
+    const images = [...rendered.matchAll(/^\s+image: (.+)$/gm)].map(match => match[1]);
+    assert.ok(images.length >= 3, "gateway, migrate and grants all use this image");
+    assert.deepEqual([...new Set(images)], [`${repository}@${digest}`]);
+  }
 });

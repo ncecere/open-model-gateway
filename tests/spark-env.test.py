@@ -37,7 +37,7 @@ def config_view(server=SERVER, namespace="coder-03"):
 class Registry:
     """A fake ghcr.io: an index with an arm64 child whose configuration carries a revision label."""
 
-    def __init__(self, revision=SHA, arch="arm64", header=None, redirect_blob=False):
+    def __init__(self, revision=SHA, arch="arm64", header=None, redirect_blob=False, owner="bitop-dev", tag="dev-x-arm64"):
         self.config = json.dumps({"config": {"Labels": {"org.opencontainers.image.revision": revision}} if revision else {}}).encode()
         self.manifest = json.dumps({"config": {"digest": sha256(self.config)}}).encode()
         self.index = json.dumps({"manifests": [
@@ -46,8 +46,8 @@ class Registry:
         self.digest = sha256(self.index)
         self.header = header
         self.seen = []
-        base = "https://ghcr.io/v2/ncecere/open-model-gateway"
-        self.urls = {f"{base}/manifests/dev-x-arm64": self.index, f"{base}/manifests/{sha256(self.manifest)}": self.manifest, f"{base}/blobs/{sha256(self.config)}": self.config}
+        base = f"https://ghcr.io/v2/{owner}/open-model-gateway"
+        self.urls = {f"{base}/manifests/{tag}": self.index, f"{base}/manifests/{sha256(self.manifest)}": self.manifest, f"{base}/blobs/{sha256(self.config)}": self.config}
 
     def __call__(self, url, headers):
         self.seen.append((url, dict(headers)))
@@ -223,6 +223,20 @@ class ChildProcesses(unittest.TestCase):
 
 
 class Images(unittest.TestCase):
+    def test_registry_selection_preserves_old_releases_without_fallback(self):
+        for tag, owner in (("v0.17.0", "ncecere"), ("v0.18.0", "ncecere"), ("v0.18.0-rc.1", "ncecere"),
+                           ("v0.18.1", "bitop-dev"), ("v0.19.0-rc.1", "bitop-dev"), ("v1.0.0", "bitop-dev"),
+                           ("dev-x-arm64", "bitop-dev")):
+            with self.subTest(tag=tag):
+                registry = Registry(owner=owner, tag=tag)
+                self.assertEqual(spark.lookup_image(tag, SHA, registry), registry.digest)
+                self.assertIn(f"scope=repository:{owner}/open-model-gateway:pull", registry.seen[0][0])
+                self.assertTrue(all(f"/v2/{owner}/open-model-gateway/" in url for url, _ in registry.seen[1:]))
+        registry = Registry(owner="ncecere")
+        with self.assertRaises(spark.SparkError):
+            spark.lookup_image("dev-x-arm64", SHA, registry)
+        self.assertFalse(any("ncecere" in url for url, _ in registry.seen), "never retry the old registry")
+
     def test_release_tags_keep_their_name_and_other_refs_use_the_commit(self):
         self.assertEqual(spark.image_tag("v0.16.0", SHA, is_tag=True), "v0.16.0")
         self.assertEqual(spark.image_tag("v1.2.3-rc.1", SHA, is_tag=True), "v1.2.3-rc.1")
@@ -252,7 +266,7 @@ class Images(unittest.TestCase):
 
     def test_a_tampered_body_is_refused(self):
         registry = Registry()
-        base = "https://ghcr.io/v2/ncecere/open-model-gateway"
+        base = "https://ghcr.io/v2/bitop-dev/open-model-gateway"
         registry.urls[f"{base}/blobs/{sha256(registry.config)}"] = registry.config + b" "
         with self.assertRaisesRegex(spark.SparkError, "configuration"):
             spark.lookup_image("dev-x-arm64", SHA, registry)
@@ -302,12 +316,12 @@ class Images(unittest.TestCase):
 
 class Manifests(unittest.TestCase):
     def test_image_substitution_is_complete_and_strict(self):
-        image = f"ghcr.io/ncecere/open-model-gateway@sha256:{'a' * 64}"
+        image = f"ghcr.io/bitop-dev/open-model-gateway@sha256:{'a' * 64}"
         for name in ("bootstrap-job.yaml", "demo.yaml"):
             text = spark.render((ROOT / "deploy" / "spark" / name).read_text(), image)
             self.assertNotIn("__IMAGE__", text)
             self.assertIn(image, text)
-        for bad in ("bad image", "ghcr.io/ncecere/open-model-gateway:v0.16.0", "ghcr.io/ncecere/open-model-gateway"):
+        for bad in ("bad image", "ghcr.io/bitop-dev/open-model-gateway:v0.16.0", "ghcr.io/bitop-dev/open-model-gateway"):
             with self.assertRaises(spark.SparkError, msg=bad):
                 spark.render("image: __IMAGE__", bad)
         with self.assertRaises(spark.SparkError):
@@ -466,6 +480,7 @@ class Workflow(unittest.TestCase):
         image = f"ghcr.io/ncecere/open-model-gateway@{self.digest}"
         install = recorder.commands()[recorder.index("install omg")]
         self.assertIn(f"image.digest={self.digest}", install)
+        self.assertIn("image.repository=ghcr.io/ncecere/open-model-gateway", install)
         self.assertNotIn("image.tag", install)
         for kind in ("kind: Job", "kind: Deployment"):
             data = recorder.calls[recorder.index("apply -f -", kind)][1]

@@ -479,6 +479,8 @@ backup to be lost — see #146 and `docs/operations.md` "Backups and restore" fo
   single-platform archive:
 
   ```sh
+  # Historical example: v0.9.0 remains at its original registry path.
+  # For releases after v0.18.0 use ghcr.io/bitop-dev/open-model-gateway.
   IMAGE=ghcr.io/ncecere/open-model-gateway:v0.9.0
   docker pull "$IMAGE"
   docker save --platform "linux/$(docker version --format '{{.Server.Arch}}')" "$IMAGE" -o omg.tar
@@ -508,7 +510,7 @@ present; both are disabled by default for this reason.
 a one-shot `loadgen` Job, built from `tools/mock-upstream` and `tools/loadgen`
 (`deploy/loadtest/Dockerfile`). For a cluster, build it on request with the `loadtest-image`
 workflow (`gh workflow run loadtest-image.yml -f ref=<branch|tag|commit>`), which publishes
-`ghcr.io/ncecere/open-model-gateway-loadtest:dev-<first 12 characters of the commit>`; for kind,
+`ghcr.io/bitop-dev/open-model-gateway-loadtest:dev-<first 12 characters of the commit>`; for kind,
 build it locally:
 
 ```sh

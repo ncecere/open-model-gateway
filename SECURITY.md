@@ -4,7 +4,7 @@
 
 Please report vulnerabilities **privately**. Don't open a public issue, pull request or discussion.
 
-Use GitHub's private vulnerability reporting: **[Report a vulnerability](https://github.com/ncecere/open-model-gateway/security/advisories/new)** on the repository's Security tab. Only the maintainers see the report, and we work on the fix with you in a private advisory.
+Use GitHub's private vulnerability reporting: **[Report a vulnerability](https://github.com/bitop-dev/open-model-gateway/security/advisories/new)** on the repository's Security tab. Only the maintainers see the report, and we work on the fix with you in a private advisory.
 
 Include:
 - the affected version or commit;
@@ -23,7 +23,7 @@ Open Model Gateway is pre-1.0 development software. Security fixes are made on `
 | 0.10.x (latest patch) | Yes |
 | 0.9.x and earlier builds | No |
 
-Release images are signed from v0.3.0. Verify an image before you deploy it, as the [release notes](docs/releases/v0.3.0.md#verifying-the-images) describe.
+Release images are signed from v0.3.0. Verify an image before you deploy it, using the [image path and signing identity for that release](docs/staging.md#image-paths-and-signature-identities). Releases through v0.18.0 retain their original `ncecere` image path and certificate identity after the repository transfer to `bitop-dev`.
 
 ## Dependency and code scanning
 

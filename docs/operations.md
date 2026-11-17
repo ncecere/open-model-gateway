@@ -75,7 +75,7 @@ Watch these System metrics (Prometheus names below; OTLP counters omit `_total`)
 - `gateway_otlp_metrics_rejected_points_total`: collector-rejected points reported by partial success, bounded by the sent point count; they are not retried.
 - `gateway_otlp_metrics_dropped_total{reason="series_limit|body_limit|label|unclassified|invalid_value"}`: points omitted locally. These and delivery outcomes appear in the **next** snapshot, never a recursive export.
 
-The metrics exporter's own diagnostics are fixed-enum `metrics exporter state changed` warnings only on transitions into or out of an outage, not every failed push. Those warnings include no destination, header names/values, transport error text or collector response text. A DNS/egress policy refusal is additionally logged at WARN by the shared egress layer with purpose, host and resolved address, one warning per attempt (see [#321](https://github.com/ncecere/open-model-gateway/issues/321)). Monitor silence at the receiver too: a failed exporter cannot report its current failure through that same destination.
+The metrics exporter's own diagnostics are fixed-enum `metrics exporter state changed` warnings only on transitions into or out of an outage, not every failed push. Those warnings include no destination, header names/values, transport error text or collector response text. A DNS/egress policy refusal is additionally logged at WARN by the shared egress layer with purpose, host and resolved address, one warning per attempt (see [#321](https://github.com/bitop-dev/open-model-gateway/issues/321)). Monitor silence at the receiver too: a failed exporter cannot report its current failure through that same destination.
 
 ## OTLP operational logs (#294)
 

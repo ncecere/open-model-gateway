@@ -41,7 +41,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DEPLOY = ROOT / "deploy" / "spark"
 # The only API server this script talks to. A kubeconfig for any other cluster is refused.
 SPARK_HOST = "bitop-spark.taila06ed.ts.net"
-IMAGE_REPOSITORY = "ghcr.io/ncecere/open-model-gateway"
+IMAGE_REPOSITORY = "ghcr.io/bitop-dev/open-model-gateway"
+LEGACY_IMAGE_REPOSITORY = "ghcr.io/ncecere/open-model-gateway"
 REGISTRY = "https://ghcr.io"
 NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])")
 BASE = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?")
@@ -209,6 +210,15 @@ def image_tag(ref, sha, is_tag):
     return ref if is_tag and RELEASE.fullmatch(ref) else f"dev-{sha[:12]}-arm64"
 
 
+def image_repository(tag):
+    """Published releases through v0.18.0 remain in the original account; never fall back on lookup failure."""
+    if RELEASE.fullmatch(tag):
+        version = tuple(int(part) for part in tag[1:].split("-")[0].split("."))
+        if version <= (0, 18, 0):
+            return LEGACY_IMAGE_REPOSITORY
+    return IMAGE_REPOSITORY
+
+
 def resolve_ref(ref, runner=run, repo=ROOT):
     if not REF.fullmatch(ref or "") or ".." in ref:
         raise SparkError(f"unusable ref {ref!r}")
@@ -282,7 +292,8 @@ def lookup_image(tag, expected_revision, fetch=fetch_url):
     manifest, and its revision label is the commit the ref resolved to (a local tag can point
     elsewhere than the commit the CI built).
     """
-    name = IMAGE_REPOSITORY.removeprefix("ghcr.io/")
+    repository = image_repository(tag)
+    name = repository.removeprefix("ghcr.io/")
     status, _, body = fetch(f"{REGISTRY}/token?service=ghcr.io&scope=repository:{name}:pull", {})
     try:
         auth = {"Authorization": "Bearer " + json.loads(body)["token"]}
@@ -294,7 +305,7 @@ def lookup_image(tag, expected_revision, fetch=fetch_url):
     def get(path, headers):
         status, received, content = fetch(f"{REGISTRY}/v2/{name}/{path}", {**auth, **headers})
         if status != 200:
-            raise SparkError(f"{IMAGE_REPOSITORY} {path} is not available (HTTP {status}); push the branch and wait for branch-images.yml")
+            raise SparkError(f"{repository} {path} is not available (HTTP {status}); push the branch and wait for branch-images.yml")
         return received, content
 
     headers, body = get(f"manifests/{tag}", {"Accept": accept})
@@ -314,7 +325,7 @@ def lookup_image(tag, expected_revision, fetch=fetch_url):
     except (ValueError, KeyError, TypeError, AttributeError):
         raise SparkError("the registry returned a malformed manifest") from None
     if revision != expected_revision:
-        raise SparkError(f"{IMAGE_REPOSITORY}:{tag} was built from {revision or 'an unknown revision'}, not {expected_revision}")
+        raise SparkError(f"{repository}:{tag} was built from {revision or 'an unknown revision'}, not {expected_revision}")
     return digest
 
 
@@ -420,11 +431,12 @@ class Spark:
         resolved = resolve_ref(ref)
         tag = image_tag(resolved.name, resolved.sha, resolved.is_tag)
         digest = lookup_image(tag, resolved.sha)
-        image = f"{IMAGE_REPOSITORY}@{digest}"
+        repository = image_repository(tag)
+        image = f"{repository}@{digest}"
         if self.namespace_exists(namespace):
             raise SparkError(f"{namespace} already exists; run `down {name}` first")
         job, demo = (render((DEPLOY / file).read_text(), image) for file in ("bootstrap-job.yaml", "demo.yaml"))
-        print(f"{namespace}: {resolved.name} {resolved.sha[:12]} -> {IMAGE_REPOSITORY}:{tag} ({digest[:19]}...)")
+        print(f"{namespace}: {resolved.name} {resolved.sha[:12]} -> {repository}:{tag} ({digest[:19]}...)")
         try:
             with tempfile.TemporaryDirectory() as source:
                 extract_ref(resolved.sha, source)
@@ -455,7 +467,7 @@ class Spark:
                       f"--from-literal=image={image}"], namespace=namespace)
         # CloudNativePG Cluster (PostgreSQL 17) and the explicit migrate Job: migrate, then runtime grants.
         self.helm(["install", "omg", f"{source}/deploy/helm/open-model-gateway", "-f", str(DEPLOY / "values.yaml"),
-                   "--set", f"image.digest={digest}", "--wait", "--wait-for-jobs", "--timeout", "10m", "--hide-notes"], namespace)
+                   "--set", f"image.repository={image.split('@')[0]}", "--set", f"image.digest={digest}", "--wait", "--wait-for-jobs", "--timeout", "10m", "--hide-notes"], namespace)
         self.kubectl(["create", "configmap", "omg-demo-scripts", f"--from-file=demo-oidc.mjs={source}/scripts/demo-oidc.mjs",
                       f"--from-file=pg-forward.mjs={DEPLOY / 'pg-forward.mjs'}"], namespace=namespace)
         self.kubectl(["apply", "-f", "-"], namespace=namespace, stdin=job)

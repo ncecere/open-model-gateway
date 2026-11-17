@@ -39,7 +39,7 @@ jobs:
       packages: write
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      OWNER: ${{ github.repository_owner }}
+      OWNER: bitop-dev
       # URL-encoded package names, one per line
       PACKAGES: |
         open-model-gateway
@@ -57,7 +57,7 @@ jobs:
           while read -r package; do
             [ -n "$package" ] || continue
             echo "## $package"
-            versions="$(gh api --paginate "/users/$OWNER/packages/container/$package/versions?per_page=100" | jq -s 'add // []')"
+            versions="$(gh api --paginate "/orgs/$OWNER/packages/container/$package/versions?per_page=100" | jq -s 'add // []')"
             # candidates: tagged, every tag is dev-<12 hex>[-arm64], older than the cutoff
             ids="$(jq -r --arg cutoff "$cutoff" '
               .[] | select((.metadata.container.tags | length) > 0)
@@ -71,7 +71,7 @@ jobs:
               if [ "$DRY_RUN" = true ]; then
                 echo "would delete $id ($tags)"
               else
-                gh api -X DELETE "/users/$OWNER/packages/container/$package/versions/$id"
+                gh api -X DELETE "/orgs/$OWNER/packages/container/$package/versions/$id"
                 echo "deleted $id ($tags)"
               fi
               deleted=$((deleted + 1))
