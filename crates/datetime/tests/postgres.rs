@@ -8,13 +8,23 @@ use sqlx::{
 async fn database() -> PgConnection {
     let required =
         |name| std::env::var(name).expect("set DATETIME_PG_* for a fresh PostgreSQL database");
-    let options = PgConnectOptions::new()
-        .host("127.0.0.1")
-        .port(required("DATETIME_PG_PORT").parse().unwrap())
-        .username(&required("DATETIME_PG_USERNAME"))
-        .password(&required("DATETIME_PG_PASSWORD"))
-        .database(&required("DATETIME_PG_DBNAME"))
-        .ssl_mode(PgSslMode::Disable);
+    let options = match std::env::var("DATETIME_PG_URL") {
+        Ok(url) => url
+            .parse::<PgConnectOptions>()
+            .unwrap_or_else(|_| panic!("DATETIME_PG_URL must be a valid PostgreSQL URL")),
+        Err(std::env::VarError::NotPresent) => PgConnectOptions::new()
+            .host("127.0.0.1")
+            .port(required("DATETIME_PG_PORT").parse().unwrap())
+            .username(&required("DATETIME_PG_USERNAME"))
+            .password(&required("DATETIME_PG_PASSWORD"))
+            .database(&required("DATETIME_PG_DBNAME"))
+            .ssl_mode(PgSslMode::Disable),
+        Err(_) => panic!("DATETIME_PG_URL must be valid UTF-8"),
+    };
+    assert!(
+        matches!(options.get_host(), "127.0.0.1" | "::1" | "localhost"),
+        "datetime tests require an explicitly selected loopback PostgreSQL database"
+    );
     let mut db = PgConnection::connect_with(&options).await.unwrap();
     let version: String = sqlx::query_scalar("SHOW server_version_num")
         .fetch_one(&mut db)
