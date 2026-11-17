@@ -129,5 +129,5 @@ impl Calendar {
     }
 }
 fn midnight(d: CalendarDate) -> Result<UtcInstant, sqlx::Error> {
-    Ok(d.midnight().map_err(|_| invalid())?)
+    d.midnight().map_err(|_| invalid())
 }

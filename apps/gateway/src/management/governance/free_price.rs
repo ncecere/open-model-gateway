@@ -30,7 +30,7 @@ impl Resolve {
         }
         let start = gateway_datetime_compat::http::parse_date_filter(&format!("{month}-01"))
             .map_err(|_| invalid())?;
-        if start.format("%Y-%m").to_string() != *month || month.starts_with("0000") {
+        if start.format("%Y-%m") != *month || month.starts_with("0000") {
             return Err(invalid());
         }
         let end = start.checked_add_months(1).ok().ok_or_else(invalid)?;

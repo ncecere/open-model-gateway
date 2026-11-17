@@ -47,7 +47,7 @@ pub(super) fn otlp_body(
                     let time = event["occurred_at"]
                         .as_str()
                         .and_then(|t| gateway_datetime_compat::http::parse_rfc3339(t).ok())
-                        .map_or_else(|| "0".to_owned(), |t| unix_nanos(t));
+                        .map_or_else(|| "0".to_owned(), unix_nanos);
                     log_record(
                         time,
                         &observed,
