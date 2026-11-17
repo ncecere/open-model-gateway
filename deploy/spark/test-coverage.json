@@ -12,7 +12,7 @@
     {"ci": "cargo test -p open-model-gateway --all-features --lib management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement -- --ignored --exact", "suite": "integration", "script": "cargo test -p open-model-gateway --all-features --lib management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement -- --ignored --exact"},
     {"ci": "cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact", "suite": "integration", "script": "cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact"},
     {"ci": "npm run typecheck:web", "suite": "web", "script": "npm run typecheck:web"},
-    {"ci": "npm run test:web", "suite": "web", "script": "npm run test:web -- --maxWorkers"}
+    {"ci": "npm run test:web", "suite": "web", "script": "npm run test --workspace @omg/web -- --maxWorkers"}
   ],
   "uncovered": [
     {"ci": "cargo test -p open-model-gateway --all-features --test filestore_s3", "why": "filestore_s3 starts MinIO and RustFS containers; a pod has no Docker", "suites": ["integration", "all"]},

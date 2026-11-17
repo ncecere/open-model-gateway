@@ -63,7 +63,7 @@ echo "npm $*" >> "$STUB_LOG"
 pw=$(cat "$STUB_PASSWORD_FILE")
 echo "env npm db=${DATABASE_URL:+set} vars=$(env | grep -F -- "$pw" | cut -d= -f1 | tr '\n' ',') nonce=$(env | grep -c '^OMG_NONCE=')" >> "$STUB_LOG"
 case "$*" in
-  *test:web*) echo "      Tests  5 passed (5)" ;;
+  *test:web* | *"run test --workspace @omg/web"*) echo "      Tests  5 passed (5)" ;;
 esac
 exit 0
 """
@@ -302,6 +302,27 @@ class Integration(Pod):
         self.assertIn("cargo test --workspace --exclude open-model-gateway --all-features --no-fail-fast", calls)
         parsed = tool.parse_log(result.stdout, NONCE)
         self.assertEqual({s["name"] for s in parsed["steps"] if s["suite"] == "integration"}, set(tool.REQUIRED_STEPS["integration"]))
+
+
+class WebArguments(Pod):
+    def test_real_npm_delivers_the_worker_limit_and_filter_to_vitest(self):
+        # Exercise npm's script boundary, not the stub's argv echo: nested npm
+        # wrappers can consume option flags before the workspace test sees them.
+        real_npm = shutil.which("npm")
+        self.assertIsNotNone(real_npm)
+        root_script = json.loads((ROOT / "package.json").read_text())["scripts"]["test:web"]
+        self.commit = self.make_repo({
+            "package.json": json.dumps({"private": True, "workspaces": ["web"], "scripts": {"test:web": root_script, "typecheck:web": "node -e ''"}}),
+            "web/package.json": json.dumps({"name": "@omg/web", "scripts": {"test": "node args.cjs"}}),
+            "web/args.cjs": 'require("fs").writeFileSync(process.env.STUB_LOG + "-web-args", JSON.stringify(process.argv.slice(2))); console.log("Tests  5 passed (5)");',
+        }, message="web scripts")
+        npm = self.noderoot / "bin" / "npm"
+        npm.unlink()
+        npm.symlink_to(real_npm)
+        result = self.call_functions('setup_environment >/dev/null; reset_cache && prepare_source && { NPM_READY=ok; suite_web; }', OMG_TEST_ARGS="deployment-preview-focus")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        args = json.loads(Path(str(self.log) + "-web-args").read_text())
+        self.assertEqual(args, ["--maxWorkers=1", "deployment-preview-focus"])
 
 
 class Secrets(Pod):

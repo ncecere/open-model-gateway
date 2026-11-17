@@ -316,7 +316,7 @@ suite_web() {
   prepare_npm web || return 1
   extra_args || return 1
   step web typecheck npm run typecheck:web || bad=1
-  step web vitest npm run test:web -- --maxWorkers="$OMG_WEB_WORKERS" ${EXTRA[@]+"${EXTRA[@]}"} || bad=1
+  step web vitest npm run test --workspace @omg/web -- --maxWorkers="$OMG_WEB_WORKERS" ${EXTRA[@]+"${EXTRA[@]}"} || bad=1
   return "$bad"
 }
 
