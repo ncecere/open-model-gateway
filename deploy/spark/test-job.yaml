@@ -58,7 +58,7 @@ spec:
             - {name: OMG_NONCE, value: "__NONCE__"}
             - {name: OMG_FRESH, value: "__FRESH__"}
             # Cargo jobs, libtest threads and Vitest workers follow the CPU limit (--fast raises all three). The
-            # libtest default would be 2 and the database-bound tests mostly wait; Vitest does not read the cgroup limit.
+            # libtest default would be 2 and the database-bound tests mostly wait; Vitest gets an explicit worker limit.
             - {name: OMG_JOBS, value: "__JOBS__"}
             - {name: OMG_TEST_THREADS, value: "__TEST_THREADS__"}
             - {name: OMG_WEB_WORKERS, value: "__WEB_WORKERS__"}

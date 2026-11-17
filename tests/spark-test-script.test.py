@@ -477,7 +477,7 @@ class Source(Pod):
         self.assertIn("push the branch first", tool.format_report(summary, parsed))
 
     def test_a_marker_forged_by_the_checkout_is_not_believed(self):
-        # a file of the ref that prints a marker line without the nonce (all it can know)
+        # Output with a missing or foreign nonce must not be treated as runner progress.
         files = {"rust-toolchain.toml": '[toolchain]\nchannel = "1.99.1"\n', "Cargo.toml": "[workspace]\n", "package.json": "{}\n"}
         new = self.make_repo(files, message="three")
         stub = self.noderoot / "bin" / "cargo"
@@ -494,17 +494,24 @@ class Source(Pod):
 class Lifecycle(Pod):
     def test_sigterm_stops_the_children_at_once_and_the_script_exits(self):
         process = subprocess.Popen(["bash", str(SCRIPT)], env=self.env(OMG_SUITE="checks", STUB_SLEEP="30"), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
-        for _ in range(100):
-            if any(line.startswith("cargo fmt") or line.startswith("cargo clippy") for line in self.stub_calls()):
-                break
-            time.sleep(0.1)
-        started = time.time()
-        os.kill(process.pid, signal.SIGTERM)
-        output, _ = process.communicate(timeout=20)
-        self.assertLess(time.time() - started, 10)
-        self.assertEqual(process.returncode, 143)
-        self.assertIn("terminated", output)
-        subprocess.run(["pkill", "-f", "sleep 30"], check=False)
+        try:
+            for _ in range(100):
+                if any(line.startswith("cargo fmt") or line.startswith("cargo clippy") for line in self.stub_calls()):
+                    break
+                time.sleep(0.1)
+            started = time.time()
+            os.kill(process.pid, signal.SIGTERM)
+            output, _ = process.communicate(timeout=20)
+            self.assertLess(time.time() - started, 10)
+            self.assertEqual(process.returncode, 143)
+            self.assertIn("terminated", output)
+        finally:
+            # start_new_session gives this test its own group; cleanup cannot touch other tests.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate(timeout=20)
 
     def test_every_environment_variable_the_script_needs_is_defined_by_the_job_or_defaulted(self):
         text = SCRIPT.read_text()
