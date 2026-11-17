@@ -268,12 +268,12 @@ use pricing::{
     PRICE_COLUMNS, Price, checked_cost, latest_price, price_version, require_native_cache_price,
 };
 pub use reconcile::{ReconcilingActor, reconcile_expired, resolve_usage};
-pub(crate) use settlement::validate_token_usage;
 use settlement::{
     billing_json, cache_bound_violated, ledger, meter_evidence, pinned_value, reservation,
     usage_values, workload_usage,
 };
 pub use settlement::{finish, finish_with_telemetry};
+pub(crate) use settlement::{finish_accepted_job, validate_token_usage};
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(
     not(test),

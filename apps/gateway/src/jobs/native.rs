@@ -142,14 +142,17 @@ impl Jobs {
         );
         let (submitted, produced) = tokio::join!(submit, encoder);
         let outcome = match (submitted, produced) {
-            (Ok(Ok(upstream)), Ok(_)) => Ok(upstream),
+            (Ok(Ok(upstream)), produced) => {
+                // An accepted response proves acceptance even if the concurrent
+                // encoder failed. Persist its id before classifying that failure.
+                store::set_upstream(&self.store, job.id, &upstream.id).await?;
+                produced.map(|_| upstream)
+            }
             (Ok(Err(e)), _) => Err(e),
             (Err(_), _) => Err(InferenceError::Timeout),
-            (Ok(Ok(_)), Err(e)) => Err(e),
         };
         match outcome {
             Ok(upstream) => {
-                store::set_upstream(&self.store, job.id, &upstream.id).await?;
                 if !upstream.status.state().is_terminal() {
                     store::set_status(&self.store, job.id, upstream.status.as_str()).await?;
                 }
@@ -170,7 +173,8 @@ impl Jobs {
                     },
                 )
                 .await?;
-                // The provider may have received part of it: unknown unless free.
+                // Partial submission may have reached the provider. Only an explicit
+                // pre-processing rejection can qualify for free-zero settlement.
                 self.settle(
                     &job,
                     Settlement {
