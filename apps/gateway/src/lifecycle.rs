@@ -132,7 +132,9 @@ pub async fn cleanup_inactive_accounts_fenced(
     let mut tx = crate::db::begin(&store.pool).await?;
     crate::leases::fence(&mut tx, fence).await?;
     lock(&mut tx).await?;
-    let users: Vec<Uuid> = sqlx::query_scalar(&format!("SELECT id FROM users WHERE disabled_at IS NOT NULL AND cleaned_at IS NULL AND cleanup_due_at<=now() AND NOT {} ORDER BY cleanup_due_at,id LIMIT 100 FOR UPDATE", crate::legal_holds::user_held("users.id")))
+    // Cleanup changes attributes, never ids: creator FKs must remain compatible
+    // while the following authority locks wait for an admission to finish.
+    let users: Vec<Uuid> = sqlx::query_scalar(&format!("SELECT id FROM users WHERE disabled_at IS NOT NULL AND cleaned_at IS NULL AND cleanup_due_at<=now() AND NOT {} ORDER BY cleanup_due_at,id LIMIT 100 FOR NO KEY UPDATE", crate::legal_holds::user_held("users.id")))
         .fetch_all(&mut *tx).await?;
     lock_users(&mut tx, &users).await?;
     let mut cleaned = 0;

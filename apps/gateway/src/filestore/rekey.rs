@@ -2,8 +2,8 @@
 //! the old key can be retired. Each object's data key is re-wrapped
 //! ([`super::FileStore::rekey`]); contents are never decrypted or re-encrypted.
 //!
-//! One file at a time, in id order, each under its row lock (`FOR UPDATE SKIP
-//! LOCKED`) for the whole rewrite, in a transaction with no idle timeout (a
+//! One file at a time, in id order, each under its row lock (`FOR NO KEY UPDATE
+//! SKIP LOCKED`) for the whole rewrite, in a transaction with no idle timeout (a
 //! server's `idle_in_transaction_session_timeout` would otherwise end it, and
 //! release the lock, during a long copy). Deleting a file claims the row first
 //! (`last_delete_attempt_at`, waiting for that lock) and deletes the object
@@ -79,14 +79,7 @@ pub async fn rekey(
             "SET LOCAL idle_in_transaction_session_timeout=0; SET LOCAL lock_timeout='5s'",
         )
         .await?;
-        let row: Option<(Uuid, String)> = sqlx::query_as(&format!(
-            "SELECT id,object_key FROM stored_files WHERE {LIVE} AND backend=$2 AND {NOT_DELETING} AND id>$3 ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED"
-        ))
-        .bind(from)
-        .bind(backend)
-        .bind(after)
-        .fetch_optional(&mut *tx)
-        .await?;
+        let row = claim_next_file(&mut tx, from, backend, after).await?;
         let Some((id, object_key)) = row else { break };
         after = id;
         done += 1;
@@ -148,4 +141,21 @@ pub async fn rekey(
     report.other_backend = other as u64;
     report.complete = remaining == 0;
     Ok(report)
+}
+
+/// Serialize rewrites/deletion without excluding references to the file.
+pub(crate) async fn claim_next_file(
+    conn: &mut sqlx::PgConnection,
+    from: &str,
+    backend: &str,
+    after: Uuid,
+) -> Result<Option<(Uuid, String)>, sqlx::Error> {
+    sqlx::query_as(&format!(
+            "SELECT id,object_key FROM stored_files WHERE {LIVE} AND backend=$2 AND {NOT_DELETING} AND id>$3 ORDER BY id LIMIT 1 FOR NO KEY UPDATE SKIP LOCKED"
+        ))
+        .bind(from)
+        .bind(backend)
+        .bind(after)
+        .fetch_optional(conn)
+        .await
 }

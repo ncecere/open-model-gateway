@@ -12,11 +12,9 @@ inference/mod.rs :: impl ExecutionGuard::finish :: warn :: execution_id=%self.id
 inference/realtime.rs :: impl RealtimeSession::drop :: error :: execution_id=%record.id
 inference/realtime.rs :: impl RealtimeSession::finish :: error :: execution_id=%self.id
 inference/realtime.rs :: impl RealtimeSession::finish :: warn :: execution_id=%self.id
-jobs/batch.rs :: impl Jobs::create_batch :: error :: execution_id=%request_id
 jobs/batch.rs :: impl Jobs::discard_work_file :: warn :: job_id=%job.id
 jobs/mod.rs :: impl Attempt::drop :: error :: execution_id=%record.id
 jobs/mod.rs :: impl Attempt::fail :: error :: execution_id=%self.id
-jobs/mod.rs :: impl Jobs::hold_until :: error :: execution_id=%execution
 jobs/mod.rs :: impl Jobs::settle :: warn :: job_id=%job.id
 jobs/native.rs :: impl Jobs::collect_native :: warn :: job_id=%job.id
 jobs/native.rs :: impl Jobs::submit_native :: warn :: job_id=%job.id
@@ -28,6 +26,7 @@ jobs/poller.rs :: start :: warn :: -
 jobs/runner.rs :: impl Runner::finalize :: warn :: job_id=%job.id
 jobs/runner.rs :: impl Runner::observe_queue :: warn :: -
 jobs/runner.rs :: impl Runner::publish_demand :: warn :: job_id=%job.id
+jobs/runner.rs :: impl Runner::run_claimed :: warn :: job_id=%job.id
 jobs/runner.rs :: impl Runner::settle_finished :: warn :: job_id=%job.id
 jobs/runner.rs :: impl Runner::tick :: warn :: job_id=%id
 jobs/runner.rs :: start :: warn :: -

@@ -36,7 +36,7 @@ use std::{
     time::Duration,
 };
 
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{TimeDelta, Utc};
 use uuid::Uuid;
 
 use crate::{
@@ -54,6 +54,7 @@ use crate::{
     store::Store,
 };
 pub use store::{BatchMode, JobRow};
+pub(crate) use store::{NewBatch, insert_batch};
 /// Columns of [`JobRow`] (management reads).
 pub(crate) fn job_columns() -> &'static str {
     store::JOB_COLUMNS
@@ -66,7 +67,7 @@ pub const VIDEO_POLL_WINDOW: TimeDelta = TimeDelta::hours(6);
 pub const BATCH_POLL_WINDOW: TimeDelta = TimeDelta::hours(26);
 /// Lease grace beyond the poll deadline before reconciliation marks the
 /// reservation unknown (hold retained).
-const LEASE_GRACE: TimeDelta = TimeDelta::minutes(10);
+pub(crate) const LEASE_GRACE: TimeDelta = TimeDelta::minutes(10);
 /// Upstream deadline of one job call (create, retrieve, cancel, delete).
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 /// Deadline of one streamed batch upload.
@@ -405,17 +406,6 @@ impl Jobs {
             .get(&target.provider)
             .ok_or(InferenceError::Configuration)?;
         Ok((target, adapter))
-    }
-
-    /// Keep the reservation pending until the job's poll deadline.
-    pub(crate) async fn hold_until(&self, execution: Uuid, deadline: DateTime<Utc>) {
-        let until = deadline + LEASE_GRACE;
-        if !matches!(
-            crate::governance::jobs::extend_lease(&self.store, execution, until).await,
-            Ok(true)
-        ) {
-            tracing::error!(execution_id = %execution, "job lease extension failed; reconciliation will keep the hold as unknown");
-        }
     }
 
     /// Record a terminal observation's accounting exactly once. A replay of an
