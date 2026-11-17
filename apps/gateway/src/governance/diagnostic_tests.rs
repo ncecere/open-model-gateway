@@ -118,13 +118,14 @@ async fn deadlock_reruns_signal_only_when_exhausted() {
 }
 
 /// #389: every accounting transaction start in the governance sources that
-/// maps its error to `InferenceError` maps it through `begin_storage`, so a
-/// starved or closed pool is recorded as `pool_acquire_and_begin`. The other
+/// maps its error to `InferenceError` uses `begin_storage` for
+/// `pool_acquire_and_begin`, except accepted-video recording: upstream work
+/// already exists, so that start must use the critical `job_settlement` stage. The other
 /// starts (maintenance) return the driver error unchanged with `.await?`.
 /// A start is a call of `db::begin` or `db::begin_with_setup`, however it is
 /// named: `crate::db::begin(`, `db::begin(` or an imported `begin(`.
 #[test]
-fn every_governance_transaction_start_records_the_begin_stage() {
+fn every_governance_transaction_start_records_its_required_stage() {
     use std::path::{Path, PathBuf};
     fn sources(directory: &Path, files: &mut Vec<PathBuf>) {
         for entry in std::fs::read_dir(directory).unwrap() {
@@ -139,7 +140,7 @@ fn every_governance_transaction_start_records_the_begin_stage() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = vec![src.join("governance.rs")];
     sources(&src.join("governance"), &mut files);
-    let (mut mapped, mut unmapped) = (0, 0);
+    let (mut mapped, mut unmapped, mut accepted) = (0, 0, 0);
     for path in files {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
         if !name.ends_with(".rs") || name.ends_with("tests.rs") {
@@ -173,6 +174,21 @@ fn every_governance_transaction_start_records_the_begin_stage() {
                 unmapped += 1;
                 continue;
             }
+            let accepted_range =
+                source
+                    .find("\npub(crate) async fn accept_job<")
+                    .and_then(|start| {
+                        source[start..]
+                            .find("\n}\n")
+                            .map(|end| (start, start + end))
+                    });
+            if path == src.join("governance/jobs.rs")
+                && accepted_range.is_some_and(|(start, end)| start < at && at < end)
+                && statement == "begin(&store.pool).await.map_err(accepted_storage)?"
+            {
+                accepted += 1;
+                continue;
+            }
             assert!(
                 statement.ends_with(".await.map_err(begin_storage)?"),
                 "{name}: a transaction start that is not mapped through begin_storage"
@@ -180,6 +196,14 @@ fn every_governance_transaction_start_records_the_begin_stage() {
             mapped += 1;
         }
     }
-    assert!(mapped >= 16, "found {mapped} starts; did the scan break?");
+    assert_eq!(
+        accepted, 1,
+        "only accepted-video recording starts at job_settlement"
+    );
+    assert!(
+        mapped + accepted >= 16,
+        "found {} starts; did the scan break?",
+        mapped + accepted
+    );
     assert!(unmapped <= 3, "found {unmapped} unmapped starts");
 }

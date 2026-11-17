@@ -510,8 +510,8 @@ async fn an_explicit_code_wins_over_the_type() {
 }
 
 /// #622: a returned stream whose connection fails mid-body, whose body ends
-/// before the protocol's terminal frame, or whose bytes cannot be decoded, is
-/// an unavailable provider, wherever in the stream that happens.
+/// before the protocol's terminal frame, or ends with an incomplete frame is
+/// an unavailable provider. A complete invalid UTF-8 line remains InvalidUpstream.
 #[tokio::test]
 async fn transport_failures_inside_a_stream_are_an_unavailable_provider() {
     let mut problems = Vec::new();

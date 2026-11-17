@@ -54,6 +54,10 @@ struct Script {
     coarse_unavailable_once: bool,
     /// Encoded native records of the last submission.
     submitted: Vec<Value>,
+    submission_error: Option<InferenceError>,
+    unique_upstream_ids: bool,
+    early_accept: bool,
+    encode_error: Option<InferenceError>,
     submissions: Vec<Vec<Value>>,
     batches: std::collections::VecDeque<UpstreamBatch>,
     /// Result lines a native batch returns (fake format).
@@ -315,6 +319,9 @@ impl ProviderAdapter for Fake {
         custom_id: &str,
         request: &BatchRequest,
     ) -> Result<Vec<u8>, InferenceError> {
+        if let Some(error) = self.script.lock().unwrap().encode_error {
+            return Err(error);
+        }
         let text = match request {
             BatchRequest::Chat(r) => r.messages[0].content.clone().unwrap_or_default(),
             BatchRequest::Embeddings(r) => r.input.join(","),
@@ -333,6 +340,9 @@ impl ProviderAdapter for Fake {
         _: BatchEndpoint,
         mut records: ByteStream,
     ) -> Result<UpstreamBatch, InferenceError> {
+        if self.script.lock().unwrap().early_accept {
+            return Ok(upstream(BatchStatus::Validating));
+        }
         let mut seen = Vec::new();
         while let Some(r) = records.next().await {
             seen.push(serde_json::from_slice::<Value>(&r?).unwrap());
@@ -341,7 +351,14 @@ impl ProviderAdapter for Fake {
         s.calls.push("submit");
         s.submissions.push(seen.clone());
         s.submitted = seen;
-        Ok(upstream(BatchStatus::Validating))
+        if let Some(error) = s.submission_error {
+            return Err(error);
+        }
+        let mut accepted = upstream(BatchStatus::Validating);
+        if s.unique_upstream_ids {
+            accepted.id = UpstreamId::parse(&format!("batch_{}", Uuid::new_v4().simple())).unwrap();
+        }
+        Ok(accepted)
     }
     async fn retrieve_batch(
         &self,
@@ -852,9 +869,32 @@ async fn stale_plan_is_refused_then_replanned(
     sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version) VALUES($1,$2,9000000,9000000,200,9,1)").bind(new).bind(f.deployment).execute(&f.store.pool).await.unwrap();
     for native in [false, true] {
         let record = f.start();
+        let job = NewBatch {
+            id: Uuid::new_v4(),
+            workspace_id: f.principal.workspace_id,
+            api_key_id: f.principal.key_id,
+            user_id: f.principal.user_id,
+            deployment_id: record.deployment_id,
+            execution_id: record.id,
+            public_model: &plan.model,
+            provider: "openai",
+            poll_window: BATCH_POLL_WINDOW,
+            endpoint: BatchEndpoint::ChatCompletions,
+            mode: if native {
+                BatchMode::Native
+            } else {
+                BatchMode::Gateway
+            },
+            input_file_id: input.id,
+            work_file_id: plan.work_file,
+            retry_limit: 0,
+            requests: 1,
+            window_hours: 24,
+        };
         assert_eq!(
-            crate::governance::batch::admit_batch(&f.store, &record, &plan.groups, native, 600)
-                .await,
+            crate::governance::batch::admit_batch(&f.store, &record, &plan.groups, &job)
+                .await
+                .map(|admission| admission.map(|(hold, _)| hold)),
             Err(InferenceError::Configuration)
         );
     }
@@ -3180,6 +3220,7 @@ async fn memoized_refusal_classification_stays_per_line(pool: PgPool) {
     consistent(f).await;
 }
 
+mod envelope;
 mod fence;
 
 /// Streaming classification must not change the non-stream classes that drive
@@ -3273,3 +3314,5 @@ async fn non_stream_200_batch_error(
     .unwrap();
     assert_eq!(executions, i64::from(n));
 }
+
+mod accepted_failure_tests;

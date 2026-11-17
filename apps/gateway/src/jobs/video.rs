@@ -53,8 +53,8 @@ pub(crate) fn settlement(job: &JobRow, v: &UpstreamVideo) -> Option<Settlement> 
                 },
             })
         }
-        // The provider failed the job; without usage the hold is kept unless
-        // the price is entirely free.
+        // The provider accepted and then failed the job: usage stays unknown
+        // and the hold is kept even when the price is entirely free.
         JobState::Failed => Some(Settlement {
             outcome: Outcome::Failed,
             error: Some(InferenceError::UpstreamRejected),
@@ -125,29 +125,38 @@ impl Jobs {
         };
         attempt.accepted();
         let deadline = Utc::now() + VIDEO_POLL_WINDOW;
-        let job = store::insert_job(
+        let new = store::NewJob {
+            id: Uuid::new_v4(),
+            kind: JobKind::Video,
+            workspace_id: principal.workspace_id,
+            api_key_id: principal.key_id,
+            deployment_id: target.id,
+            execution_id: request_id,
+            public_model: &model,
+            provider: &target.provider,
+            upstream_id: &upstream.id,
+            poll_deadline_at: deadline,
+            video_seconds: Some(seconds as i32),
+            video_size: Some(size.as_str()),
+            batch_endpoint: None,
+        };
+        // The job record and the extension of its reservation's lease to the
+        // poll deadline are one transaction: no job is polled under the short
+        // admission lease.
+        let job = crate::governance::jobs::accept_job(
             &self.store,
-            &store::NewJob {
-                id: Uuid::new_v4(),
-                kind: JobKind::Video,
-                workspace_id: principal.workspace_id,
-                api_key_id: principal.key_id,
-                deployment_id: target.id,
-                execution_id: request_id,
-                public_model: &model,
-                provider: &target.provider,
-                upstream_id: &upstream.id,
-                poll_deadline_at: deadline,
-                video_seconds: Some(seconds as i32),
-                video_size: Some(size.as_str()),
-                batch_endpoint: None,
+            request_id,
+            deadline + LEASE_GRACE,
+            async |conn| {
+                store::insert_job(conn, &new)
+                    .await
+                    .map_err(|_| InferenceError::Storage)
             },
         )
         .await
         .inspect_err(|_| {
             tracing::error!(execution_id = %request_id, "video job record failed after upstream acceptance; hold kept until reconciliation");
         })?;
-        self.hold_until(request_id, deadline).await;
         self.apply_video(&job, &upstream).await
     }
 

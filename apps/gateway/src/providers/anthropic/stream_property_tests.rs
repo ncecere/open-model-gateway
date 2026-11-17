@@ -883,8 +883,8 @@ fn block_and_tool_limits_refuse_the_next_unit() {
 /// Upstream `error` events are classified like the same error as an HTTP
 /// response (`framing::status` for a chat or Responses client, and for a
 /// Messages client `anthropic_generation_status`'s overload and context
-/// refinements), by the documented `type` alone; an unrecognised error is an
-/// unavailable provider, never a client fault, and the upstream's text is
+/// refinements), using the shared code/type precedence. An unrecognised error
+/// is an unavailable provider, never a client fault, and the upstream's text is
 /// never reflected.
 #[test]
 fn error_events_are_classified_like_the_http_response() {
