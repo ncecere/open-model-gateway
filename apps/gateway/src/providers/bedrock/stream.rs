@@ -300,12 +300,15 @@ pub(super) fn decode(
     mut receiver: EventReceiver<aws::ConverseStreamOutput, aws::error::ConverseStreamOutputError>,
     limit: usize,
     messages: bool,
+    read_timeout: Duration,
 ) -> EventStream {
     Box::pin(async_stream::try_stream! {
         let mut state = State { limit: Some(limit), ..State::default() };
         loop {
-            // Explicit deadline for recv: SDK operation timeout ends when response headers arrive.
-            let next = tokio::time::timeout(Duration::from_secs(60), receiver.recv()).await
+            // The SDK operation timeout ends at response headers. This timer
+            // bounds an active receive only: it completes before any yield to
+            // the downstream reader, so reader idleness is not an upstream stall.
+            let next = tokio::time::timeout(read_timeout, receiver.recv()).await
                 .map_err(|_| InferenceError::Timeout)?
                 .map_err(|error| receive_error(&error, messages))?;
             match next {

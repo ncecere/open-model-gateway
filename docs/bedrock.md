@@ -191,9 +191,27 @@ text/tool output is limited to 4 MiB, 256 content blocks, and 128 tool calls.
 Requests are also bounded. Inference requests use one SDK attempt, no reqwest
 retries (the connection pool may re-dispatch a request it never wrote; see
 [Lost connections](operations.md#lost-connections-483)), no redirects, no ambient proxy, a 10-second connection limit, a 60-second
-read/stream-event limit, and a 300-second transport/operation deadline. Existing
-gateway deadlines can cancel sooner. No adapter producer task is spawned;
-dropping the returned stream drops the AWS receiver and upstream response body.
+read/stream-event limit. Non-stream Converse retains its 300-second total
+transport/SDK operation deadline. ConverseStream has no total HTTP-body timer:
+the engine's actual per-request deadline bounds its lifetime and drops transport
+even when the downstream reader stops polling. The SDK's 300-second operation
+timeout ends when stream headers are returned; it does not time the returned
+receiver. No startup environment timeout is copied into the adapter as a request
+deadline.
+
+ConverseStream's header wait and pre-stream error-body reads remain bounded by
+60 seconds. Successful streaming bodies use the 60-second active `recv()` timer
+instead of a competing reqwest body-read timer. The SDK receiver returns a frame
+without prefetching the next read. A pause after a yielded event starts a fresh
+receive on resume. If a receive was pending instead, Tokio polls the receiver
+before its timeout: queued healthy frames win over an elapsed timer, unlike the
+old reqwest body-read timer. SDK stalled-download protection also distinguishes
+unpolled readers from pending
+upstream reads. Active receive timeouts still fail the stream; engine deadline
+cancellation and client disconnect remain health-neutral. Unknown usage and
+retained holds follow the ordinary failed/cancelled stream rules. No adapter
+producer task is spawned; dropping the returned stream drops the AWS receiver and
+upstream response body.
 Clients/credential caches are reused per region, identity and endpoint, with at most 64 cached clients.
 
 Errors exposed by the adapter are gateway error enums only. No AWS response body,
