@@ -475,3 +475,8 @@ pub(super) async fn delete_user(
     finish(&state.store, tx, guard, "user", id).await?;
     Ok(no_content())
 }
+
+#[cfg(all(test, feature = "integration-tests"))]
+pub(crate) async fn lock_user_for_test(tx: &mut Transaction<'_, Postgres>, id: Uuid) {
+    assert!(load_user(tx, id, true).await.unwrap().is_some());
+}

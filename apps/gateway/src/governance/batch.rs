@@ -239,17 +239,25 @@ const MAX_POLL_WINDOW_SECONDS: i64 = 8 * 86_400;
 /// (until its poll deadline plus [`LEASE_GRACE`]), and an envelope never
 /// holds budget for a job that was not created. `record.deployment_id` must
 /// be the first group's deployment. A native batch has exactly one group.
+/// `Ok(None)` means the COMMIT outcome is unknown: keep the private work file
+/// because the server may have committed a job that references it. Such a
+/// result is an accounting failure, never an admission to retry.
 pub(crate) async fn admit_batch(
     store: &Store,
     record: &ExecutionStart,
     groups: &[LineGroup],
     job: &NewBatch<'_>,
-) -> Result<(BatchHold, JobRow), InferenceError> {
+) -> Result<Option<(BatchHold, JobRow)>, InferenceError> {
     let result = locks::retry_deadlocks!(
         "admission",
         admit_batch_unobserved(store, record, groups, job).await
     );
-    crate::metrics::observe_admission(&result.as_ref().map(|_| ()).map_err(|e| *e));
+    let observed = match &result {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(InferenceError::Storage),
+        Err(e) => Err(*e),
+    };
+    crate::metrics::observe_admission(&observed);
     result
 }
 #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
@@ -258,7 +266,7 @@ async fn admit_batch_unobserved(
     record: &ExecutionStart,
     groups: &[LineGroup],
     job: &NewBatch<'_>,
-) -> Result<(BatchHold, JobRow), InferenceError> {
+) -> Result<Option<(BatchHold, JobRow)>, InferenceError> {
     let native = job.mode == BatchMode::Native;
     if !(1..=MAX_POLL_WINDOW_SECONDS).contains(&job.poll_window.num_seconds())
         || groups.is_empty()
@@ -365,14 +373,34 @@ async fn admit_batch_unobserved(
     let row = insert_batch(&mut tx, job, pinned.map(|p| p.1.as_str()), deadline)
         .await
         .map_err(storage)?;
-    tx.commit().await.map_err(storage)?;
-    Ok((
+    if let Err(error) = commit_batch(tx).await {
+        // A COMMIT failure can mean only its acknowledgement was lost. Do not
+        // retry it or clean up resources that a committed job may reference.
+        crate::db::accounting_failure::storage_error(&error);
+        #[cfg(test)]
+        crate::db::diagnostics::observe_sqlx(crate::db::diagnostics::Stage::GovernanceStorage, &error);
+        return Ok(None);
+    }
+    Ok(Some((
         BatchHold {
             held_microusd: held,
             tier,
         },
         row,
-    ))
+    )))
+}
+
+// Test the lost acknowledgement boundary after a real PostgreSQL COMMIT.
+#[cfg(test)]
+tokio::task_local! { pub(crate) static LOSE_COMMIT_ACK: bool; }
+
+async fn commit_batch(tx: Tx<'_>) -> Result<(), sqlx::Error> {
+    tx.commit().await?;
+    #[cfg(test)]
+    if LOSE_COMMIT_ACK.try_with(|lose| *lose).unwrap_or(false) {
+        return Err(sqlx::Error::Io(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "commit acknowledgement lost")));
+    }
+    Ok(())
 }
 
 /// The gateway-run batch a line attempt belongs to, as the runner that holds

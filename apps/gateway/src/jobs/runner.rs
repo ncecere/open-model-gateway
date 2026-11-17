@@ -286,6 +286,7 @@ impl Runner {
         // every line failing as a provider configuration error. The envelope
         // is left as it is, for reconciliation.
         if !store::reservation_pending(store, job.execution_id).await? {
+            tracing::warn!(job_id = %job.id, "batch budget hold unavailable; remaining lines will not run");
             state.hold_unavailable.store(true, Ordering::SeqCst);
         }
         let line = self.line_run(job, engine, endpoint, &state);

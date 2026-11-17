@@ -40,6 +40,9 @@ mod discovery;
 mod groups;
 mod users;
 
+#[cfg(all(test, feature = "integration-tests"))]
+pub(crate) use users::lock_user_for_test;
+
 use discovery::{resource_type, resource_types, schema, schemas, service_provider_config};
 pub(crate) use groups::effective_groups;
 use groups::{create_group, delete_group, get_group, list_groups, patch_group, replace_group};

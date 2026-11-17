@@ -26,21 +26,33 @@ pub(crate) async fn accept_job<T>(
     insert: impl AsyncFnOnce(&mut sqlx::PgConnection) -> Result<T, InferenceError>,
 ) -> Result<T, InferenceError> {
     let _queued = gate(&store.lock_gates.settlement).await;
-    let mut tx = crate::db::begin(&store.pool).await.map_err(begin_storage)?;
-    settlement_prefix(store, &mut tx).await?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(accepted_storage)?;
+    if !scoped(store) {
+        // The same global settlement prefix, reported as an accepted-job
+        // failure: the provider already has the work at this boundary.
+        sqlx::raw_sql("SELECT pg_advisory_xact_lock_shared(72419502); SELECT id FROM installation WHERE singleton FOR NO KEY UPDATE")
+            .execute(&mut *tx).await.map_err(accepted_storage)?;
+    }
     let extended = sqlx::query("UPDATE governance_reservations SET lease_expires_at=greatest(lease_expires_at,$2) WHERE execution_id=$1 AND state='pending'")
         .bind(execution)
         .bind(until)
         .execute(&mut *tx)
         .await
-        .map_err(storage)?
+        .map_err(accepted_storage)?
         .rows_affected();
     if extended != 1 {
         tracing::warn!(execution_id = %execution, "job reservation no longer pending; its hold is left to reconciliation");
     }
     let recorded = insert(&mut *tx).await?;
-    tx.commit().await.map_err(storage)?;
+    tx.commit().await.map_err(accepted_storage)?;
     Ok(recorded)
+}
+
+/// Every failed SQL step after upstream acceptance leaves a hold requiring
+/// reconciliation, including a failed begin or commit acknowledgement.
+fn accepted_storage(error: sqlx::Error) -> InferenceError {
+    crate::db::accounting_failure::job_settlement(error);
+    InferenceError::Storage
 }
 
 /// Preview of the conservative hold a batch of `requests` lines with these

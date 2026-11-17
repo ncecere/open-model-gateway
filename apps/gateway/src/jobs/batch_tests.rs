@@ -877,7 +877,7 @@ async fn stale_plan_is_refused_then_replanned(
         assert_eq!(
             crate::governance::batch::admit_batch(&f.store, &record, &plan.groups, &job)
                 .await
-                .map(|(hold, _)| hold),
+                .map(|admission| admission.map(|(hold, _)| hold)),
             Err(InferenceError::Configuration)
         );
     }

@@ -21,6 +21,7 @@ describe("batches", () => {
     expect(batchStatusTone("completed")).toBe("success");
     expect(batchStatusTone("expired")).toBe("danger");
     expect(stopReason("budget_exceeded")).toBe("A budget was exhausted");
+    expect(stopReason("hold_unavailable")).toBe("The batch budget hold is unavailable; remaining lines did not run");
   });
   it("names a line outcome's state once, then its count", () => {
     expect(lineOutcomeLabel({ state: "interrupted", code: "interrupted", lines: 2 })).toBe("Interrupted · 2 lines");

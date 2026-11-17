@@ -268,7 +268,8 @@ impl Jobs {
         };
         // The envelope reservation and the job row are one transaction: the
         // envelope's lease runs to the job's deadline from the moment it
-        // exists, and a failure leaves neither.
+        // exists, and a rollback leaves neither. A lost COMMIT acknowledgement
+        // keeps the work file because the server may have committed its job.
         let admitted = crate::governance::batch::admit_batch(
             &self.store,
             &record,
@@ -294,7 +295,8 @@ impl Jobs {
         )
         .await;
         let job = match admitted {
-            Ok((_, job)) => job,
+            Ok(Some((_, job))) => job,
+            Ok(None) => return Err(InferenceError::Storage.into()),
             Err(e) => {
                 let _ = files
                     .delete(plan.work_file, Some(principal.workspace_id))
