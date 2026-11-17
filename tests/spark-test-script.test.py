@@ -39,6 +39,20 @@ case "$1" in
   metadata) cat "$STUB_METADATA"; exit 0 ;;
 esac
 case "$args" in
+  *"--test runtime_privileges"*)
+    probes=(enterprise_runtime_allowlist_and_rollback_probes controlled_lock_stall_recovers_on_runtime_http_path)
+    if [ "${STUB_MISSING_PROBE:-}" = 1 ]; then probes=("${probes[0]}"); fi
+    n=${#probes[@]}
+    if [[ "$args" == *"--list"* ]]; then
+      printf '%s: test\n' "${probes[@]}"
+    else
+      if [[ "$args" == *"--ignored"* && "${STUB_EMPTY_RUNTIME_RUN:-}" = 1 ]]; then n=0; fi
+      passed=0 ignored=$n
+      if [[ "$args" == *"--ignored"* ]]; then passed=$n ignored=0; fi
+      echo "running $n tests"
+      echo "test result: ok. $passed passed; 0 failed; $ignored ignored; 0 measured; 0 filtered out; finished in 0.01s"
+    fi
+    exit 0 ;;
   *"--message-format=json"*)
     "$REAL_NODE" -e 'const m = require(process.env.STUB_METADATA); for (const p of m.packages) for (const t of p.targets) if (t.test && t.name !== process.env.STUB_MISSING_ARTIFACT) console.log(JSON.stringify({reason:"compiler-artifact", package_id:p.id, target:t, profile:{test:true}, executable:"/fake/"+t.name})); console.log(JSON.stringify({reason:"build-finished", success:true}));'
     exit 0 ;;
@@ -288,6 +302,17 @@ class Shards(Pod):
 
 
 class Integration(Pod):
+    def test_runtime_probe_must_be_present_and_ignored(self):
+        result = self.run_script(OMG_SUITE="integration", STUB_MISSING_PROBE="1", timeout=120)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing ignored runtime probe: controlled_lock_stall_recovers_on_runtime_http_path", result.stdout)
+
+
+    def test_runtime_ignored_run_must_execute_the_listed_probes(self):
+        result = self.run_script(OMG_SUITE="integration", STUB_EMPTY_RUNTIME_RUN="1", timeout=120)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Libtest execution counts do not match", result.stdout)
+
     def test_a_missing_named_cargo_artifact_fails_before_any_tests_run(self):
         result = self.run_script(OMG_SUITE="integration", STUB_MISSING_ARTIFACT="alpha", timeout=120)
         self.assertNotEqual(result.returncode, 0, result.stdout[-3000:])

@@ -288,8 +288,8 @@ suite_integration() {
   # The tools' step includes the datetime workspace crate's PostgreSQL tests and all
   # non-gateway doctests; the gateway's doctests have their own step.
   step integration targets with_db node "$OMG_SCRIPTS/test-integration.mjs" gateway || return 1
-  step integration runtime-privileges with_db cargo test -p open-model-gateway --all-features --test runtime_privileges || bad=1
-  step integration runtime-privileges-ignored with_db cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored --test-threads=1 || bad=1
+  step integration runtime-privileges with_db node "$OMG_SCRIPTS/test-integration.mjs" runtime || bad=1
+  step integration runtime-privileges-ignored with_db node "$OMG_SCRIPTS/test-integration.mjs" runtime-ignored || bad=1
   step integration key-issuance-contention exact_probe with_db env RUST_TEST_NOCAPTURE=1 cargo test -p open-model-gateway --all-features --lib management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement -- --ignored --exact || bad=1
   step integration anthropic-terminal exact_probe with_db cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact || bad=1
   step integration tools with_loopback_db node "$OMG_SCRIPTS/test-integration.mjs" workspace || bad=1
