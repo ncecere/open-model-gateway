@@ -19,23 +19,27 @@ struct Candidate {
 // A terminal gateway record proves the envelope covers no provider attempt.
 // Every admitted line must still have its own reservation; no missing charge
 // can be concealed by releasing the envelope. The job lock fences new lines.
-// Fence the UUID-only reservation lookup before applying eligibility. With
-// sparse statistics PostgreSQL can otherwise bitmap-AND the entire UNKNOWN
-// index for each job, making a bounded page repeatedly scan retained history.
+// Keep every history lookup behind its UUID probe. Large selected-key sets
+// can otherwise make PostgreSQL reorder the joins into repeated full-history
+// scans, even though the result page is bounded. OFFSET 0 preserves the
+// correlated probes without changing eligibility or composite-key matching.
 const CANDIDATES: &str = "SELECT j.id AS job_id,r.execution_id,r.workspace_id,r.api_key_id,r.admitted_at,r.held_microusd
 FROM async_jobs j
 CROSS JOIN LATERAL (
  SELECT r.execution_id,r.workspace_id,r.api_key_id,r.deployment_id,r.admitted_at,r.held_microusd,r.state,r.price_id,r.price_tier,r.unbounded_cost
  FROM governance_reservations r WHERE r.execution_id=j.execution_id OFFSET 0
 ) r
-JOIN inference_executions e ON e.id=r.execution_id AND e.started_at=r.admitted_at
+CROSS JOIN LATERAL (
+ SELECT e.state,e.workload_kind,e.batch_job_id FROM inference_executions e
+ WHERE e.id=r.execution_id AND e.started_at=r.admitted_at OFFSET 0
+) e
 WHERE j.kind='batch' AND j.batch_mode='gateway' AND j.state IN ('completed','failed','cancelled','expired') AND j.completed_at IS NOT NULL
 AND j.upstream_id IS NULL AND j.submit_started_at IS NULL
 AND r.workspace_id=j.workspace_id AND r.api_key_id=j.api_key_id AND r.deployment_id=j.deployment_id
 AND r.state='unknown' AND r.price_id IS NULL AND r.price_tier='standard' AND r.held_microusd IS NOT NULL AND NOT r.unbounded_cost
 AND e.state<>'started' AND e.workload_kind='batches' AND e.batch_job_id IS NULL
-AND NOT EXISTS(SELECT FROM inference_executions other WHERE other.id=j.execution_id AND other.started_at<>r.admitted_at)
-AND NOT EXISTS(SELECT FROM governance_reservations other WHERE other.execution_id=j.execution_id AND other.admitted_at<>r.admitted_at)
+AND NOT EXISTS(SELECT FROM inference_executions other WHERE other.id=j.execution_id AND other.started_at<>r.admitted_at OFFSET 0)
+AND NOT EXISTS(SELECT FROM governance_reservations other WHERE other.execution_id=j.execution_id AND other.admitted_at<>r.admitted_at OFFSET 0)
 AND ($1::timestamptz IS NULL OR r.admitted_at >= $1) AND ($2::timestamptz IS NULL OR r.admitted_at < $2)
 AND ($3::uuid IS NULL OR r.workspace_id=$3) AND ($4::uuid IS NULL OR r.deployment_id=$4)
 AND ($5::uuid[] IS NULL OR (r.execution_id,r.admitted_at) IN (SELECT * FROM unnest($5::uuid[],$6::timestamptz[])))
