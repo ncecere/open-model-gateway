@@ -545,3 +545,5 @@ mod totals_tests;
 mod v3_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod workload_tests;
+
+pub(crate) use pricing::entirely_free_price;

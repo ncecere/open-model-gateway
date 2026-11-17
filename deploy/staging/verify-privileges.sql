@@ -1082,6 +1082,20 @@ BEGIN
  -- disable, catalog, entitlement, policy and settings changes) bump each
  -- topic exactly once, as runtime, when the deferred triggers fire (at commit;
  -- forced here); versions never move back; topics are fixed.
+ -- 0082: the explicit marker permits zero cost without invented token counts.
+ BEGIN UPDATE governance_reservations SET free_price_resolved=true WHERE execution_id=e;
+  RAISE EXCEPTION 'nonzero hold marked free'; EXCEPTION WHEN check_violation THEN NULL; END;
+ DECLARE zero_execution uuid:=gen_random_uuid(); zero_price uuid:=gen_random_uuid(); BEGIN
+  INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version) VALUES(zero_price,d,0,0,100,10,1);
+  INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,started_at) VALUES(zero_execution,ws,k,d,'rollback','openai_compatible',true,'failed',zero_execution,now());
+  INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,price_id,admitted_at,minute_start,month_start,lease_expires_at,state,held_microusd) VALUES(zero_execution,ws,k,d,zero_price,now(),date_trunc('minute',now()),date_trunc('month',now()),now(),'unknown',0);
+  BEGIN UPDATE governance_reservations SET state='settled',actual_microusd=0 WHERE execution_id=zero_execution;
+   RAISE EXCEPTION 'unmarked NULL usage settlement allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  UPDATE governance_reservations SET state='settled',actual_microusd=0,free_price_resolved=true WHERE execution_id=zero_execution;
+  IF EXISTS(SELECT FROM governance_reservations WHERE execution_id=zero_execution AND (input_tokens IS NOT NULL OR output_tokens IS NOT NULL)) THEN RAISE EXCEPTION 'free resolution fabricated tokens'; END IF;
+  INSERT INTO monetary_ledger(id,execution_id,admitted_at,kind,amount_microusd,input_tokens,output_tokens,evidence) SELECT gen_random_uuid(),execution_id,admitted_at,'reconciliation',0,input_tokens,output_tokens,'free-price:'||u||':rollback probe' FROM governance_reservations WHERE execution_id=zero_execution;
+  INSERT INTO audit_events(id,workspace_id,actor_user_id,action,resource_type,resource_id,metadata) VALUES(gen_random_uuid(),ws,u,'usage.free_price_resolved','workspace',ws,'{"reason":"rollback probe","resolved_count":"1"}');
+ END;
  SET CONSTRAINTS ALL IMMEDIATE;
  IF (SELECT bool_or((versions_before->>topic)::bigint+1<>version) FROM config_versions) THEN RAISE EXCEPTION 'configuration versions not bumped once per transaction'; END IF;
  BEGIN UPDATE config_versions SET version=0 WHERE topic='keys'; RAISE EXCEPTION 'configuration version rollback allowed'; EXCEPTION WHEN check_violation THEN NULL; END;

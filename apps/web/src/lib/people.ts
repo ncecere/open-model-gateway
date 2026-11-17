@@ -129,6 +129,7 @@ export const auditActionLabels: Record<string, string> = {
   "settings.logo_uploaded": "Uploaded logo", "settings.logo_removed": "Removed logo",
   "service_account.created": "Created service account", "service_account.updated": "Changed service account",
   "usage.reconciled": "Reconciled usage",
+  "usage.free_price_resolved": "Resolved free-price cost",
   "provider_cost.imported": "Imported provider-reported costs", "provider_cost.mapped": "Attested provider cost mapping", "provider_cost.reconciled": "Reconciled provider-reported costs",
   "access_request.created": "Submitted access request", "access_request.approved": "Approved access request", "access_request.denied": "Denied access request", "access_request.withdrawn": "Withdrew access request", "access_request.expired": "Expired access request", "access_request.applied": "Applied access request", "workspace.discoverability_set": "Changed workspace discoverability",
   "workspace_template.created": "Created workspace template", "workspace_template.version_created": "Added template version", "workspace_template.reviewed": "Reviewed template version", "workspace_template.published": "Published template version", "workspace_template.retired": "Retired template version", "workspace_template.applied": "Created workspace from template", "access_review.created": "Started access review", "access_review.closed": "Closed access review", "access_review.exported": "Exported access review", "access_review.decided": "Decided on reviewed access", "access_review.reviewer_assigned": "Assigned access reviewer",
