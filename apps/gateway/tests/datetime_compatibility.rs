@@ -16,7 +16,7 @@ use openidconnect::{
 use reqwest::{Client, Response, StatusCode};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use sqlx::{ConnectOptions, PgPool};
+use sqlx::{ConnectOptions, Connection, PgConnection, PgPool};
 use std::{
     process::Stdio,
     sync::{Arc, Mutex},
@@ -104,13 +104,25 @@ impl Gateway {
             .apply_runtime_grants()
             .await
             .unwrap();
-        let database = pool
-            .connect_options()
-            .as_ref()
-            .clone()
-            .options([("role", "gateway_runtime")])
-            .to_url_lossy()
-            .to_string();
+        // The child reparses its URL, so the startup role must be encoded in it.
+        let mut database = pool.connect_options().as_ref().to_url_lossy();
+        database
+            .query_pairs_mut()
+            .append_pair("options", "-c role=gateway_runtime");
+        let database = database.to_string();
+        let mut runtime = PgConnection::connect(&database).await.unwrap();
+        let (role, restricted): (String, bool) = sqlx::query_as(
+            "SELECT current_user::text, NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls FROM pg_roles WHERE rolname=current_user",
+        )
+        .fetch_one(&mut runtime)
+        .await
+        .unwrap();
+        assert_eq!(role, "gateway_runtime", "gateway connection identity");
+        assert!(
+            restricted,
+            "gateway connection has elevated role attributes"
+        );
+        runtime.close().await.unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         drop(listener);
