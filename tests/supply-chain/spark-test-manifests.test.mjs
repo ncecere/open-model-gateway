@@ -99,7 +99,7 @@ test("the script installs and downloads nothing of its own", () => {
   assert.equal(installs.length, 1);
   assert.match(installs[0], /"\$channel" --profile minimal --component rustfmt --component clippy --no-self-update/);
   // Only the public repository, over HTTPS, at an exact commit.
-  assert.match(read("test-job.yaml"), /OMG_REPO_URL, value: "https:\/\/github\.com\/ncecere\/open-model-gateway\.git"/);
+  assert.match(read("test-job.yaml"), /OMG_REPO_URL, value: "https:\/\/github\.com\/bitop-dev\/open-model-gateway\.git"/);
   assert.match(code, /git rev-parse HEAD/);
   assert.match(code, /\( main 2>&1; echo "\$\?" >"\$status_file" \) \| redact &/, "all output passes the redaction");
   assert.match(code, /trap terminate TERM INT/, "bash is PID 1 in the pod: SIGTERM must be trapped for `down` and the deadline to stop it");

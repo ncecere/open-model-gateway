@@ -76,3 +76,10 @@ test("fixtures: a step added to CI, a removed one and a command the script lost 
   noReason.uncovered[0].why = "";
   assert.match(problems(base, noReason).join(), /has no reason/);
 });
+
+test("whole integration targets use CI inventory and execution validators, and summaries disclose the SDK matrices", () => {
+  const helper = readFileSync(join(root, "deploy/spark/test-integration.mjs"), "utf8");
+  for (const name of ["discoverTargets", "parseListing", "targetArgs", "validateRun"]) assert.ok(helper.includes(name), name);
+  assert.ok(helper.includes(".github/scripts/rust-shards.mjs"));
+  assert.ok(coverage.always.some(note => note.includes("sdk-compat") && note.includes("OAuth2") && note.includes("OpenID Connect")));
+});

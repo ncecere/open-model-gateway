@@ -60,13 +60,14 @@ with_db() { # run a command with DATABASE_URL pointing at the run's PostgreSQL; 
   DATABASE_URL="postgres://postgres:${pw}@${OMG_DB_HOST}:${OMG_DB_PORT}/gateway" "$@"
 }
 
-with_loopback_db() { # the load-generator tests refuse any host but loopback (CI's service container is on localhost): relay 127.0.0.1 to the service
+with_loopback_db() { # the load-generator and datetime tests require loopback (CI's service container is on localhost): relay 127.0.0.1 to the service
   local code pw relay
   pw=$(<"$OMG_SECRETS/password") || return 1
   PG_FORWARD_TARGET="$OMG_DB_HOST" node "$OMG_SCRIPTS/pg-forward.mjs" &
   relay=$!
   sleep 1
-  DATABASE_URL="postgres://postgres:${pw}@127.0.0.1:5432/gateway" "$@"
+  local url="postgres://postgres:${pw}@127.0.0.1:5432/gateway"
+  DATABASE_URL="$url" DATETIME_PG_URL="$url" "$@"
   code=$?
   kill "$relay" 2>/dev/null
   wait "$relay" 2>/dev/null
@@ -264,19 +265,6 @@ suite_lib() {
   return "$bad"
 }
 
-integration_test_args() { # one `--test <name>` per gateway test target, minus the two other steps below
-  cargo metadata --no-deps --all-features --format-version 1 --locked | node -e '
-    const meta = JSON.parse(require("fs").readFileSync(0, "utf8"));
-    const own = new Set(["filestore_s3", "runtime_privileges"]);
-    const names = [];
-    for (const pkg of meta.packages) {
-      if (pkg.name !== "open-model-gateway") continue;
-      for (const t of pkg.targets) if (t.kind.length === 1 && t.kind[0] === "test" && t.test && !own.has(t.name)) names.push(t.name);
-    }
-    console.log(names.sort().map(n => `--test ${n}`).join("\n"));
-  '
-}
-
 exact_probe() { # a dedicated exact test must run once; libtest succeeds even if the name matches nothing
   local out code
   out=$(mktemp "$OMG_TMP/exact-probe.XXXXXX") || return 1
@@ -291,22 +279,20 @@ exact_probe() { # a dedicated exact test must run once; libtest succeeds even if
 }
 
 suite_integration() {
-  local bad=0 selected
+  local bad=0
   prepare_npm integration || return 1
   wait_db || return 1
   db_marker
-  selected=$(cd "$SRC" && integration_test_args) || { echo "cannot list the gateway test targets"; return 1; }
-  [ -n "$selected" ] || { echo "no gateway integration test targets selected"; return 1; }
   # Every gateway test target, the gateway binary's own tests, then the targets CI gives to gateway-special
   # except filestore_s3 (it starts MinIO and RustFS containers: no Docker in a pod) and the backup drill.
-  # The tools' step also runs the tools' doctests; the gateway's doctests have their own step.
-  # shellcheck disable=SC2086
-  step integration targets with_db cargo test -p open-model-gateway --all-features --no-fail-fast $selected --bins || bad=1
+  # The tools' step includes the datetime workspace crate's PostgreSQL tests and all
+  # non-gateway doctests; the gateway's doctests have their own step.
+  step integration targets with_db node "$OMG_SCRIPTS/test-integration.mjs" gateway || return 1
   step integration runtime-privileges with_db cargo test -p open-model-gateway --all-features --test runtime_privileges || bad=1
   step integration runtime-privileges-ignored with_db cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored --test-threads=1 || bad=1
   step integration key-issuance-contention exact_probe with_db env RUST_TEST_NOCAPTURE=1 cargo test -p open-model-gateway --all-features --lib management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement -- --ignored --exact || bad=1
   step integration anthropic-terminal exact_probe with_db cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact || bad=1
-  step integration tools with_loopback_db cargo test --workspace --exclude open-model-gateway --all-features --no-fail-fast || bad=1
+  step integration tools with_loopback_db node "$OMG_SCRIPTS/test-integration.mjs" workspace || bad=1
   step integration doctests with_db cargo test -p open-model-gateway --all-features --doc || bad=1
   return "$bad"
 }

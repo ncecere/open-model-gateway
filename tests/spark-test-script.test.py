@@ -30,6 +30,7 @@ NONCE = "0123456789abcdef"
 PASSWORD = "s3cr3t-p4ss/word&x"  # characters that are special to sed
 
 CARGO = r"""#!/usr/bin/env bash
+if [ "${1:-}" = --color ]; then shift 2; fi
 echo "cargo $*" >> "$STUB_LOG"
 pw=$(cat "$STUB_PASSWORD_FILE")
 echo "env cargo db=${DATABASE_URL:+set} vars=$(env | grep -F -- "$pw" | cut -d= -f1 | tr '\n' ',') nonce=$(env | grep -c '^OMG_NONCE=')" >> "$STUB_LOG"
@@ -38,7 +39,16 @@ case "$1" in
   metadata) cat "$STUB_METADATA"; exit 0 ;;
 esac
 case "$args" in
-  *"--list --format terse"*) cat "$STUB_LISTING"; exit 0 ;;
+  *"--message-format=json"*)
+    "$REAL_NODE" -e 'const m = require(process.env.STUB_METADATA); for (const p of m.packages) for (const t of p.targets) if (t.test && t.name !== process.env.STUB_MISSING_ARTIFACT) console.log(JSON.stringify({reason:"compiler-artifact", package_id:p.id, target:t, profile:{test:true}, executable:"/fake/"+t.name})); console.log(JSON.stringify({reason:"build-finished", success:true}));'
+    exit 0 ;;
+  *"--list"*)
+    if [[ "$args" == *"--lib"* ]] && [[ "$args" == *"-p open-model-gateway"* ]]; then cat "$STUB_LISTING"; exit 0; fi
+    [[ "$args" == *"--bin"* ]] && n=0 || n=1
+    [[ "$args" == *"--ignored"* ]] && n=0
+    [ "$n" = 1 ] && echo "fixture::test: test"
+    [[ "$args" == *"--format pretty"* ]] && printf "\n%s tests, 0 benchmarks\n" "$n"
+    exit 0 ;;
   *"--no-run"*) exit 0 ;;
   *"-- --exact "*)
     names="${args#*-- --exact }"
@@ -51,7 +61,9 @@ case "$args" in
     echo "running $n tests"
     echo "test result: ok. $n passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
     exit 0 ;;
+  *"--bin"*) echo "running 0 tests"; echo "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"; exit 0 ;;
   *)
+    echo "running 1 tests"
     echo "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
     [ -n "${STUB_SLEEP:-}" ] && sleep "$STUB_SLEEP"
     exit 0 ;;
@@ -86,7 +98,13 @@ esac
 
 
 def metadata(tests):
-    return json.dumps({"packages": [{"name": "open-model-gateway", "targets": [{"kind": ["test"], "name": name, "test": True} for name in tests] + [{"kind": ["lib"], "name": "open_model_gateway", "test": True}]}]})
+    def target(kind, name):
+        return {"kind": [kind], "name": name, "test": True}
+    packages = [
+        {"id": "open-model-gateway", "name": "open-model-gateway", "targets": [target("test", name) for name in tests] + [target("lib", "open_model_gateway"), target("bin", "empty_gateway")]},
+        {"id": "fixture-tools", "name": "fixture-tools", "targets": [target("lib", "fixture_tools"), target("bin", "empty_tool")]},
+    ]
+    return json.dumps({"workspace_members": [p["id"] for p in packages], "packages": packages})
 
 
 def git(*args, cwd):
@@ -128,7 +146,8 @@ class Pod(unittest.TestCase):
             folder.mkdir(parents=True)
         (self.secrets / "password").write_text(PASSWORD)
         (self.image_rustup / "toolchains" / "1.99.1" / "bin" / "rustc").write_text("image rustc")
-        shutil.copy(ROOT / "deploy" / "spark" / "pg-forward.mjs", self.scripts / "pg-forward.mjs")
+        for name in ("pg-forward.mjs", "test-integration.mjs"):
+            shutil.copy(ROOT / "deploy" / "spark" / name, self.scripts / name)
         for name, body in (("cargo", CARGO), ("npm", NPM), ("rustup", RUSTUP), ("rustc", RUSTC), ("node", NODE)):
             path = self.noderoot / "bin" / name
             path.write_text(body)
@@ -153,7 +172,7 @@ class Pod(unittest.TestCase):
             self.repo.mkdir(exist_ok=True)
             git("init", "-q", "-b", "main", cwd=self.repo)
             git("config", "uploadpack.allowAnySHA1InWant", "true", cwd=self.repo)
-        files = files or {"rust-toolchain.toml": '[toolchain]\nchannel = "1.99.1"\ncomponents = ["rustfmt", "clippy"]\n', "Cargo.toml": "[workspace]\n", "package.json": "{}\n", "apps/gateway/src/lib.rs": "// lib\n", "README.md": "readme\n"}
+        files = files or {"rust-toolchain.toml": '[toolchain]\nchannel = "1.99.1"\ncomponents = ["rustfmt", "clippy"]\n', "Cargo.toml": "[workspace]\n", "package.json": "{}\n", "apps/gateway/src/lib.rs": "// lib\n", "README.md": "readme\n", ".github/scripts/rust-shards.mjs": (ROOT / ".github/scripts/rust-shards.mjs").read_text()}
         for name, text in files.items():
             path = self.repo / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -269,12 +288,52 @@ class Shards(Pod):
 
 
 class Integration(Pod):
+    def test_a_missing_named_cargo_artifact_fails_before_any_tests_run(self):
+        result = self.run_script(OMG_SUITE="integration", STUB_MISSING_ARTIFACT="alpha", timeout=120)
+        self.assertNotEqual(result.returncode, 0, result.stdout[-3000:])
+        self.assertIn("Missing Cargo test executables", result.stdout)
+        self.assertFalse([c for c in self.stub_calls() if c.startswith("cargo test") and "--no-run" not in c])
+
+    def test_a_missing_named_integration_target_cannot_report_a_full_pass(self):
+        stub = self.noderoot / "bin" / "cargo"
+        missing = r'''
+if [[ "$args" == *"--test alpha"* ]] && [[ "$args" != *"--list"* ]] && [[ "$args" != *"--no-run"* ]]; then
+  echo "running 0 tests"
+  echo "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+  exit 0
+fi
+'''
+        stub.write_text(stub.read_text().replace('args="$*"\n', 'args="$*"\n' + missing))
+        result = self.run_script(OMG_SUITE="integration", timeout=120)
+        self.assertNotEqual(result.returncode, 0, result.stdout[-3000:])
+        parsed = tool.parse_log(result.stdout, NONCE)
+        summary = tool.build_summary("t", "integration", "main", self.commit, parsed, "failed", {}, 1)
+        self.assertEqual((summary["result"], tool.result_exit(summary)), ("failed", 1))
+
+    def test_workspace_datetime_tests_receive_the_disposable_loopback_database(self):
+        stub = self.noderoot / "bin" / "cargo"
+        guard = r'''
+if [[ "$args" == *"-p fixture-tools"* ]] || [[ "$args" == *"--workspace --exclude open-model-gateway"* ]]; then
+  if [ "${DATETIME_PG_URL:-}" != "${DATABASE_URL:-}" ] || [[ "$DATETIME_PG_URL" != *@127.0.0.1:5432/gateway ]]; then
+    echo "datetime workspace tests require the run's explicit loopback database"
+    exit 101
+  fi
+elif [[ "$args" != *"metadata"* && "$args" != *"--no-run"* ]] && [ -n "${DATETIME_PG_URL:-}" ]; then
+  echo "datetime database credential leaked outside the workspace step"
+  exit 102
+fi
+'''
+        stub.write_text(stub.read_text().replace('args="$*"\n', 'args="$*"\n' + guard))
+        result = self.run_script(OMG_SUITE="all", timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout[-3000:])
+        self.assertNotIn(PASSWORD, result.stdout + result.stderr)
+
     def test_an_empty_integration_selection_is_an_error(self):
         self.metadata.write_text(metadata(["filestore_s3", "runtime_privileges"]))
         result = self.run_script(OMG_SUITE="integration")
         self.assertEqual(result.returncode, 1)
         self.assertIn("no gateway integration test targets selected", result.stdout)
-        self.assertFalse([c for c in self.stub_calls() if c.startswith("cargo test")], "no test ran")
+        self.assertFalse([c for c in self.stub_calls() if c.startswith("cargo test") and "--no-run" not in c], "no test ran")
 
     def test_a_missing_exact_integration_probe_fails_even_when_other_tests_pass(self):
         stub = self.noderoot / "bin" / "cargo"
@@ -294,12 +353,14 @@ class Integration(Pod):
         result = self.run_script(OMG_SUITE="integration", timeout=120)
         self.assertEqual(result.returncode, 0, result.stdout[-3000:])
         calls = [c for c in self.stub_calls() if c.startswith("cargo test")]
-        first = calls[0]
-        self.assertIn("--test alpha --test beta --bins", first)
-        self.assertNotIn("filestore_s3", " ".join(calls))
-        self.assertEqual(sum(1 for c in calls if c.endswith("--doc")), 1, "one doctest run, not two")
+        self.assertIn("cargo test -p open-model-gateway --all-features --test alpha -- --exact", calls)
+        self.assertIn("cargo test -p open-model-gateway --all-features --test beta -- --exact", calls)
+        self.assertIn("cargo test -p open-model-gateway --all-features --bin empty_gateway -- --exact", calls)
+        self.assertNotIn("filestore_s3 -- --exact", " ".join(calls))
+        self.assertEqual(sum(1 for c in calls if c.endswith("--doc")), 2, "one gateway and one non-gateway doctest run")
         self.assertIn("cargo test -p open-model-gateway --all-features --doc", calls)
-        self.assertIn("cargo test --workspace --exclude open-model-gateway --all-features --no-fail-fast", calls)
+        self.assertIn("cargo test --workspace --exclude open-model-gateway --all-features --doc", calls)
+        self.assertIn("running 0 tests", result.stdout, "legitimate empty binary targets are exercised")
         parsed = tool.parse_log(result.stdout, NONCE)
         self.assertEqual({s["name"] for s in parsed["steps"] if s["suite"] == "integration"}, set(tool.REQUIRED_STEPS["integration"]))
 
@@ -339,8 +400,9 @@ class Secrets(Pod):
                 continue
             command = calls[index - 1]
             if "db=set" in line:
-                self.assertIn("vars=DATABASE_URL,", line, command)
-                self.assertTrue(command.startswith("cargo test"), f"only a cargo test step connects to the database: {command}")
+                variables = "DATABASE_URL,DATETIME_PG_URL," if ("test --workspace --exclude open-model-gateway" in command or "-p fixture-tools" in command or "metadata" in command or "--no-run --message-format" in command) and "DATETIME_PG_URL," in line else "DATABASE_URL,"
+                self.assertIn(f"vars={variables}", line, command)
+                self.assertTrue(command.startswith(("cargo test", "cargo metadata")), command)
             else:
                 self.assertIn("vars= ", line + " ", command)
                 self.assertTrue(re.search(r"vars=\s*nonce", line), f"no variable holds the password for: {command}")

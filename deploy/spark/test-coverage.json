@@ -34,6 +34,7 @@
   "always": [
     "amd64: this is an arm64 run, GitHub CI is the amd64 gate",
     "the browser suite (npm run test:browser)",
+    "the sdk-compat CI matrices: vendored OAuth2 and OpenID Connect formatting, default/all-feature tests, examples, doctests and Clippy",
     "the container and staging image tests, and the image, scan and signature jobs",
     "cargo deny, the vendored advisories, npm audit, secret scanning and the Helm job",
     "Node 22.23.4 here (the Dockerfile's image), CI's setup-node installs another 22.x patch release",

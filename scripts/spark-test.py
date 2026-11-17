@@ -765,7 +765,7 @@ class SparkTest:
             self.kubectl(["apply", "-f", "-"], slot=slot, stdin=cache)
             # `create`, not `apply`: apply would copy the password into the last-applied-configuration annotation.
             self.kubectl(["create", "-f", "-"], slot=slot, stdin=superuser_secret())
-            self.kubectl(["create", "configmap", SCRIPT_CONFIGMAP, f"--from-file=test-run.sh={script}", f"--from-file=pg-forward.mjs={DEPLOY / 'pg-forward.mjs'}"], slot=slot)
+            self.kubectl(["create", "configmap", SCRIPT_CONFIGMAP, f"--from-file=test-run.sh={script}", f"--from-file=pg-forward.mjs={DEPLOY / 'pg-forward.mjs'}", f"--from-file=test-integration.mjs={DEPLOY / 'test-integration.mjs'}"], slot=slot)
             self.kubectl(["create", "-f", "-"], slot=slot, stdin=cluster)
             self.kubectl(["create", "-f", "-"], slot=slot, stdin=job)
         except BaseException:

@@ -54,7 +54,7 @@ spec:
           env:
             - {name: OMG_SUITE, value: "__SUITE__"}
             - {name: OMG_SHA, value: "__SHA__"}
-            - {name: OMG_REPO_URL, value: "https://github.com/ncecere/open-model-gateway.git"}
+            - {name: OMG_REPO_URL, value: "https://github.com/bitop-dev/open-model-gateway.git"}
             - {name: OMG_NONCE, value: "__NONCE__"}
             - {name: OMG_FRESH, value: "__FRESH__"}
             # Cargo jobs, libtest threads and Vitest workers follow the CPU limit (--fast raises all three). The
