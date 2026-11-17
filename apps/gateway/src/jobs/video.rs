@@ -53,8 +53,8 @@ pub(crate) fn settlement(job: &JobRow, v: &UpstreamVideo) -> Option<Settlement> 
                 },
             })
         }
-        // The provider failed the job; without usage the hold is kept unless
-        // the price is entirely free.
+        // The provider accepted and then failed the job: usage stays unknown
+        // and the hold is kept even when the price is entirely free.
         JobState::Failed => Some(Settlement {
             outcome: Outcome::Failed,
             error: Some(InferenceError::UpstreamRejected),
