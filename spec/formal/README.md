@@ -46,7 +46,7 @@ upstream attempt (1:1 through the foreign key), with append-only ledger rows `ho
 | `unknown` -> `settled` (operator evidence) | `resolve_usage_once` (`reconcile.rs` ~244) | Admin authority re-checked in the tx; reservation `FOR UPDATE` (scoped) or the installation row (global); read `r.state != "unknown"` and execution terminal; the UPDATE itself has no state predicate |
 | `settled` -> anything | nobody | Every writer above refuses; the database does not (section 4.2, finding 4) |
 | `held` changed | settlement raises with `greatest(held, floor)`; the batch envelope transfer (`admit_line`, `SET held_microusd=held_microusd-$2`) moves hold into a line's own reservation; the **realtime** paths (`governance/realtime.rs`: window growth, and finalization `held = retained + actual`) can also change it | realtime is out of scope (section 2); `HoldNeverReleased` is stated for the request path |
-| lease extended | `extend_lease` (`governance/jobs.rs`) | `state='pending'`, `greatest(...)` |
+| lease extended | `accept_job` (`governance/jobs.rs`, video; a batch has its final lease from admission) | `state='pending'`, `greatest(...)` |
 
 The request thread (`inference/attempt.rs`): `admit`, `call_upstream` under the request deadline,
 then the outcome is settled inline (`settle_complete`, `track_stream`). `ExecutionGuard::finish`
@@ -252,7 +252,12 @@ money.
    that landed but looked failed is the benign counterpart: the row is already `settled` and the
    invariants hold. A cost-accuracy gap, not a safety violation.
 3. **Batch and video envelopes are admitted with a 10-minute lease and extended in a second
-   transaction: confirmed by reading, low.** `admit_batch` uses `ADMISSION_LEASE_SECONDS = 600`
+   transaction: confirmed by reading, low. Fixed in #640; the model was not re-run.** Since #640 a
+   batch's job row is written in its admission transaction, with the envelope's final lease (poll
+   deadline plus grace), and a video's lease extension and job row are one transaction. A gateway-run
+   batch that an earlier release left with an `unknown` envelope now ends `failed` with
+   `hold_unavailable` instead of every line failing as a provider configuration error. The text
+   below is the finding as made. `admit_batch` used `ADMISSION_LEASE_SECONDS = 600`
    (`jobs/batch.rs`), then `insert_batch`, then `hold_until` -> `extend_lease`. If the process dies
    or the extension fails (it only logs) the reconciler marks the envelope `unknown` after 10
    minutes while the job row stays queued; `admit_line` then refuses every line (`state != "pending"`)

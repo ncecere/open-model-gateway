@@ -870,3 +870,46 @@ async fn a_job_record_failing_after_acceptance_is_a_settlement_failure(pool: PgP
         [("job_settlement", "other_database")]
     );
 }
+
+/// #640: the video job row and the extension of its reservation's lease are
+/// one transaction. When the lease cannot be extended, no job row is left
+/// behind whose reservation a short lease would turn `unknown` while the
+/// provider's video is polled: the create fails and the reservation keeps the
+/// hold it was admitted with, for reconciliation.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_video_lease_that_cannot_be_extended_leaves_no_job_row(pool: PgPool) {
+    let f = fixture(pool).await;
+    video_setup(&f).await;
+    sqlx::raw_sql(
+        r#"CREATE FUNCTION refuse_lease_extension_640() RETURNS trigger LANGUAGE plpgsql AS
+             $$ BEGIN
+                  IF NEW.lease_expires_at > OLD.lease_expires_at THEN
+                    RAISE EXCEPTION 'lease extension refused';
+                  END IF;
+                  RETURN NEW;
+                END $$;
+           CREATE TRIGGER refuse_lease_extension_640 BEFORE UPDATE ON governance_reservations
+             FOR EACH ROW EXECUTE FUNCTION refuse_lease_extension_640();"#,
+    )
+    .execute(&f.store.pool)
+    .await
+    .unwrap();
+    let fake = Fake::default();
+    let j = jobs(&f, &fake, false);
+    fake.push_video(upstream_video(JobState::Queued, Some(8)));
+    let request_id = Uuid::new_v4();
+    let created = j
+        .create_video(f.principal, video_request(), request_id)
+        .await;
+    assert!(matches!(
+        created,
+        Err(JobError::Inference(InferenceError::Storage))
+    ));
+    assert_eq!(fake.calls(), ["create_video"], "the provider accepted it");
+    let jobs_left: i64 = sqlx::query_scalar("SELECT count(*) FROM async_jobs")
+        .fetch_one(&f.store.pool)
+        .await
+        .unwrap();
+    assert_eq!(jobs_left, 0);
+    assert_eq!(amounts(&f, request_id).await.0, "pending");
+}

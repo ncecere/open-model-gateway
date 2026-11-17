@@ -48,9 +48,10 @@ pub(crate) enum Stage {
     /// of [`Self::JobSettlement`].
     JobStorage,
     /// A job statement that fails after admission and leaves the reservation
-    /// with nothing but reconciliation to settle it: the batch record after
-    /// admission, the video job record after the provider accepted it, and a
-    /// native batch's upstream id after submission.
+    /// with nothing but reconciliation to settle it: the video job record
+    /// after the provider accepted it, and a native batch's upstream id after
+    /// submission. (A batch record is written in its admission transaction,
+    /// which rolls back whole.)
     JobSettlement,
     /// A database failure of a maintenance run (`maintenance.rs`): the
     /// settings refresh, the scope-lock wait flush and the leased jobs.
