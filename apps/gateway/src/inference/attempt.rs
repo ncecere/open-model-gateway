@@ -1,6 +1,12 @@
 //! One request's route eligibility and its attempts: admission, the upstream
 //! call, settlement of each outcome and the streamed-response tracker.
 use super::*;
+use std::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
+use tracing::Instrument;
 
 impl Engine {
     /// Admits one attempt inside its `admission` phase group, then records
@@ -534,4 +540,147 @@ fn track_stream(
         }
     };
     Box::pin(tracked)
+}
+
+impl ExecutionGuard {
+    /// Writes this attempt's outcome and usage and returns the write's
+    /// result. The outcome and usage are final when this is called, so the
+    /// write must finish whether or not the request is still there to wait
+    /// for it.
+    ///
+    /// - The write is polled by the request itself, with no task of its own
+    ///   on the normal path. Dropping the request (a client disconnect)
+    ///   while it is in flight hands the unfinished write to a spawned task
+    ///   ([`HandOff`]) that polls it to its end. Upstream work is unaffected:
+    ///   it ended before this was called, and a drop before that point takes
+    ///   the cancellation path in `Drop` instead.
+    /// - The write has exactly one owner at any time: the request until it
+    ///   finishes or is dropped, then the spawned task. `finish` has set
+    ///   `finished`, so `Drop` queues no second settlement. The failure
+    ///   metric, log line and operational event of a failed write are emitted
+    ///   by the write itself, once, with or without a waiting request.
+    /// - `SETTLEMENT_DEADLINE` starts when the write is built and travels
+    ///   with it, so a stuck write ends as `Storage` after 3 s whoever polls
+    ///   it, and releases its connection.
+    /// - The write holds the request's concurrency permit until it ends, so
+    ///   detached writes are bounded by `EngineLimits::max_concurrent` and by
+    ///   the deadline. A graceful shutdown waits for them through the pool
+    ///   close, which waits for checked-out connections, like the
+    ///   cancellation settlement.
+    /// - It runs in the request's span, so a failure is logged with the same
+    ///   fields while the span is alive.
+    pub(super) async fn settle_to_completion(
+        &self,
+        outcome: Outcome,
+        error: Option<InferenceError>,
+        phases: Option<Arc<Mutex<telemetry::PhaseBuffer>>>,
+    ) -> Result<(), InferenceError> {
+        let record = self.record(outcome, error);
+        let attempt_telemetry = self.telemetry_now();
+        let repository = self.repository.clone();
+        let (id, trace, permit) = (self.id, self.log_trace_id.clone(), self._permit.clone());
+        let settlement = timeout(SETTLEMENT_DEADLINE, async move {
+            let settle = repository.finish_attempt(&record, &attempt_telemetry);
+            match phases {
+                Some(buffer) => telemetry::with_phases(buffer, settle).await,
+                None => settle.await,
+            }
+        });
+        let settlement = crate::db::accounting_failure::explicit_settlement(settlement);
+        #[cfg(test)]
+        let settlement = crate::db::diagnostics::settlement(
+            self.diagnostics.clone(),
+            crate::db::diagnostics::Stage::ExplicitSettlement,
+            settlement,
+        );
+        HandOff::new(
+            async move {
+                let _permit = permit;
+                let result = settlement
+                    .await
+                    .map_err(|_| {
+                        // A write that fails fast counts itself as held inside
+                        // `finish_attempt`; one that times out never gets that far.
+                        crate::metrics::METRICS
+                            .observe_settlement(crate::metrics::Settlement::Held);
+                        InferenceError::Storage
+                    })
+                    .and_then(|result| result);
+                if result.is_err() {
+                    report_unsettled(id, trace);
+                }
+                result
+            }
+            .in_current_span(),
+        )
+        .await
+    }
+}
+
+/// Polls `future` in place on the caller's task. If the caller is dropped
+/// before it finishes, the rest of it is polled to its end on a spawned task
+/// instead, with nothing waiting for the result. Without a runtime to spawn
+/// on, an unfinished future is dropped like any other.
+struct HandOff<F>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    future: Option<Pin<Box<F>>>,
+}
+impl<F> HandOff<F>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    fn new(future: F) -> Self {
+        Self {
+            future: Some(Box::pin(future)),
+        }
+    }
+}
+impl<F> Future for HandOff<F>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    type Output = F::Output;
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
+        // Taken while polled: a future that panics is never resumed by `Drop`.
+        let mut future = self.future.take().expect("polled after completion");
+        match future.as_mut().poll(cx) {
+            Poll::Ready(output) => Poll::Ready(output),
+            Poll::Pending => {
+                self.future = Some(future);
+                Poll::Pending
+            }
+        }
+    }
+}
+impl<F> Drop for HandOff<F>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    fn drop(&mut self) {
+        if let Some(future) = self.future.take()
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            runtime.spawn(async move {
+                future.await;
+            });
+        }
+    }
+}
+
+/// A settlement that did not complete leaves the reservation for
+/// reconciliation. Only generation finalization may carry a trace id, from
+/// the shared-admission-proven provenance; the value is already the opaque
+/// type, never re-minted here.
+fn report_unsettled(id: Uuid, trace: Option<LogTraceId>) {
+    tracing::error!(execution_id = %id, trace_id = trace.as_ref().map(LogTraceId::as_str), "inference finalization failed; reconciliation required");
+    crate::ops_log::emit(crate::ops_log::OpsEvent::FinalizationNeedsReconciliation {
+        finalizer: crate::ops_log::Finalizer::GenerationFinish,
+        trace,
+    });
 }

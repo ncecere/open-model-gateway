@@ -446,44 +446,10 @@ impl ExecutionGuard {
         error: Option<InferenceError>,
         phases: Option<Arc<Mutex<telemetry::PhaseBuffer>>>,
     ) -> Result<(), InferenceError> {
-        // Mark attempted finalization first: failed writes remain 'started' for reconciliation.
+        // Marked before the write starts: from here the settlement write is the
+        // only owner of this attempt's accounting, and `Drop` never settles it.
         self.finished = true;
-        let record = self.record(outcome, error);
-        let attempt_telemetry = self.telemetry_now();
-        let repository = self.repository.clone();
-        let settlement = timeout(SETTLEMENT_DEADLINE, async move {
-            let settle = repository.finish_attempt(&record, &attempt_telemetry);
-            match phases {
-                Some(buffer) => telemetry::with_phases(buffer, settle).await,
-                None => settle.await,
-            }
-        });
-        let settlement = crate::db::accounting_failure::explicit_settlement(settlement);
-        #[cfg(test)]
-        let settlement = crate::db::diagnostics::settlement(
-            self.diagnostics.clone(),
-            crate::db::diagnostics::Stage::ExplicitSettlement,
-            settlement,
-        );
-        let result = settlement
-            .await
-            .map_err(|_| {
-                // A write that fails fast counts itself as held inside
-                // `finish_attempt`; one that times out never gets that far (#136).
-                crate::metrics::METRICS.observe_settlement(crate::metrics::Settlement::Held);
-                InferenceError::Storage
-            })
-            .and_then(|result| result);
-        if result.is_err() {
-            tracing::error!(execution_id = %self.id, trace_id = self.log_trace_id.as_ref().map(LogTraceId::as_str), "inference finalization failed; reconciliation required");
-            // Only generation finalization (this call) may carry a trace id,
-            // from the same already shared-admission-proven provenance; the
-            // value is already the opaque type, never re-minted here.
-            crate::ops_log::emit(crate::ops_log::OpsEvent::FinalizationNeedsReconciliation {
-                finalizer: crate::ops_log::Finalizer::GenerationFinish,
-                trace: self.log_trace_id.clone(),
-            });
-        }
+        let result = self.settle_to_completion(outcome, error, phases).await;
         // Health is advisory; a failed health write never discards a durably accounted response.
         if self.health_observation
             && outcome != Outcome::Cancelled
@@ -549,6 +515,8 @@ impl Drop for ExecutionGuard {
 
 #[cfg(all(test, feature = "integration-tests"))]
 pub(crate) mod admission_validation_tests;
+#[cfg(all(test, feature = "integration-tests"))]
+mod settlement_disconnect_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod steering_tests;
 #[cfg(test)]

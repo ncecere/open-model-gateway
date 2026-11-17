@@ -21,6 +21,11 @@ struct MemoryRepository {
     fail_finish: AtomicBool,
     /// `finish` never returns (a write stuck behind a lock or a failover).
     hang_finish: AtomicBool,
+    /// `finish` stops at a gate: `gate_entered` fires when a write reaches it
+    /// and the write continues once `gate_release` is notified.
+    gate_finish: AtomicBool,
+    gate_entered: tokio::sync::Notify,
+    gate_release: tokio::sync::Notify,
     plan: Mutex<Option<crate::routing::RoutePlan>>,
     attempts: Mutex<Vec<(Uuid, i32)>>,
     health: Mutex<Vec<Option<InferenceError>>>,
@@ -67,6 +72,10 @@ impl InferenceRepository for MemoryRepository {
         }
         if self.hang_finish.load(Ordering::SeqCst) {
             std::future::pending::<()>().await;
+        }
+        if self.gate_finish.load(Ordering::SeqCst) {
+            self.gate_entered.notify_one();
+            self.gate_release.notified().await;
         }
         self.finishes.lock().unwrap().push(ExecutionFinish {
             id: record.id,
@@ -906,6 +915,123 @@ async fn diagnostic_drop_settlement_registers_before_spawn_and_outlives_scope() 
         repository.finishes.lock().unwrap()[0].outcome,
         Outcome::Cancelled
     );
+}
+
+/// A client that disconnects while the settlement write is in flight drops
+/// the request, not the write: the attempt the upstream reported complete is
+/// settled as succeeded with its usage, exactly once, and nothing queues a
+/// cancellation for it.
+#[tokio::test]
+async fn dropping_the_request_during_the_settlement_write_still_settles_it() {
+    let (engine, repository, adapter) = fixture(Mode::Complete, EngineLimits::default());
+    repository.gate_finish.store(true, Ordering::SeqCst);
+    tokio::select! {
+        _ = engine.execute(principal(), request(false), Uuid::new_v4()) => {
+            panic!("the settlement write is gated")
+        }
+        _ = repository.gate_entered.notified() => {}
+    }
+    assert_eq!(adapter.calls.load(Ordering::SeqCst), 1);
+    assert!(repository.finishes.lock().unwrap().is_empty());
+    repository.gate_release.notify_one();
+    timeout(Duration::from_secs(5), repository.finished.notified())
+        .await
+        .expect("the write finishes after its request was dropped");
+    // A second, cancelling write would have to be queued by now.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(repository.finish_calls.load(Ordering::SeqCst), 1);
+    let finishes = repository.finishes.lock().unwrap();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].outcome, Outcome::Succeeded);
+    assert_eq!(finishes[0].usage.input_tokens, Some(3));
+    assert_eq!(finishes[0].usage.output_tokens, Some(1));
+}
+
+/// The same for a streamed response whose final usage was received: the
+/// consumer is dropped while the settlement at `Done` is in flight.
+#[tokio::test]
+async fn dropping_the_stream_during_the_final_settlement_write_still_settles_it() {
+    let (engine, repository, _) = fixture(Mode::Stream, EngineLimits::default());
+    repository.gate_finish.store(true, Ordering::SeqCst);
+    let ProviderOutput::Stream(mut output) = engine
+        .execute(principal(), request(true), Uuid::new_v4())
+        .await
+        .unwrap()
+    else {
+        panic!("expected stream")
+    };
+    tokio::select! {
+        _ = async { while output.next().await.is_some() {} } => {
+            panic!("the settlement write is gated")
+        }
+        _ = repository.gate_entered.notified() => {}
+    }
+    drop(output);
+    repository.gate_release.notify_one();
+    timeout(Duration::from_secs(5), repository.finished.notified())
+        .await
+        .expect("the write finishes after its stream was dropped");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(repository.finish_calls.load(Ordering::SeqCst), 1);
+    let finishes = repository.finishes.lock().unwrap();
+    assert_eq!(finishes[0].outcome, Outcome::Succeeded);
+    assert_eq!(finishes[0].usage.input_tokens, Some(3));
+    assert_eq!(finishes[0].usage.output_tokens, Some(1));
+}
+
+/// A drop before the upstream outcome is complete is unchanged: one detached
+/// cancellation with unknown usage, never a success.
+#[tokio::test]
+async fn dropping_the_stream_before_the_final_usage_still_cancels_with_unknown_usage() {
+    let (engine, repository, _) = fixture(Mode::Pending, EngineLimits::default());
+    let notified = repository.finished.notified();
+    let ProviderOutput::Stream(output) = engine
+        .execute(principal(), request(true), Uuid::new_v4())
+        .await
+        .unwrap()
+    else {
+        panic!("expected stream")
+    };
+    drop(output);
+    timeout(Duration::from_secs(1), notified).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(repository.finish_calls.load(Ordering::SeqCst), 1);
+    let finishes = repository.finishes.lock().unwrap();
+    assert_eq!(finishes[0].outcome, Outcome::Cancelled);
+    assert_eq!(finishes[0].usage.input_tokens, None);
+    assert_eq!(finishes[0].usage.output_tokens, None);
+}
+
+/// The detached settlement keeps the deadline: a write stuck after the
+/// request was dropped ends at the 3 s deadline, reported once under the
+/// explicit-settlement stage, with no cancellation queued behind it.
+#[tokio::test(start_paused = true)]
+async fn a_stuck_write_of_a_dropped_request_ends_at_the_settlement_deadline_once() {
+    use crate::db::accounting_failure::{Cause, Stage};
+    use crate::db::diagnostics::{self, Handle};
+    let capture = Handle::new();
+    let (engine, repository, _) = fixture(Mode::Complete, EngineLimits::default());
+    repository.hang_finish.store(true, Ordering::SeqCst);
+    let before = Instant::now();
+    diagnostics::scope(capture.clone(), async {
+        tokio::select! {
+            _ = engine.execute(principal(), request(false), Uuid::new_v4()) => {
+                panic!("the settlement write hangs")
+            }
+            _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+        }
+    })
+    .await;
+    assert!(capture.signals().is_empty(), "the deadline has not elapsed");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(Instant::now() - before >= Duration::from_secs(3));
+    assert_eq!(
+        capture.signals(),
+        [(Stage::ExplicitSettlement, Cause::DeadlineInQueue)]
+    );
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert_eq!(repository.finish_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(capture.signals().len(), 1);
 }
 
 /// #389: the production signal names the explicit settlement deadline, and a
