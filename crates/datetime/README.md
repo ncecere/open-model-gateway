@@ -42,6 +42,7 @@ leap arithmetic, HTTP grammars and PostgreSQL scalar/optional/array refusals.
 Run `cargo test -p gateway-datetime-compat`. Real database tests require
 `--features postgres-tests --test postgres` and explicitly selected
 `DATETIME_PG_PORT`, `DATETIME_PG_USERNAME`, `DATETIME_PG_PASSWORD`,
-`DATETIME_PG_DBNAME` variables for a fresh PostgreSQL 17 database forwarded on
+`DATETIME_PG_DBNAME` variables (or an explicit `DATETIME_PG_URL`, as selected by
+CI) for a fresh PostgreSQL 17 database forwarded on
 127.0.0.1. They never use an ambient installation DATABASE_URL. Use the Spark
 skill and `kspark` for disposable databases; never plain kubectl.
