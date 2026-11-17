@@ -1,0 +1,22 @@
+[package]
+name = "time-sqlx-proof"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Deliberately independent of the gateway workspace and its Chrono feature graph.
+[workspace]
+
+[dependencies]
+sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio", "postgres", "time", "derive"] }
+time = { version = "=0.3.55", features = ["large-dates", "macros"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[features]
+postgres-tests = []
+
+[[test]]
+name = "postgres"
+required-features = ["postgres-tests"]
