@@ -25,6 +25,7 @@ impl Drop for Dropped {
 enum Script {
     Healthy,
     Gated,
+    Fragmented,
     Stalled,
     #[cfg(feature = "integration-tests")]
     Flowing,
@@ -63,6 +64,15 @@ impl TimedMock {
                     yield Ok::<_, Infallible>(Bytes::from(wire(frames.by_ref().take(2).collect())));
                     match script {
                         Script::Gated => gate.notified().await,
+                        Script::Fragmented => {
+                            gate.notified().await;
+                            let tail = wire(frames.collect());
+                            // Only a prefix is queued while the reader is idle.
+                            yield Ok(Bytes::copy_from_slice(&tail[..1]));
+                            gate.notified().await;
+                            yield Ok(Bytes::copy_from_slice(&tail[1..]));
+                            return;
+                        },
                         Script::Stalled => std::future::pending::<()>().await,
                         Script::Healthy => {}
                         #[cfg(feature = "integration-tests")]
@@ -337,4 +347,27 @@ async fn ready_frames_after_unpolled_pending_receive_are_not_read_timeouts() {
             done(&mut output).await;
         }
     }
+}
+
+async fn partial_resume(mock: &TimedMock, output: &mut EventStream) {
+    first(output).await;
+    assert!(futures_util::poll!(output.next()).is_pending());
+    mock.gate.notify_one();
+    tokio::time::sleep(PAUSE).await;
+    // Model a backpressured transport needing another network turn after
+    // the reader has consumed the queued prefix. Active read time stays < READ.
+    tokio::join!(
+        async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            mock.gate.notify_one();
+        },
+        done(output)
+    );
+}
+
+#[tokio::test]
+async fn partial_frame_after_pending_reader_pause_gets_a_fresh_read_budget() {
+    let mock = TimedMock::new(Script::Fragmented).await;
+    let mut output = mock.stream().await;
+    partial_resume(&mock, &mut output).await;
 }

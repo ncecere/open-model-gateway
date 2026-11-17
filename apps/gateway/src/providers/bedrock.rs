@@ -217,7 +217,6 @@ impl ProviderAdapter for BedrockAdapter {
                 output.stream,
                 request.response_limit(),
                 request.messages_options.is_some(),
-                self.timeouts.read,
             )))
         } else {
             let output = client

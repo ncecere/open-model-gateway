@@ -244,6 +244,9 @@ fn receive_error(
     error: &SdkError<aws::error::ConverseStreamOutputError, RawMessage>,
     messages: bool,
 ) -> InferenceError {
+    if super::transport::is_read_timeout(error) {
+        return InferenceError::Timeout;
+    }
     use aws::error::ConverseStreamOutputError as Exception;
     let name = match error.as_service_error() {
         None => return InferenceError::InvalidUpstream,
@@ -300,16 +303,14 @@ pub(super) fn decode(
     mut receiver: EventReceiver<aws::ConverseStreamOutput, aws::error::ConverseStreamOutputError>,
     limit: usize,
     messages: bool,
-    read_timeout: Duration,
 ) -> EventStream {
     Box::pin(async_stream::try_stream! {
         let mut state = State { limit: Some(limit), ..State::default() };
         loop {
-            // The SDK operation timeout ends at response headers. This timer
-            // bounds an active receive only: it completes before any yield to
-            // the downstream reader, so reader idleness is not an upstream stall.
-            let next = tokio::time::timeout(read_timeout, receiver.recv()).await
-                .map_err(|_| InferenceError::Timeout)?
+            // The transport bounds active body reads. Timing the whole SDK
+            // receive would also time unpolled backpressure while a partial
+            // frame is queued, even when its remaining bytes arrive promptly.
+            let next = receiver.recv().await
                 .map_err(|error| receive_error(&error, messages))?;
             match next {
                 Some(event) => for event in state.push(event)? { yield event; },

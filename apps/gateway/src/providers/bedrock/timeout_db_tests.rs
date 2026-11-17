@@ -11,6 +11,16 @@ use crate::{
 use sqlx::PgPool;
 use uuid::Uuid;
 
+type ExecutionRow = (
+    String,
+    Option<String>,
+    Option<i64>,
+    Option<i64>,
+    String,
+    Option<i64>,
+    Option<i64>,
+);
+
 struct World {
     f: Fixture,
     deployment: Uuid,
@@ -109,7 +119,7 @@ impl World {
         })
         .await
         .expect("attempt finalized");
-        let (actual_state, code, input, output, reservation, held, actual): (String, Option<String>, Option<i64>, Option<i64>, String, Option<i64>, Option<i64>) =
+        let (actual_state, code, input, output, reservation, held, actual): ExecutionRow =
             sqlx::query_as("SELECT e.state,e.error_code,e.input_tokens,e.output_tokens,r.state,r.held_microusd,r.actual_microusd FROM inference_executions e JOIN governance_reservations r ON r.execution_id=e.id WHERE e.root_request_id=$1")
                 .bind(id).fetch_one(&self.f.store.pool).await.unwrap();
         assert_eq!(actual_state, state);
@@ -264,5 +274,14 @@ async fn healthy_frames_queued_during_pending_reader_pause_record_success(pool: 
     w.mock.gate.notify_one();
     tokio::time::sleep(PAUSE).await;
     done(&mut output).await;
+    w.recorded(id, "succeeded", None, Some(0)).await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn partial_frame_backpressure_stays_healthy_and_settles(pool: PgPool) {
+    let w = world(pool, Script::Fragmented, Duration::from_secs(5)).await;
+    let id = Uuid::now_v7();
+    let mut output = w.stream(id).await;
+    partial_resume(&w.mock, &mut output).await;
     w.recorded(id, "succeeded", None, Some(0)).await;
 }
