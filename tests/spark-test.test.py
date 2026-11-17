@@ -4,6 +4,7 @@ import copy
 import importlib.util
 import io
 import json
+import subprocess
 import os
 from pathlib import Path
 import re
@@ -679,6 +680,35 @@ class Quota(unittest.TestCase):
 
 
 class Lifecycle(unittest.TestCase):
+    def test_down_releases_finalizer_in_terminating_managed_namespace(self):
+        cluster = Cluster(namespaces={"s1"}, terminating={"s1"}, leases={"s1": lease()})
+        cluster.deleting.add("s1")
+        make(cluster).down("probe")
+        self.assertNotIn("s1", cluster.leases)
+
+    def test_follow_waits_for_pod_but_refuses_replacement(self):
+        for replaced in (False, True):
+            with self.subTest(replaced=replaced):
+                cluster = Cluster(namespaces={"s1"}, leases={"s1": lease()}, pod="none")
+                def appear(seconds):
+                    cluster.pod = {}
+                    if replaced:
+                        cluster.leases["s1"] = lease(nonce="replacement")
+                spark = make(cluster, sleep=appear)
+                calls = []
+                def launch(command):
+                    calls.append(command)
+                    return subprocess.CompletedProcess(command, 0)
+                spark.launcher = launch
+                if replaced:
+                    with self.assertRaisesRegex(tool.SparkError, "reused"):
+                        spark.logs("probe", True)
+                    self.assertFalse(calls)
+                else:
+                    spark.logs("probe", True)
+                    self.assertIn("omg-test-pod", calls[0])
+
+
     def test_start_reserves_suspended_job_then_creates_owned_resources_before_activation(self):
         cluster = Cluster()
         with contextlib.redirect_stdout(io.StringIO()):

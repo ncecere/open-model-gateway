@@ -643,8 +643,7 @@ class SparkTest:
                 raise SparkError(f"namespace {namespace} exists but does not carry {MANAGED_LABEL}={MANAGED_VALUE}: it was not created by this tool, so it is not used, stopped or deleted. Remove it yourself or leave the slot alone")
             if state["terminating"] and not allow_terminating:
                 raise SparkError(f"{namespace} is being deleted (a `purge`, or a finished delete): retry in about a minute")
-            if not state["terminating"]:
-                found.append(slot)
+            found.append(slot)
         return found
 
     def lease(self, slot):
@@ -717,8 +716,8 @@ class SparkTest:
             text = text.replace(name, f"{name}-{handle['nonce']}")
         return text.replace("metadata:\n", f"metadata:\n  ownerReferences: {json.dumps(owner)}\n", 1)
 
-    def leases(self):
-        return {slot: self.lease(slot) for slot in self.existing_slots()}
+    def leases(self, allow_terminating=False):
+        return {slot: self.lease(slot) for slot in self.existing_slots(allow_terminating)}
 
     def create_slot(self, slot):
         namespace = slot_namespace(self.base, slot)
@@ -795,9 +794,9 @@ class SparkTest:
                     self.remove(slot, mine)
                     raise SparkError(f"a run named {name!r} was started at the same time in slot {other_slot}; this one gave way. Use another name")
 
-    def find(self, name, missing_ok=False):
+    def find(self, name, missing_ok=False, allow_terminating=False):
         validate_name(name)
-        for slot, lease in self.leases().items():
+        for slot, lease in self.leases(allow_terminating).items():
             if lease and lease.get("name") == name:
                 return slot, lease
         if missing_ok:
@@ -1089,12 +1088,12 @@ class SparkTest:
             self.patch_run(slot, handle, "cleaning", patch)
 
     def down(self, name, expected=None):
-        slot, handle = expected if expected else self.find(name, missing_ok=True)
+        slot, handle = expected if expected else self.find(name, missing_ok=True, allow_terminating=True)
         if slot is None:
             print(f"no run named {name!r}: nothing to remove")
             return
         self.remove(slot, handle)
-        print(f"removed {name} (slot {slot} is free once foreground deletion finishes; its cache volume stays).")
+        print(f"removed {name} from slot {slot}; foreground deletion may still be finishing.")
 
     def purge(self):
         states = {slot: self.slot_state(slot) for slot in SLOTS}
@@ -1165,6 +1164,13 @@ class SparkTest:
     def logs(self, name, follow):
         slot, handle = self.find(name)
         pod, _ = self.pod_info(slot, handle)
+        if follow and not pod:
+            for _ in range(20):
+                self.sleep(1)
+                self.require_run(slot, handle)
+                pod, _ = self.pod_info(slot, handle)
+                if pod:
+                    break
         if not pod:
             raise SparkError(f"{name} has no pod yet")
         self.require_run(slot, handle)
