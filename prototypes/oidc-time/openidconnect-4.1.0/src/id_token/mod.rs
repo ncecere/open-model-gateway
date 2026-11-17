@@ -14,10 +14,10 @@ use crate::{
     StandardClaims, SubjectIdentifier,
 };
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_with::{serde_as, skip_serializing_none};
+use time::OffsetDateTime;
 
 use std::fmt::{Debug, Display};
 use std::str::FromStr;
@@ -215,12 +215,12 @@ where
     audiences: Vec<Audience>,
     #[serde_as(as = "Timestamp")]
     #[serde(rename = "exp")]
-    expiration: DateTime<Utc>,
+    expiration: OffsetDateTime,
     #[serde_as(as = "Timestamp")]
     #[serde(rename = "iat")]
-    issue_time: DateTime<Utc>,
+    issue_time: OffsetDateTime,
     #[serde_as(as = "Option<Timestamp>")]
-    auth_time: Option<DateTime<Utc>>,
+    auth_time: Option<OffsetDateTime>,
     nonce: Option<Nonce>,
     #[serde(rename = "acr")]
     auth_context_ref: Option<AuthenticationContextClass>,
@@ -250,8 +250,8 @@ where
     pub fn new(
         issuer: IssuerUrl,
         audiences: Vec<Audience>,
-        expiration: DateTime<Utc>,
-        issue_time: DateTime<Utc>,
+        expiration: OffsetDateTime,
+        issue_time: OffsetDateTime,
         standard_claims: StandardClaims<GC>,
         additional_claims: AC,
     ) -> Self {
@@ -276,9 +276,9 @@ where
         pub self [self] ["claim"] {
             set_issuer -> issuer[IssuerUrl] ["iss"],
             set_audiences -> audiences[Vec<Audience>] ["aud"],
-            set_expiration -> expiration[DateTime<Utc>] ["exp"],
-            set_issue_time -> issue_time[DateTime<Utc>] ["iat"],
-            set_auth_time -> auth_time[Option<DateTime<Utc>>],
+            set_expiration -> expiration[OffsetDateTime] ["exp"],
+            set_issue_time -> issue_time[OffsetDateTime] ["iat"],
+            set_auth_time -> auth_time[Option<OffsetDateTime>],
             set_nonce -> nonce[Option<Nonce>],
             set_auth_context_ref -> auth_context_ref[Option<AuthenticationContextClass>] ["acr"],
             set_auth_method_refs -> auth_method_refs[Option<Vec<AuthenticationMethodReference>>] ["amr"],
@@ -321,7 +321,7 @@ where
             set_phone_number -> phone_number[Option<EndUserPhoneNumber>],
             set_phone_number_verified -> phone_number_verified[Option<bool>],
             set_address -> address[Option<AddressClaim>],
-            set_updated_at -> updated_at[Option<DateTime<Utc>>],
+            set_updated_at -> updated_at[Option<OffsetDateTime>],
         }
     ];
 

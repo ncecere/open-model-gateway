@@ -5,10 +5,10 @@ use crate::{
     RevocableToken, Scope, SyncHttpClient, TokenResponse, TokenType,
 };
 
-use chrono::serde::ts_seconds_option;
-use chrono::{DateTime, Utc};
+use crate::timestamp::ts_seconds_option;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use std::borrow::Cow;
 use std::error::Error;
@@ -224,15 +224,15 @@ pub trait TokenIntrospectionResponse: Debug + DeserializeOwned + Serialize {
     /// OPTIONAL.  Integer timestamp, measured in the number of seconds
     /// since January 1 1970 UTC, indicating when this token will expire,
     /// as defined in JWT [RFC7519](https://tools.ietf.org/html/rfc7519).
-    fn exp(&self) -> Option<DateTime<Utc>>;
+    fn exp(&self) -> Option<OffsetDateTime>;
     /// OPTIONAL.  Integer timestamp, measured in the number of seconds
     /// since January 1 1970 UTC, indicating when this token was
     /// originally issued, as defined in JWT [RFC7519](https://tools.ietf.org/html/rfc7519).
-    fn iat(&self) -> Option<DateTime<Utc>>;
+    fn iat(&self) -> Option<OffsetDateTime>;
     /// OPTIONAL.  Integer timestamp, measured in the number of seconds
     /// since January 1 1970 UTC, indicating when this token is not to be
     /// used before, as defined in JWT [RFC7519](https://tools.ietf.org/html/rfc7519).
-    fn nbf(&self) -> Option<DateTime<Utc>>;
+    fn nbf(&self) -> Option<OffsetDateTime>;
     /// OPTIONAL.  Subject of the token, as defined in JWT [RFC7519](https://tools.ietf.org/html/rfc7519).
     /// Usually a machine-readable identifier of the resource owner who
     /// authorized this token.
@@ -281,15 +281,15 @@ where
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(with = "ts_seconds_option")]
     #[serde(default)]
-    exp: Option<DateTime<Utc>>,
+    exp: Option<OffsetDateTime>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(with = "ts_seconds_option")]
     #[serde(default)]
-    iat: Option<DateTime<Utc>>,
+    iat: Option<OffsetDateTime>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(with = "ts_seconds_option")]
     #[serde(default)]
-    nbf: Option<DateTime<Utc>>,
+    nbf: Option<OffsetDateTime>,
     #[serde(skip_serializing_if = "Option::is_none")]
     sub: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -356,15 +356,15 @@ where
         self.token_type = token_type;
     }
     /// Sets the `set_exp` field.
-    pub fn set_exp(&mut self, exp: Option<DateTime<Utc>>) {
+    pub fn set_exp(&mut self, exp: Option<OffsetDateTime>) {
         self.exp = exp;
     }
     /// Sets the `set_iat` field.
-    pub fn set_iat(&mut self, iat: Option<DateTime<Utc>>) {
+    pub fn set_iat(&mut self, iat: Option<OffsetDateTime>) {
         self.iat = iat;
     }
     /// Sets the `set_nbf` field.
-    pub fn set_nbf(&mut self, nbf: Option<DateTime<Utc>>) {
+    pub fn set_nbf(&mut self, nbf: Option<OffsetDateTime>) {
         self.nbf = nbf;
     }
     /// Sets the `set_sub` field.
@@ -419,15 +419,15 @@ where
         self.token_type.as_ref()
     }
 
-    fn exp(&self) -> Option<DateTime<Utc>> {
+    fn exp(&self) -> Option<OffsetDateTime> {
         self.exp
     }
 
-    fn iat(&self) -> Option<DateTime<Utc>> {
+    fn iat(&self) -> Option<OffsetDateTime> {
         self.iat
     }
 
-    fn nbf(&self) -> Option<DateTime<Utc>> {
+    fn nbf(&self) -> Option<OffsetDateTime> {
         self.nbf
     }
 
@@ -454,9 +454,9 @@ mod tests {
     use crate::tests::{mock_http_client, new_client};
     use crate::{AccessToken, AuthType, ClientId, IntrospectionUrl, RedirectUrl, Scope};
 
-    use chrono::DateTime;
     use http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
     use http::{HeaderValue, Response, StatusCode};
+    use time::OffsetDateTime;
 
     #[test]
     fn test_token_introspection_successful_with_basic_auth_minimal_response() {
@@ -574,15 +574,15 @@ mod tests {
             introspection_response.token_type
         );
         assert_eq!(
-            Some(DateTime::from_timestamp(1604073517, 0).unwrap()),
+            Some(OffsetDateTime::from_unix_timestamp(1604073517).unwrap()),
             introspection_response.exp
         );
         assert_eq!(
-            Some(DateTime::from_timestamp(1604073217, 0).unwrap()),
+            Some(OffsetDateTime::from_unix_timestamp(1604073217).unwrap()),
             introspection_response.iat
         );
         assert_eq!(
-            Some(DateTime::from_timestamp(1604073317, 0).unwrap()),
+            Some(OffsetDateTime::from_unix_timestamp(1604073317).unwrap()),
             introspection_response.nbf
         );
         assert_eq!(Some("demo".to_string()), introspection_response.sub);
@@ -594,6 +594,43 @@ mod tests {
         assert_eq!(
             Some("be1b7da2-fc18-47b3-bdf1-7a4f50bcf53f".to_string()),
             introspection_response.jti
+        );
+    }
+}
+
+#[cfg(test)]
+mod time_port_contracts {
+    use crate::basic::BasicTokenIntrospectionResponse;
+    use serde_json::json;
+
+    #[test]
+    fn introspection_integer_seconds_only_and_range() {
+        for seconds in [-8334601228800_i64, -1, 0, 8210266876799] {
+            let wire = json!({"active": true, "exp": seconds, "iat": seconds, "nbf": seconds});
+            let parsed: BasicTokenIntrospectionResponse =
+                serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(serde_json::to_value(parsed).unwrap(), wire);
+        }
+        for bad in [
+            json!(-8334601228801_i64),
+            json!(8210266876800_i64),
+            json!(u64::MAX),
+            json!(0.25),
+            json!("0"),
+            json!(true),
+        ] {
+            for field in ["exp", "iat", "nbf"] {
+                assert!(serde_json::from_value::<BasicTokenIntrospectionResponse>(
+                    json!({"active": true, field: bad})
+                )
+                .is_err());
+            }
+        }
+        let parsed: BasicTokenIntrospectionResponse =
+            serde_json::from_value(json!({"active": false, "exp": null})).unwrap();
+        assert_eq!(
+            serde_json::to_value(parsed).unwrap(),
+            json!({"active": false})
         );
     }
 }

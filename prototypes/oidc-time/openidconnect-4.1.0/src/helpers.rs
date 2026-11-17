@@ -1,13 +1,13 @@
 use crate::types::localized::join_language_tag_key;
 use crate::{LanguageTag, LocalizedClaim};
 
-use chrono::{DateTime, TimeZone, Utc};
 use serde::de::value::MapDeserializer;
 use serde::de::{DeserializeOwned, Deserializer, Error, MapAccess, Visitor};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::from_value;
 use serde_value::ValueDeserializer;
 use serde_with::{DeserializeAs, SerializeAs};
+use time::OffsetDateTime;
 
 use std::cmp::PartialEq;
 use std::fmt::{Debug, Display, Formatter, Result as FormatterResult};
@@ -404,6 +404,19 @@ impl Display for Boolean {
     }
 }
 
+// Preserve the published SDK's UTC wire domain (-262143-01-01 through
+// +262142-12-31), even though time's large-dates feature has a wider domain.
+const MIN_TIMESTAMP: i64 = -8_334_601_228_800;
+const MAX_TIMESTAMP: i64 = 8_210_266_876_799;
+
+pub(crate) fn ensure_timestamp_range(value: &OffsetDateTime) -> Result<(), ()> {
+    if (MIN_TIMESTAMP..=MAX_TIMESTAMP).contains(&value.unix_timestamp()) {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
 /// Timestamp as seconds since the unix epoch, or optionally an ISO 8601 string.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
@@ -416,11 +429,12 @@ impl Timestamp {
     // The spec is ambiguous about whether seconds should be expressed as integers, or
     // whether floating-point values are allowed. For compatibility with a wide range of
     // clients, we round down to the nearest second.
-    pub(crate) fn from_utc(utc: &DateTime<Utc>) -> Self {
-        Timestamp::Seconds(utc.timestamp().into())
+    pub(crate) fn from_utc(utc: &OffsetDateTime) -> Result<Self, ()> {
+        ensure_timestamp_range(utc)?;
+        Ok(Timestamp::Seconds(utc.unix_timestamp().into()))
     }
 
-    pub(crate) fn to_utc(&self) -> Result<DateTime<Utc>, ()> {
+    pub(crate) fn to_utc(&self) -> Result<OffsetDateTime, ()> {
         match self {
             Timestamp::Seconds(seconds) => {
                 let (secs, nsecs) = if seconds.is_i64() {
@@ -428,17 +442,37 @@ impl Timestamp {
                 } else {
                     let secs_f64 = seconds.as_f64().ok_or(())?;
                     let secs = secs_f64.floor();
+                    // Retain upstream's JSON-number/f64 fractional rounding, but reject
+                    // out-of-range values before the float-to-integer conversion.
+                    if !(MIN_TIMESTAMP as f64..=MAX_TIMESTAMP as f64).contains(&secs) {
+                        return Err(());
+                    }
                     (
                         secs as i64,
                         ((secs_f64 - secs) * 1_000_000_000.).floor() as u32,
                     )
                 };
-                Utc.timestamp_opt(secs, nsecs).single().ok_or(())
+                if !(MIN_TIMESTAMP..=MAX_TIMESTAMP).contains(&secs) {
+                    return Err(());
+                }
+                OffsetDateTime::from_unix_timestamp(secs)
+                    .map_err(|_| ())?
+                    .replace_nanosecond(nsecs)
+                    .map_err(|_| ())
             }
             #[cfg(feature = "accept-rfc3339-timestamps")]
             Timestamp::Rfc3339(iso) => {
-                let datetime = DateTime::parse_from_rfc3339(iso).map_err(|_| ())?;
-                Ok(datetime.into())
+                // OffsetDateTime cannot represent leap seconds. Refuse them rather
+                // than accepting time's normalized stand-in as an earlier instant.
+                if iso.as_bytes().get(17..19) == Some(b"60") {
+                    return Err(());
+                }
+                let datetime =
+                    OffsetDateTime::parse(iso, &time::format_description::well_known::Rfc3339)
+                        .map_err(|_| ())?
+                        .to_offset(time::UtcOffset::UTC);
+                ensure_timestamp_range(&datetime)?;
+                Ok(datetime)
             }
         }
     }
@@ -454,8 +488,8 @@ impl Display for Timestamp {
     }
 }
 
-impl<'de> DeserializeAs<'de, DateTime<Utc>> for Timestamp {
-    fn deserialize_as<D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
+impl<'de> DeserializeAs<'de, OffsetDateTime> for Timestamp {
+    fn deserialize_as<D>(deserializer: D) -> Result<OffsetDateTime, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -468,12 +502,14 @@ impl<'de> DeserializeAs<'de, DateTime<Utc>> for Timestamp {
     }
 }
 
-impl SerializeAs<DateTime<Utc>> for Timestamp {
-    fn serialize_as<S>(source: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
+impl SerializeAs<OffsetDateTime> for Timestamp {
+    fn serialize_as<S>(source: &OffsetDateTime, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        Timestamp::from_utc(source).serialize(serializer)
+        Timestamp::from_utc(source)
+            .map_err(|_| serde::ser::Error::custom("timestamp outside upstream range"))?
+            .serialize(serializer)
     }
 }
 
@@ -516,5 +552,89 @@ mod serde_base64url_byte_array {
     {
         let base64_encoded = BASE64_URL_SAFE_NO_PAD.encode(v);
         serializer.serialize_str(&base64_encoded)
+    }
+}
+
+#[cfg(test)]
+mod time_port_contracts {
+    use super::Timestamp;
+    use serde_json::json;
+
+    #[test]
+    fn numeric_date_range_fraction_and_wire_contract() {
+        for (wire, seconds, nanos) in [
+            (json!(0), 0, 0),
+            (json!(-1), -1, 0),
+            (json!(0.25), 0, 250_000_000),
+            (json!(-1.25), -2, 750_000_000),
+            (json!(1.999999999), 1, 999_999_998),
+            (json!(-8334601228800_i64), -8334601228800, 0),
+            (json!(8210266876799_i64), 8210266876799, 0),
+        ] {
+            let parsed = serde_json::from_value::<Timestamp>(wire)
+                .unwrap()
+                .to_utc()
+                .unwrap();
+            assert_eq!(parsed.unix_timestamp(), seconds);
+            assert_eq!(parsed.nanosecond(), nanos);
+            // Upstream emits integer seconds, rounding down even for negative fractions.
+            assert_eq!(
+                serde_json::to_value(Timestamp::from_utc(&parsed).unwrap()).unwrap(),
+                json!(seconds)
+            );
+        }
+        for wire in [
+            json!(-8334601228801_i64),
+            json!(8210266876800_i64),
+            json!(i64::MAX),
+            json!(u64::MAX),
+            json!(1e100),
+        ] {
+            assert!(serde_json::from_value::<Timestamp>(wire)
+                .unwrap()
+                .to_utc()
+                .is_err());
+        }
+        for wire in [json!(null), json!(true), json!([]), json!({})] {
+            assert!(serde_json::from_value::<Timestamp>(wire).is_err());
+        }
+    }
+
+    #[test]
+    fn numeric_date_unrepresentable_leap_encoding_refused() {
+        // Upstream's f64 rounding can produce a leap-second nanosecond value.
+        // OffsetDateTime cannot represent it; never silently normalize it.
+        for wire in [json!(-1e-100), json!(-1e-20)] {
+            assert!(serde_json::from_value::<Timestamp>(wire)
+                .unwrap()
+                .to_utc()
+                .is_err());
+        }
+    }
+
+    #[cfg(feature = "accept-rfc3339-timestamps")]
+    #[test]
+    fn rfc3339_offsets_and_fractional_seconds() {
+        let parsed = serde_json::from_value::<Timestamp>(json!("1970-01-01T01:00:00.25+01:00"))
+            .unwrap()
+            .to_utc()
+            .unwrap();
+        assert_eq!(parsed.unix_timestamp(), 0);
+        assert_eq!(parsed.nanosecond(), 250_000_000);
+        assert_eq!(
+            serde_json::to_value(Timestamp::from_utc(&parsed).unwrap()).unwrap(),
+            json!(0)
+        );
+        for bad in [
+            "not a date",
+            "1970-01-01",
+            "1970-01-01T00:00:00+25:00",
+            "2016-12-31T23:59:60Z",
+        ] {
+            assert!(serde_json::from_value::<Timestamp>(json!(bad))
+                .unwrap()
+                .to_utc()
+                .is_err());
+        }
     }
 }

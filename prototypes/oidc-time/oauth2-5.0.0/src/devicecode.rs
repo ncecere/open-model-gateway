@@ -8,9 +8,9 @@ use crate::{
     TokenIntrospectionResponse, TokenResponse, TokenUrl, UserCode,
 };
 
-use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use std::borrow::Cow;
 use std::error::Error;
@@ -87,7 +87,7 @@ where
             extra_params: Vec::new(),
             token_url,
             dev_auth_resp: auth_response,
-            time_fn: Arc::new(Utc::now),
+            time_fn: Arc::new(OffsetDateTime::now_utc),
             max_backoff_interval: None,
             _phantom: PhantomData,
         }
@@ -215,7 +215,7 @@ where
     pub(crate) extra_params: Vec<(Cow<'a, str>, Cow<'a, str>)>,
     pub(crate) token_url: &'a TokenUrl,
     pub(crate) dev_auth_resp: &'a DeviceAuthorizationResponse<EF>,
-    pub(crate) time_fn: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync + 'b>,
+    pub(crate) time_fn: Arc<dyn Fn() -> OffsetDateTime + Send + Sync + 'b>,
     pub(crate) max_backoff_interval: Option<Duration>,
     pub(crate) _phantom: PhantomData<(TR, EF)>,
 }
@@ -252,7 +252,7 @@ where
     /// This function is used while polling the authorization server.
     pub fn set_time_fn<'t, T>(self, time_fn: T) -> DeviceAccessTokenRequest<'a, 't, TR, EF>
     where
-        T: Fn() -> DateTime<Utc> + Send + Sync + 't,
+        T: Fn() -> OffsetDateTime + Send + Sync + 't,
     {
         DeviceAccessTokenRequest {
             auth_type: self.auth_type,
@@ -293,6 +293,8 @@ where
         // Loop while requesting a token.
         loop {
             let now = (*self.time_fn)();
+            crate::timestamp::ensure_range(now)
+                .map_err(|e| RequestTokenError::Other(e.to_string()))?;
             if now > timeout_dt {
                 break Err(RequestTokenError::ServerResponse(
                     DeviceCodeErrorResponse::new(
@@ -341,6 +343,8 @@ where
             // Loop while requesting a token.
             loop {
                 let now = (*self.time_fn)();
+                crate::timestamp::ensure_range(now)
+                    .map_err(|e| RequestTokenError::Other(e.to_string()))?;
                 if now > timeout_dt {
                     break Err(RequestTokenError::ServerResponse(
                         DeviceCodeErrorResponse::new(
@@ -445,7 +449,7 @@ where
     fn compute_timeout<RE>(
         &self,
         timeout: Option<Duration>,
-    ) -> Result<DateTime<Utc>, RequestTokenError<RE, DeviceCodeErrorResponse>>
+    ) -> Result<OffsetDateTime, RequestTokenError<RE, DeviceCodeErrorResponse>>
     where
         RE: Error + 'static,
     {
@@ -453,17 +457,21 @@ where
         // use that, otherwise use the value given by the device authorization
         // response.
         let timeout_dur = timeout.unwrap_or_else(|| self.dev_auth_resp.expires_in());
-        let chrono_timeout = chrono::Duration::from_std(timeout_dur).map_err(|e| {
+        let time_timeout = time::Duration::try_from(timeout_dur).map_err(|e| {
             RequestTokenError::Other(format!(
-                "failed to convert `{timeout_dur:?}` to `chrono::Duration`: {e}"
+                "failed to convert `{timeout_dur:?}` to `time::Duration`: {e}"
             ))
         })?;
 
-        // Calculate the DateTime at which the request times out.
-        let timeout_dt = (*self.time_fn)()
-            .checked_add_signed(chrono_timeout)
+        // Calculate the instant at which the request times out.
+        let now = (*self.time_fn)();
+        crate::timestamp::ensure_range(now).map_err(|e| RequestTokenError::Other(e.to_string()))?;
+        let timeout_dt = now
+            .checked_add(time_timeout)
             .ok_or_else(|| RequestTokenError::Other("failed to calculate timeout".to_string()))?;
 
+        crate::timestamp::ensure_range(timeout_dt)
+            .map_err(|e| RequestTokenError::Other(e.to_string()))?;
         Ok(timeout_dt)
     }
 }
@@ -716,9 +724,9 @@ mod tests {
         StandardDeviceAuthorizationResponse, TokenResponse,
     };
 
-    use chrono::{DateTime, Utc};
     use http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
     use http::{HeaderValue, Response, StatusCode};
+    use time::OffsetDateTime;
 
     use std::time::Duration;
 
@@ -914,14 +922,14 @@ mod tests {
         fn new() -> Self {
             Self { times: (0..) }
         }
-        fn next(&mut self) -> DateTime<Utc> {
+        fn next(&mut self) -> OffsetDateTime {
             let next_value = self.times.next().unwrap();
-            DateTime::from_timestamp(next_value, 0).unwrap()
+            OffsetDateTime::from_unix_timestamp(next_value).unwrap()
         }
     }
 
     /// Creates a time function that increments by one second each time.
-    fn mock_time_fn() -> impl Fn() -> DateTime<Utc> + Send + Sync {
+    fn mock_time_fn() -> impl Fn() -> OffsetDateTime + Send + Sync {
         let timer = std::sync::Mutex::new(IncreasingTime::new());
         move || timer.lock().unwrap().next()
     }
@@ -1205,5 +1213,107 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.interval, default_devicecode_interval());
+    }
+    #[test]
+    fn time_port_device_timeout_conversion_and_boundary() {
+        let details = new_device_auth_details(0);
+        let client = new_client();
+        let epoch = OffsetDateTime::UNIX_EPOCH;
+        let success = |_: crate::HttpRequest| -> Result<crate::HttpResponse, std::io::Error> {
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header(CONTENT_TYPE, "application/json")
+                .body(br#"{"access_token":"token","token_type":"bearer"}"#.to_vec())
+                .unwrap())
+        };
+        // Upstream device polling uses strict >, unlike OIDC's >= expiry check.
+        assert!(client
+            .exchange_device_access_token(&details)
+            .set_time_fn(move || epoch)
+            .request(&success, mock_sleep_fn, None)
+            .is_ok());
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let never_http = |_: crate::HttpRequest| -> Result<crate::HttpResponse, std::io::Error> {
+            panic!("expired or unrepresentable deadlines must refuse before HTTP")
+        };
+        let expired = client
+            .exchange_device_access_token(&details)
+            .set_time_fn(|| {
+                if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    epoch
+                } else {
+                    epoch.checked_add(time::Duration::nanoseconds(1)).unwrap()
+                }
+            })
+            .request(&never_http, mock_sleep_fn, None);
+        assert!(
+            matches!(expired, Err(RequestTokenError::ServerResponse(ref e)) if *e.error() == DeviceCodeErrorResponseType::ExpiredToken)
+        );
+        for (now, timeout) in [
+            (epoch, Duration::MAX),
+            (
+                OffsetDateTime::from_unix_timestamp(8_210_266_876_799).unwrap(),
+                Duration::from_secs(1),
+            ),
+            (
+                OffsetDateTime::from_unix_timestamp(-8_334_601_228_801).unwrap(),
+                Duration::ZERO,
+            ),
+        ] {
+            assert!(matches!(
+                client
+                    .exchange_device_access_token(&details)
+                    .set_time_fn(move || now)
+                    .request(&never_http, mock_sleep_fn, Some(timeout)),
+                Err(RequestTokenError::Other(_))
+            ));
+        }
+    }
+    #[tokio::test]
+    async fn time_port_async_device_timeout_boundary() {
+        let details = new_device_auth_details(0);
+        let client = new_client();
+        let epoch = OffsetDateTime::UNIX_EPOCH;
+        let success = |_: crate::HttpRequest| async {
+            Ok::<crate::HttpResponse, std::io::Error>(
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(br#"{"access_token":"token","token_type":"bearer"}"#.to_vec())
+                    .unwrap(),
+            )
+        };
+        assert!(client
+            .exchange_device_access_token(&details)
+            .set_time_fn(move || epoch)
+            .request_async(&success, |_| std::future::ready(()), None)
+            .await
+            .is_ok());
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let never_http = |_: crate::HttpRequest| -> std::future::Ready<Result<crate::HttpResponse, std::io::Error>> {
+            panic!("expired deadlines must refuse before HTTP")
+        };
+        let expired = client
+            .exchange_device_access_token(&details)
+            .set_time_fn(|| {
+                if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    epoch
+                } else {
+                    epoch.checked_add(time::Duration::nanoseconds(1)).unwrap()
+                }
+            })
+            .request_async(&never_http, |_| std::future::ready(()), None)
+            .await;
+        assert!(
+            matches!(expired, Err(RequestTokenError::ServerResponse(ref e)) if *e.error() == DeviceCodeErrorResponseType::ExpiredToken)
+        );
+        assert!(matches!(
+            client
+                .exchange_device_access_token(&details)
+                .set_time_fn(move || epoch)
+                .request_async(&never_http, |_| std::future::ready(()), Some(Duration::MAX))
+                .await,
+            Err(RequestTokenError::Other(_))
+        ));
     }
 }

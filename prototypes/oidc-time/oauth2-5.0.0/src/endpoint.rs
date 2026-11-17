@@ -120,10 +120,10 @@ pub(crate) fn endpoint_request<'a>(
             let urlencoded_secret: String =
                 form_urlencoded::byte_serialize(secret.secret().as_bytes()).collect();
             let b64_credential =
-                BASE64_STANDARD.encode(format!("{}:{}", &urlencoded_id, urlencoded_secret));
+                BASE64_STANDARD.encode(format!("{}:{}", urlencoded_id, urlencoded_secret));
             builder = builder.header(
                 AUTHORIZATION,
-                HeaderValue::from_str(&format!("Basic {}", &b64_credential)).unwrap(),
+                HeaderValue::from_str(&format!("Basic {}", b64_credential)).unwrap(),
             );
         }
         (AuthType::RequestBody, _) | (AuthType::BasicAuth, None) => {

@@ -7,11 +7,11 @@ use crate::{
     JwsSigningAlgorithm, Nonce, SubjectIdentifier,
 };
 
-use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use time::OffsetDateTime;
 
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -529,10 +529,10 @@ where
         Arc<dyn Fn(Option<&AuthenticationContextClass>) -> Result<(), String> + 'a + Send + Sync>,
     #[allow(clippy::type_complexity)]
     auth_time_verifier_fn:
-        Arc<dyn Fn(Option<DateTime<Utc>>) -> Result<(), String> + 'a + Send + Sync>,
-    iat_verifier_fn: Arc<dyn Fn(DateTime<Utc>) -> Result<(), String> + 'a + Send + Sync>,
+        Arc<dyn Fn(Option<OffsetDateTime>) -> Result<(), String> + 'a + Send + Sync>,
+    iat_verifier_fn: Arc<dyn Fn(OffsetDateTime) -> Result<(), String> + 'a + Send + Sync>,
     pub(crate) jwt_verifier: JwtClaimsVerifier<'a, K>,
-    time_fn: Arc<dyn Fn() -> DateTime<Utc> + 'a + Send + Sync>,
+    time_fn: Arc<dyn Fn() -> OffsetDateTime + 'a + Send + Sync>,
 }
 impl<'a, K> IdTokenVerifier<'a, K>
 where
@@ -547,7 +547,7 @@ where
             iat_verifier_fn: Arc::new(|_| Ok(())),
             jwt_verifier,
             // By default, use the current system time.
-            time_fn: Arc::new(Utc::now),
+            time_fn: Arc::new(OffsetDateTime::now_utc),
         }
     }
 
@@ -642,7 +642,7 @@ where
     /// otherwise.
     pub fn set_auth_time_verifier_fn<T>(mut self, auth_time_verifier_fn: T) -> Self
     where
-        T: Fn(Option<DateTime<Utc>>) -> Result<(), String> + 'a + Send + Sync,
+        T: Fn(Option<OffsetDateTime>) -> Result<(), String> + 'a + Send + Sync,
     {
         self.auth_time_verifier_fn = Arc::new(auth_time_verifier_fn);
         self
@@ -686,7 +686,7 @@ where
     /// This function is used for verifying the ID token expiration time.
     pub fn set_time_fn<T>(mut self, time_fn: T) -> Self
     where
-        T: Fn() -> DateTime<Utc> + 'a + Send + Sync,
+        T: Fn() -> OffsetDateTime + 'a + Send + Sync,
     {
         self.time_fn = Arc::new(time_fn);
         self
@@ -698,7 +698,7 @@ where
     /// otherwise.
     pub fn set_issue_time_verifier_fn<T>(mut self, iat_verifier_fn: T) -> Self
     where
-        T: Fn(DateTime<Utc>) -> Result<(), String> + 'a + Send + Sync,
+        T: Fn(OffsetDateTime) -> Result<(), String> + 'a + Send + Sync,
     {
         self.iat_verifier_fn = Arc::new(iat_verifier_fn);
         self
@@ -822,6 +822,9 @@ where
 
         // 9. The current time MUST be before the time represented by the exp Claim.
         let cur_time = (*self.time_fn)();
+        crate::helpers::ensure_timestamp_range(&cur_time).map_err(|_| {
+            ClaimsVerificationError::Expired("clock outside upstream range".to_string())
+        })?;
         if cur_time >= partially_verified_claims.expiration() {
             return Err(ClaimsVerificationError::Expired(format!(
                 "ID token expired at {} (current time is {})",

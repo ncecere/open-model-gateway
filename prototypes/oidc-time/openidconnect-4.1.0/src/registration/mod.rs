@@ -14,7 +14,6 @@ use crate::{
     StandardErrorResponse, SyncHttpClient,
 };
 
-use chrono::{DateTime, Utc};
 use http::header::{HeaderValue, ACCEPT, CONTENT_TYPE};
 use http::method::Method;
 use http::status::StatusCode;
@@ -23,6 +22,7 @@ use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_with::{serde_as, skip_serializing_none};
 use thiserror::Error;
+use time::OffsetDateTime;
 
 use std::fmt::{Debug, Formatter, Result as FormatterResult};
 use std::future::Future;
@@ -755,9 +755,9 @@ where
     registration_access_token: Option<RegistrationAccessToken>,
     registration_client_uri: Option<ClientConfigUrl>,
     #[serde_as(as = "Option<Timestamp>")]
-    client_id_issued_at: Option<DateTime<Utc>>,
+    client_id_issued_at: Option<OffsetDateTime>,
     #[serde_as(as = "Option<Timestamp>")]
-    client_secret_expires_at: Option<DateTime<Utc>>,
+    client_secret_expires_at: Option<OffsetDateTime>,
     #[serde(bound = "AC: AdditionalClientMetadata", flatten)]
     client_metadata: ClientMetadata<AC, AT, CA, G, JE, JK, K, RT, S>,
 
@@ -824,8 +824,8 @@ where
             set_registration_access_token
               -> registration_access_token[Option<RegistrationAccessToken>],
             set_registration_client_uri -> registration_client_uri[Option<ClientConfigUrl>],
-            set_client_id_issued_at -> client_id_issued_at[Option<DateTime<Utc>>],
-            set_client_secret_expires_at -> client_secret_expires_at[Option<DateTime<Utc>>],
+            set_client_id_issued_at -> client_id_issued_at[Option<OffsetDateTime>],
+            set_client_secret_expires_at -> client_secret_expires_at[Option<OffsetDateTime>],
         }
     ];
 

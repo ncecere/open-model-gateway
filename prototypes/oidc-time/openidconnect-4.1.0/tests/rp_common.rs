@@ -1,6 +1,6 @@
 #![allow(clippy::cognitive_complexity, clippy::expect_fun_call)]
 
-use log::{error, warn};
+use log::warn;
 use openidconnect::core::{
     CoreApplicationType, CoreClientRegistrationRequest, CoreClientRegistrationResponse,
     CoreProviderMetadata,
@@ -111,34 +111,6 @@ pub fn http_client(request: HttpRequest) -> Result<HttpResponse, HttpClientError
         retry::Error::Operation { error, .. } => error,
         retry::Error::Internal(msg) => panic!("unexpected error: {msg}"),
     })
-}
-
-pub trait PanicIfFail<T, F>
-where
-    F: std::error::Error,
-{
-    fn panic_if_fail(self, msg: &'static str) -> T;
-}
-impl<T, F> PanicIfFail<T, F> for Result<T, F>
-where
-    F: std::error::Error,
-{
-    fn panic_if_fail(self, msg: &'static str) -> T {
-        match self {
-            Ok(ret) => ret,
-            Err(fail) => {
-                let mut err_msg = format!("Panic: {msg}");
-
-                let mut cur_fail: Option<&dyn std::error::Error> = Some(&fail);
-                while let Some(cause) = cur_fail {
-                    err_msg += &format!("\n    caused by: {cause}");
-                    cur_fail = cause.source();
-                }
-                error!("[{}] {}", get_test_id(), err_msg);
-                panic!("{}", msg);
-            }
-        }
-    }
 }
 
 pub fn issuer_url(test_id: &str) -> IssuerUrl {

@@ -131,9 +131,9 @@ impl SigningHttpClient {
         let mut hmac = Hmac::<Sha256>::new_from_slice(self.client_secret.secret().as_bytes())
             .expect("HMAC can take key of any size");
         hmac.update(method.as_str().as_bytes());
-        hmac.update(&[b'\0']);
+        hmac.update(b"\0");
         hmac.update(url.as_str().as_bytes());
-        hmac.update(&[b'\0']);
+        hmac.update(b"\0");
         hmac.update(body);
         let signature: String = hmac.finalize().into_bytes().encode_hex();
 

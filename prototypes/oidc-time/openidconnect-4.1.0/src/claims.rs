@@ -8,11 +8,11 @@ use crate::{
     StreetAddress, SubjectIdentifier,
 };
 
-use chrono::{DateTime, Utc};
 use serde::de::{DeserializeOwned, Deserializer, MapAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_with::skip_serializing_none;
+use time::OffsetDateTime;
 
 use std::fmt::{Debug, Formatter, Result as FormatterResult};
 use std::marker::PhantomData;
@@ -84,7 +84,7 @@ where
     pub(crate) phone_number: Option<EndUserPhoneNumber>,
     pub(crate) phone_number_verified: Option<bool>,
     pub(crate) address: Option<AddressClaim>,
-    pub(crate) updated_at: Option<DateTime<Utc>>,
+    pub(crate) updated_at: Option<OffsetDateTime>,
 }
 impl<GC> StandardClaims<GC>
 where
@@ -153,7 +153,7 @@ where
             set_phone_number -> phone_number[Option<EndUserPhoneNumber>],
             set_phone_number_verified -> phone_number_verified[Option<bool>],
             set_address -> address[Option<AddressClaim>],
-            set_updated_at -> updated_at[Option<DateTime<Utc>>],
+            set_updated_at -> updated_at[Option<OffsetDateTime>],
         }
     ];
 }

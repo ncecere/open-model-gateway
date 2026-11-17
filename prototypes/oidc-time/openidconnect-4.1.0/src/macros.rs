@@ -443,7 +443,7 @@ macro_rules! serialize_fields {
     };
     (@case $self:ident $map:ident Option(DateTime(Seconds($field:ident)))) => {
         if let Some(ref $field) = $self.$field {
-            $map.serialize_entry(stringify!($field), &crate::helpers::Timestamp::from_utc(&$field))?;
+            $map.serialize_entry(stringify!($field), &crate::helpers::Timestamp::from_utc(&$field).map_err(|_| serde::ser::Error::custom("timestamp outside upstream range"))?)?;
         }
     };
     (@case $self:ident $map:ident Option($field:ident)) => {
@@ -497,15 +497,15 @@ macro_rules! field_getters {
             $($body)+
         }
     };
-    (@case [$doc:expr] $vis:vis $self:ident [$zero:expr] $field:ident Option < DateTime < Utc >>) => {
+    (@case [$doc:expr] $vis:vis $self:ident [$zero:expr] $field:ident Option < OffsetDateTime>) => {
         #[doc = $doc]
-        $vis fn $field(&$self) -> Option<DateTime<Utc>> {
+        $vis fn $field(&$self) -> Option<OffsetDateTime> {
             $zero.$field
         }
     };
-    (@case [$doc:expr] $vis:vis $self:ident [$zero:expr] $field:ident Option < DateTime < Utc >> { $($body:tt)+ }) => {
+    (@case [$doc:expr] $vis:vis $self:ident [$zero:expr] $field:ident Option < OffsetDateTime> { $($body:tt)+ }) => {
         #[doc = $doc]
-        $vis fn $field(&$self) -> Option<DateTime<Utc>> {
+        $vis fn $field(&$self) -> Option<OffsetDateTime> {
             $($body)+
         }
     };
@@ -521,9 +521,9 @@ macro_rules! field_getters {
             $($body)+
         }
     };
-    (@case [$doc:expr] $vis:vis $self:ident [$zero:expr] $field:ident DateTime < Utc >) => {
+    (@case [$doc:expr] $vis:vis $self:ident [$zero:expr] $field:ident OffsetDateTime) => {
         #[doc = $doc]
-        $vis fn $field(&$self) -> DateTime<Utc> {
+        $vis fn $field(&$self) -> OffsetDateTime {
             $zero.$field
         }
     };
@@ -551,15 +551,15 @@ macro_rules! field_getters {
             $($body)+
         }
     };
-    (@case [$doc:expr] $self:ident [$zero:expr] $field:ident() Option < DateTime < Utc >>) => {
+    (@case [$doc:expr] $self:ident [$zero:expr] $field:ident() Option < OffsetDateTime>) => {
         #[doc = $doc]
-        fn $field(&$self) -> Option<DateTime<Utc>> {
+        fn $field(&$self) -> Option<OffsetDateTime> {
             $zero.$field()
         }
     };
-    (@case [$doc:expr] $self:ident [$zero:expr] $field:ident() Option < DateTime < Utc >> { $($body:tt)+ }) => {
+    (@case [$doc:expr] $self:ident [$zero:expr] $field:ident() Option < OffsetDateTime> { $($body:tt)+ }) => {
         #[doc = $doc]
-        fn $field(&$self) -> Option<DateTime<Utc>> {
+        fn $field(&$self) -> Option<OffsetDateTime> {
             $($body)+
         }
     };
@@ -575,9 +575,9 @@ macro_rules! field_getters {
             $($body)+
         }
     };
-    (@case [$doc:expr] $self:ident [$zero:expr] $field:ident() DateTime < Utc >) => {
+    (@case [$doc:expr] $self:ident [$zero:expr] $field:ident() OffsetDateTime) => {
         #[doc = $doc]
-        fn $field(&$self) -> DateTime<Utc> {
+        fn $field(&$self) -> OffsetDateTime {
             $zero.$field()
         }
     };

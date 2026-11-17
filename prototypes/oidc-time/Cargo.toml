@@ -1,0 +1,6 @@
+[workspace]
+members = ["openidconnect-4.1.0", "oauth2-5.0.0"]
+resolver = "3"
+
+[patch.crates-io]
+oauth2 = { path = "oauth2-5.0.0" }

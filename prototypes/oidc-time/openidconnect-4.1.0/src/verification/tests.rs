@@ -16,8 +16,8 @@ use crate::{
     SignatureVerificationError, StandardClaims, SubjectIdentifier, UserInfoError,
 };
 
-use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -1120,21 +1120,15 @@ fn test_new_id_token() {
         CoreIdTokenClaims::new(
             issuer.clone(),
             vec![Audience::new((*client_id).clone())],
-            Utc.timestamp_opt(1544932149, 0)
-                .single()
-                .expect("valid timestamp"),
-            Utc.timestamp_opt(1544928549, 0)
-                .single()
-                .expect("valid timestamp"),
+            OffsetDateTime::from_unix_timestamp(1544932149).expect("valid timestamp"),
+            OffsetDateTime::from_unix_timestamp(1544928549).expect("valid timestamp"),
             StandardClaims::new(SubjectIdentifier::new("subject".to_string())),
             Default::default(),
         )
         .set_nonce(Some(nonce.clone()))
         .set_auth_context_ref(Some(AuthenticationContextClass::new("the_acr".to_string())))
         .set_auth_time(Some(
-            Utc.timestamp_opt(1544928548, 0)
-                .single()
-                .expect("valid timestamp"),
+            OffsetDateTime::from_unix_timestamp(1544928548).expect("valid timestamp"),
         )),
         &rsa_priv_key,
         CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
@@ -1336,9 +1330,7 @@ fn test_new_user_info_claims() {
             phone_number_verified: None,
             address: None,
             updated_at: Some(
-                Utc.timestamp_opt(1544928548, 0)
-                    .single()
-                    .expect("valid timestamp"),
+                OffsetDateTime::from_unix_timestamp(1544928548).expect("valid timestamp"),
             ),
         },
         Default::default(),
@@ -1365,4 +1357,58 @@ fn test_new_user_info_claims() {
              YeSLeErhb6oTQ0a5gQ",
         serde_json::to_value(claims_jwt).unwrap().as_str().unwrap()
     );
+}
+
+#[test]
+fn time_port_signed_expiry_nanosecond_boundary_and_custom_clock_leeway() {
+    let client_id = ClientId::new("my_client".to_owned());
+    let issuer = IssuerUrl::new("https://example.com".to_owned()).unwrap();
+    let nonce = Nonce::new("the_nonce".to_owned());
+    let expiration = OffsetDateTime::from_unix_timestamp(100).unwrap();
+    let key = CoreRsaPrivateSigningKey::from_pem(TEST_RSA_PRIV_KEY, None).unwrap();
+    let token = CoreIdToken::new(
+        CoreIdTokenClaims::new(
+            issuer.clone(),
+            vec![Audience::new((*client_id).clone())],
+            expiration,
+            OffsetDateTime::from_unix_timestamp(99).unwrap(),
+            StandardClaims::new(SubjectIdentifier::new("subject".to_owned())),
+            Default::default(),
+        )
+        .set_nonce(Some(nonce.clone())),
+        &key,
+        CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
+        None,
+        None,
+    )
+    .unwrap();
+    // Serialize and parse so verification consumes the original signed wire bytes.
+    let token: CoreIdToken = serde_json::from_value(serde_json::to_value(token).unwrap()).unwrap();
+    let public_key = serde_json::from_str::<CoreJsonWebKey>(TEST_RSA_PUB_KEY).unwrap();
+    let verifier = CoreIdTokenVerifier::new_public_client(
+        client_id,
+        issuer,
+        CoreJsonWebKeySet::new(vec![public_key]),
+    );
+    for (delta_ns, accepted) in [(-1, true), (0, false), (1, false)] {
+        let wall_clock = expiration
+            .checked_add(time::Duration::seconds(30))
+            .unwrap()
+            .checked_add(time::Duration::nanoseconds(delta_ns))
+            .unwrap();
+        let verifier = verifier
+            .clone()
+            .set_time_fn(move || wall_clock.checked_sub(time::Duration::seconds(30)).unwrap());
+        let result = token.claims(&verifier, &nonce);
+        if accepted {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(ClaimsVerificationError::Expired(_))));
+        }
+    }
+    let impossible_clock = OffsetDateTime::from_unix_timestamp(-8_334_601_228_801).unwrap();
+    assert!(matches!(
+        token.claims(&verifier.set_time_fn(move || impossible_clock), &nonce),
+        Err(ClaimsVerificationError::Expired(_))
+    ));
 }

@@ -10,6 +10,7 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
+publish = false
 edition = "2021"
 rust-version = "1.88"
 name = "openidconnect"
@@ -88,13 +89,9 @@ path = "tests/rp_common.rs"
 [dependencies.base64]
 version = "0.22"
 
-[dependencies.chrono]
-version = "0.4"
-features = [
-    "clock",
-    "std",
-    "wasmbind",
-]
+[dependencies.time]
+version = "=0.3.55"
+features = ["std", "large-dates", "parsing"]
 default-features = false
 
 [dependencies.dyn-clone]
@@ -153,6 +150,8 @@ version = "1.0"
 
 [dependencies.serde_with]
 version = "3"
+default-features = false
+features = ["std", "macros"]
 
 [dependencies.sha2]
 version = "0.10.6"
@@ -190,3 +189,10 @@ default-features = false
 
 [dev-dependencies.retry]
 version = "1.0"
+
+[package.metadata.time-port.upstream]
+registry = "https://crates.io"
+name = "openidconnect"
+version = "4.1.0"
+archive = "https://static.crates.io/crates/openidconnect/openidconnect-4.1.0.crate"
+checksum = "df0d098a59353679624d406825940139e2b2d554a52b64c9fb1b1bc42a11fe5c"

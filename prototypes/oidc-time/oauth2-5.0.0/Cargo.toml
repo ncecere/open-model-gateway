@@ -10,8 +10,9 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
+publish = false
 edition = "2021"
-rust-version = "1.65"
+rust-version = "1.88"
 name = "oauth2"
 version = "5.0.0"
 authors = [
@@ -54,14 +55,9 @@ required-features = ["reqwest-blocking"]
 [dependencies.base64]
 version = ">= 0.21, <0.23"
 
-[dependencies.chrono]
-version = "0.4.31"
-features = [
-    "clock",
-    "serde",
-    "std",
-    "wasmbind",
-]
+[dependencies.time]
+version = "=0.3.55"
+features = ["std", "large-dates", "parsing"]
 default-features = false
 
 [dependencies.http]
@@ -140,3 +136,10 @@ features = ["js"]
 
 [badges.maintenance]
 status = "actively-developed"
+
+[package.metadata.time-port.upstream]
+registry = "https://crates.io"
+name = "oauth2"
+version = "5.0.0"
+archive = "https://static.crates.io/crates/oauth2/oauth2-5.0.0.crate"
+checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
