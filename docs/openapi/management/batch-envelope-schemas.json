@@ -1,0 +1,262 @@
+{
+  "schemas": {
+    "BatchEnvelopeResolutionInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "apply": {
+              "type": "boolean",
+              "default": false
+            },
+            "month": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^([1-9][0-9]{3}|0[1-9][0-9]{2}|00[1-9][0-9]|000[1-9])-(0[1-9]|1[0-2])$"
+            },
+            "workspace_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            "deployment_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            "expected_count": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^(0|[1-9][0-9]{0,3}|10000)$"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 150,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+            },
+            "offset": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^(?:0|[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-5][0-9]{4}|922337203685476[0-4][0-9]{3}|9223372036854765[0-7][0-9]{2}|922337203685476580[0-6]|9223372036854765807)$",
+              "default": "0",
+              "description": "Canonical decimal offset from 0 through 9223372036854765807."
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "if": {
+            "required": [
+              "apply"
+            ],
+            "properties": {
+              "apply": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "expected_count",
+              "reason"
+            ],
+            "properties": {
+              "expected_count": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "boolean",
+              "default": false
+            },
+            {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^([1-9][0-9]{3}|0[1-9][0-9]{2}|00[1-9][0-9]|000[1-9])-(0[1-9]|1[0-2])$"
+            },
+            {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^(0|[1-9][0-9]{0,3}|10000)$"
+            },
+            {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 150,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+            },
+            {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^(?:0|[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-5][0-9]{4}|922337203685476[0-4][0-9]{3}|9223372036854765[0-7][0-9]{2}|922337203685476580[0-6]|9223372036854765807)$",
+              "default": "0",
+              "description": "Canonical decimal offset from 0 through 9223372036854765807."
+            }
+          ],
+          "minItems": 6,
+          "maxItems": 7,
+          "items": false,
+          "if": {
+            "prefixItems": [
+              {
+                "const": true
+              }
+            ]
+          },
+          "then": {
+            "prefixItems": [
+              {
+                "type": "boolean",
+                "default": false
+              },
+              {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^([1-9][0-9]{3}|0[1-9][0-9]{2}|00[1-9][0-9]|000[1-9])-(0[1-9]|1[0-2])$"
+              },
+              {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              },
+              {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              },
+              {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,3}|10000)$"
+              },
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 150,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "BatchEnvelopeResolutionResult": {
+      "type": "object",
+      "properties": {
+        "eligible_count": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,3}|10000)$"
+        },
+        "resolved_count": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,3}|10000)$"
+        },
+        "next_offset": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "maxLength": 19
+        },
+        "envelope_held_microusd": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "maxLength": 19
+        },
+        "line_settled_microusd": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "maxLength": 19
+        },
+        "line_held_microusd": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "maxLength": 19
+        },
+        "line_pending_count": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "maxLength": 19
+        },
+        "line_unknown_count": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "maxLength": 19
+        },
+        "line_unbounded_count": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "maxLength": 19
+        }
+      },
+      "required": [
+        "eligible_count",
+        "resolved_count",
+        "next_offset",
+        "envelope_held_microusd",
+        "line_settled_microusd",
+        "line_held_microusd",
+        "line_pending_count",
+        "line_unknown_count",
+        "line_unbounded_count"
+      ],
+      "additionalProperties": false
+    },
+    "post_api_v1_platform_reservations_resolve_batch_envelopesRequest": {
+      "$ref": "#/components/schemas/BatchEnvelopeResolutionInput"
+    },
+    "post_api_v1_platform_reservations_resolve_batch_envelopesResponse": {
+      "$ref": "#/components/schemas/BatchEnvelopeResolutionResult"
+    }
+  }
+}

@@ -129,6 +129,7 @@ export const auditActionLabels: Record<string, string> = {
   "settings.logo_uploaded": "Uploaded logo", "settings.logo_removed": "Removed logo",
   "service_account.created": "Created service account", "service_account.updated": "Changed service account",
   "usage.reconciled": "Reconciled usage",
+  "usage.batch_envelope_resolved": "Resolved batch envelope",
   "usage.free_price_resolved": "Resolved free-price cost",
   "provider_cost.imported": "Imported provider-reported costs", "provider_cost.mapped": "Attested provider cost mapping", "provider_cost.reconciled": "Reconciled provider-reported costs",
   "access_request.created": "Submitted access request", "access_request.approved": "Approved access request", "access_request.denied": "Denied access request", "access_request.withdrawn": "Withdrew access request", "access_request.expired": "Expired access request", "access_request.applied": "Applied access request", "workspace.discoverability_set": "Changed workspace discoverability",

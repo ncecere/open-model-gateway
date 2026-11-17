@@ -5,23 +5,23 @@ use crate::timestamp::TimestampFormat as _;
 use gateway_datetime_compat::UtcInstant;
 use sqlx::{Postgres, Transaction};
 
-const MAX_CANDIDATES: usize = 10_000;
+pub(super) const MAX_CANDIDATES: usize = 10_000;
 type MonthBounds = (UtcInstant, UtcInstant);
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Resolve {
     #[serde(default)]
-    apply: bool,
-    month: Option<String>,
-    workspace_id: Option<Uuid>,
-    deployment_id: Option<Uuid>,
-    expected_count: Option<String>,
-    reason: Option<String>,
+    pub(super) apply: bool,
+    pub(super) month: Option<String>,
+    pub(super) workspace_id: Option<Uuid>,
+    pub(super) deployment_id: Option<Uuid>,
+    pub(super) expected_count: Option<String>,
+    pub(super) reason: Option<String>,
     #[serde(default)]
-    offset: Option<String>,
+    pub(super) offset: Option<String>,
 }
 impl Resolve {
-    fn bounds(&self) -> Result<Option<MonthBounds>, ApiError> {
+    pub(super) fn bounds(&self) -> Result<Option<MonthBounds>, ApiError> {
         let Some(month) = &self.month else {
             return Ok(None);
         };
@@ -39,7 +39,7 @@ impl Resolve {
             end.midnight().map_err(|_| invalid())?,
         )))
     }
-    fn validate(&self) -> Result<(), ApiError> {
+    pub(super) fn validate(&self) -> Result<(), ApiError> {
         self.bounds()?;
         self.offset()?;
         if self.reason.as_ref().is_some_and(|r| {
@@ -58,7 +58,7 @@ impl Resolve {
         }
         Ok(())
     }
-    fn offset(&self) -> Result<i64, ApiError> {
+    pub(super) fn offset(&self) -> Result<i64, ApiError> {
         let raw = self.offset.as_deref().unwrap_or("0");
         let offset = money(raw, false)?;
         if offset.to_string() != raw || offset > i64::MAX - MAX_CANDIDATES as i64 {

@@ -156,8 +156,8 @@ GRANT UPDATE(state,error_code,input_tokens,output_tokens,billing_usage,elapsed_m
  finish_reason,time_to_first_token_ms,generation_ms,reasoning_tokens,client_session_id,client_app,
  reported_upstream_model)
  ON public.inference_executions TO gateway_runtime;
--- 0082: explicit free-price resolution preserves unknown usage.
-GRANT UPDATE(state,actual_microusd,free_price_resolved,input_tokens,output_tokens,billing_usage,cost_components,
+-- 0082/0083: explicit free-price and terminal-envelope resolution preserve unknown usage.
+GRANT UPDATE(state,actual_microusd,free_price_resolved,batch_envelope_resolved,input_tokens,output_tokens,billing_usage,cost_components,
  held_microusd,unbounded_cost,meter_usage,output_image_variant,provider_cost_microusd)
  ON public.governance_reservations TO gateway_runtime;
 GRANT UPDATE(strategy,max_attempts,allow_ambiguous_failover,required_residency) ON public.routing_policies TO gateway_runtime;
