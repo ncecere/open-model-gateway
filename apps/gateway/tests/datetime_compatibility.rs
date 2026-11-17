@@ -438,9 +438,9 @@ async fn mapping_timestamp_frontiers(pool: &PgPool, gateway: &Gateway, browser: 
         .bind(connection).execute(pool).await.unwrap();
     let csrf = browser.split("omg_csrf=").nth(1).unwrap();
     let path = "/api/v1/platform/provider-cost-mappings";
-    // This endpoint binds DateTime values to SQL (rather than JSON-to-recordset).
-    // Before PG's 2000 epoch, Chrono truncates fractional microseconds toward
-    // that epoch. Native SQLx/time flooring would make this one microsecond early.
+    // This endpoint uses typed SQL timestamp binding rather than JSON-to-recordset.
+    // Submicrosecond differences truncate toward PostgreSQL's 2000 epoch. The
+    // pre-1970 and 1999 cases distinguish that from flooring or truncating Unix time.
     for (index, input, expected) in [
         (
             0,
@@ -458,6 +458,11 @@ async fn mapping_timestamp_frontiers(pool: &PgPool, gateway: &Gateway, browser: 
             "2000-01-01T00:00:00.1234+00:00",
         ),
         (3, "2016-12-31T23:59:60.5Z", "2017-01-01T00:00:00.5+00:00"),
+        (
+            4,
+            "1999-12-31T23:59:59.123456789Z",
+            "1999-12-31T23:59:59.123457+00:00",
+        ),
     ] {
         let body = json!({"account_id":format!("date-{index}"),"evidence_reference":"fixture:date","supersedes":null,
             "bindings":[{"provider_workspace_id":null,"connection_id":connection,"deployment_id":null,"workspace_id":null,
