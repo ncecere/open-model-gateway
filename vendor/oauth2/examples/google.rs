@@ -13,6 +13,11 @@
 //! ...and follow the instructions.
 //!
 
+#[path = "support/callback_state.rs"]
+mod callback_state;
+#[path = "support/terminal.rs"]
+mod terminal;
+
 use oauth2::reqwest;
 use oauth2::{basic::BasicClient, StandardRevocableToken, TokenResponse};
 use oauth2::{
@@ -77,7 +82,10 @@ fn main() {
         .set_pkce_challenge(pkce_code_challenge)
         .url();
 
-    println!("Open this URL in your browser:\n{authorize_url}\n");
+    terminal::display(format_args!(
+        "Open this URL in your browser:\n{authorize_url}\n"
+    ))
+    .expect("An interactive terminal is required for authorization");
 
     let (code, state) = {
         // A very naive implementation of the redirect server.
@@ -119,12 +127,11 @@ fn main() {
         (code, state)
     };
 
-    println!("Google returned the following code:\n{}\n", code.secret());
-    println!(
-        "Google returned the following state:\n{} (expected `{}`)\n",
-        state.secret(),
-        csrf_state.secret()
-    );
+    if !callback_state::matches(&state, &csrf_state) {
+        eprintln!("Authorization response state did not match.");
+        return;
+    }
+    println!("Authorization response received.");
 
     // Exchange the code with a token.
     let token_response = client
@@ -132,10 +139,10 @@ fn main() {
         .set_pkce_verifier(pkce_code_verifier)
         .request(&http_client);
 
-    println!("Google returned the following token:\n{token_response:?}\n");
+    println!("Token request succeeded: {}", token_response.is_ok());
 
     // Revoke the obtained token
-    let token_response = token_response.unwrap();
+    let token_response = token_response.unwrap_or_else(|_| panic!("Token request failed"));
     let token_to_revoke: StandardRevocableToken = match token_response.refresh_token() {
         Some(token) => token.into(),
         None => token_response.access_token().into(),
@@ -145,5 +152,5 @@ fn main() {
         .revoke_token(token_to_revoke)
         .unwrap()
         .request(&http_client)
-        .expect("Failed to revoke token");
+        .unwrap_or_else(|_| panic!("Failed to revoke token"));
 }

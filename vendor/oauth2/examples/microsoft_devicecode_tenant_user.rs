@@ -1,3 +1,6 @@
+#[path = "support/terminal.rs"]
+mod terminal;
+
 use oauth2::basic::BasicClient;
 use oauth2::reqwest;
 use oauth2::StandardDeviceAuthorizationResponse;
@@ -35,20 +38,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .exchange_device_code()
         .add_scope(Scope::new("read".to_string()))
         .request_async(&http_client)
-        .await?;
+        .await
+        .map_err(|_| std::io::Error::other("Device authorization request failed"))?;
 
-    eprintln!(
+    terminal::display(format_args!(
         "Open this URL in your browser:\n{}\nand enter the code: {}",
         details.verification_uri(),
         details.user_code().secret(),
-    );
+    ))
+    .expect("An interactive terminal is required for authorization");
 
     let token_result = client
         .exchange_device_access_token(&details)
         .request_async(&http_client, tokio::time::sleep, None)
         .await;
 
-    eprintln!("Token:{token_result:?}");
+    println!("Token request succeeded: {}", token_result.is_ok());
 
     Ok(())
 }

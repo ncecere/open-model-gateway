@@ -20,6 +20,11 @@
 //! ...and follow the instructions.
 //!
 
+#[path = "support/callback_state.rs"]
+mod callback_state;
+#[path = "support/terminal.rs"]
+mod terminal;
+
 use oauth2::basic::BasicClient;
 use oauth2::reqwest;
 use oauth2::{
@@ -82,7 +87,10 @@ fn main() {
         .set_pkce_challenge(pkce_code_challenge)
         .url();
 
-    println!("Open this URL in your browser:\n{authorize_url}\n");
+    terminal::display(format_args!(
+        "Open this URL in your browser:\n{authorize_url}\n"
+    ))
+    .expect("An interactive terminal is required for authorization");
 
     let (code, state) = {
         // A very naive implementation of the redirect server.
@@ -124,12 +132,11 @@ fn main() {
         (code, state)
     };
 
-    println!("MS Graph returned the following code:\n{}\n", code.secret());
-    println!(
-        "MS Graph returned the following state:\n{} (expected `{}`)\n",
-        state.secret(),
-        csrf_state.secret()
-    );
+    if !callback_state::matches(&state, &csrf_state) {
+        eprintln!("Authorization response state did not match.");
+        return;
+    }
+    println!("Authorization response received.");
 
     // Exchange the code with a token.
     let token = client
@@ -138,5 +145,5 @@ fn main() {
         .set_pkce_verifier(pkce_code_verifier)
         .request(&http_client);
 
-    println!("MS Graph returned the following token:\n{token:?}\n");
+    println!("Token request succeeded: {}", token.is_ok());
 }

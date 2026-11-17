@@ -36,6 +36,17 @@ review, two security reviews, root canonical vendor registrations and unchanged
 normal plus upstream-base advisory checks. This documents responsibility and the
 update procedure; it offers no maintenance guarantee or policy exception.
 
+Interactive examples display authorization URLs and device user codes only on
+an attached controlling terminal (`/dev/tty` on Unix, `CONOUT$` on Windows), never
+through stdout or stderr. They refuse missing/nonterminal output and control
+characters in a prompt. Device user codes remain visible for the verification
+step required by RFC 8628; device codes and tokens are never displayed. Callback
+examples compare returned CSRF state before exchanging the code. Normal example
+diagnostics contain status messages rather than code/state, token, claim or raw
+provider-error dumps. These example-only changes do not change SDK transports or
+verifiers. Unix regression tests exercise real PTYs and redirected output using
+Python 3; Windows terminal execution remains unproved by those tests.
+
 Scoped commands from repository root, Cargo jobs capped at two:
 
 ```sh

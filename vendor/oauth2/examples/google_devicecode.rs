@@ -13,6 +13,9 @@
 //! ...and follow the instructions.
 //!
 
+#[path = "support/terminal.rs"]
+mod terminal;
+
 use oauth2::basic::BasicClient;
 use oauth2::reqwest;
 use oauth2::{
@@ -68,20 +71,21 @@ fn main() {
         .exchange_device_code()
         .add_scope(Scope::new("profile".to_string()))
         .request(&http_client)
-        .expect("Failed to request codes from device auth endpoint");
+        .unwrap_or_else(|_| panic!("Failed to request codes from device auth endpoint"));
 
     // Display the URL and user-code.
-    println!(
+    terminal::display(format_args!(
         "Open this URL in your browser:\n{}\nand enter the code: {}",
         details.verification_uri(),
         details.user_code().secret(),
-    );
+    ))
+    .expect("An interactive terminal is required for authorization");
 
     // Now poll for the token
-    let token = device_client
+    let _token = device_client
         .exchange_device_access_token(&details)
         .request(&http_client, std::thread::sleep, None)
-        .expect("Failed to get token");
+        .unwrap_or_else(|_| panic!("Failed to get token"));
 
-    println!("Google returned the following token:\n{token:?}\n");
+    println!("Token request succeeded.");
 }

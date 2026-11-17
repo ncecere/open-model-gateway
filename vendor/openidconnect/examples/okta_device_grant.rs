@@ -15,6 +15,9 @@
 //! ...and follow the instructions.
 //!
 
+#[path = "../../oauth2/examples/support/terminal.rs"]
+mod terminal;
+
 use openidconnect::core::{
     CoreAuthDisplay, CoreClaimName, CoreClaimType, CoreClient, CoreClientAuthMethod,
     CoreDeviceAuthorizationResponse, CoreGrantType, CoreJsonWebKey,
@@ -52,14 +55,8 @@ type DeviceProviderMetadata = ProviderMetadata<
     CoreSubjectIdentifierType,
 >;
 
-fn handle_error<T: std::error::Error>(fail: &T, msg: &'static str) {
-    let mut err_msg = format!("ERROR: {}", msg);
-    let mut cur_fail: Option<&dyn std::error::Error> = Some(fail);
-    while let Some(cause) = cur_fail {
-        err_msg += &format!("\n    caused by: {}", cause);
-        cur_fail = cause.source();
-    }
-    println!("{}", err_msg);
+fn handle_error<T: std::error::Error>(_fail: &T, msg: &'static str) {
+    eprintln!("ERROR: {msg}");
     exit(1);
 }
 
@@ -116,17 +113,17 @@ fn main() -> Result<(), anyhow::Error> {
             unreachable!();
         });
     println!("Fetching device code...");
-    dbg!(&details);
 
     // Display the URL and user-code.
-    println!(
+    terminal::display(format_args!(
         "Open this URL in your browser:\n{}\nand enter the code: {}",
-        details.verification_uri_complete().unwrap().secret(),
-        details.user_code().secret()
-    );
+        details.verification_uri(),
+        details.user_code().secret(),
+    ))
+    .expect("An interactive terminal is required for authorization");
 
     // Now poll for the token
-    let token = client
+    let _token = client
         .exchange_device_access_token(&details)
         .unwrap_or_else(|err| {
             handle_error(&err, "Failed to get access token");
@@ -138,8 +135,7 @@ fn main() -> Result<(), anyhow::Error> {
             unreachable!();
         });
 
-    // Finally, display the ID Token to verify we are using OIDC
-    println!("ID Token response: {:?}", token.extra_fields().id_token());
+    println!("Token request succeeded.");
 
     Ok(())
 }

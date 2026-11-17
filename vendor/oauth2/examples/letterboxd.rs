@@ -60,12 +60,13 @@ fn main() -> Result<(), anyhow::Error> {
     // for that, we use a custom http client.
     let http_client = SigningHttpClient::new(letterboxd_client_id, letterboxd_client_secret);
 
-    let token_result = client
+    let _token_result = client
         .set_auth_type(AuthType::RequestBody)
         .exchange_password(&letterboxd_username, &letterboxd_password)
-        .request(&|request| http_client.execute(request))?;
+        .request(&|request| http_client.execute(request))
+        .map_err(|_| anyhow::anyhow!("Token request failed"))?;
 
-    println!("{token_result:?}");
+    println!("Token request succeeded.");
 
     Ok(())
 }

@@ -14,6 +14,11 @@
 //! ...and follow the instructions.
 //!
 
+#[path = "../../oauth2/examples/support/callback_state.rs"]
+mod callback_state;
+#[path = "../../oauth2/examples/support/terminal.rs"]
+mod terminal;
+
 use openidconnect::core::{
     CoreAuthDisplay, CoreClaimName, CoreClaimType, CoreClient, CoreClientAuthMethod, CoreGrantType,
     CoreIdTokenClaims, CoreIdTokenVerifier, CoreJsonWebKey, CoreJweContentEncryptionAlgorithm,
@@ -34,14 +39,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::process::exit;
 
-fn handle_error<T: std::error::Error>(fail: &T, msg: &'static str) {
-    let mut err_msg = format!("ERROR: {}", msg);
-    let mut cur_fail: Option<&dyn std::error::Error> = Some(fail);
-    while let Some(cause) = cur_fail {
-        err_msg += &format!("\n    caused by: {}", cause);
-        cur_fail = cause.source();
-    }
-    println!("{}", err_msg);
+fn handle_error<T: std::error::Error>(_fail: &T, msg: &'static str) {
+    eprintln!("ERROR: {msg}");
     exit(1);
 }
 
@@ -153,7 +152,10 @@ fn main() {
         .add_scope(Scope::new("profile".to_string()))
         .url();
 
-    println!("Open this URL in your browser:\n{}\n", authorize_url);
+    terminal::display(format_args!(
+        "Open this URL in your browser:\n{authorize_url}\n"
+    ))
+    .expect("An interactive terminal is required for authorization");
 
     let (code, state) = {
         // A very naive implementation of the redirect server.
@@ -193,12 +195,11 @@ fn main() {
         (code, state)
     };
 
-    println!("Google returned the following code:\n{}\n", code.secret());
-    println!(
-        "Google returned the following state:\n{} (expected `{}`)\n",
-        state.secret(),
-        csrf_state.secret()
-    );
+    if !callback_state::matches(&state, &csrf_state) {
+        eprintln!("Authorization response state did not match.");
+        return;
+    }
+    println!("Authorization response received.");
 
     // Exchange the code with a token.
     let token_response = client
@@ -213,14 +214,11 @@ fn main() {
             unreachable!();
         });
 
-    println!(
-        "Google returned access token:\n{}\n",
-        token_response.access_token().secret()
-    );
+    println!("Token request succeeded.");
     println!("Google returned scopes: {:?}", token_response.scopes());
 
     let id_token_verifier: CoreIdTokenVerifier = client.id_token_verifier();
-    let id_token_claims: &CoreIdTokenClaims = token_response
+    let _id_token_claims: &CoreIdTokenClaims = token_response
         .extra_fields()
         .id_token()
         .expect("Server did not return an ID token")
@@ -229,7 +227,7 @@ fn main() {
             handle_error(&err, "Failed to verify ID token");
             unreachable!();
         });
-    println!("Google returned ID token: {:?}", id_token_claims);
+    println!("ID token verified.");
 
     // Revoke the obtained token
     let token_to_revoke: CoreRevocableToken = match token_response.refresh_token() {
