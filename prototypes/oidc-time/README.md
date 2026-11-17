@@ -143,7 +143,7 @@ python3 prototypes/oidc-time/check-graph.py
 cargo deny --manifest-path prototypes/oidc-time/Cargo.toml --all-features --config deny.toml check
 ```
 
-Local results after cleanup: formatting and strict all-target/all-feature Clippy
+At cleanup head `70763c9d`, formatting and strict all-target/all-feature Clippy
 passed. Default all-target tests passed (69 OAuth2 + 74 OIDC library tests);
 all-feature all-target tests passed (69 + 77), including the loopback HTTP test
 with seven positive/refusal responses. The 21 issuer-dependent certification tests
@@ -153,6 +153,19 @@ no-default and all-feature inventories, including dev/build/all-target edges,
 unfiltered metadata and Cargo.lock, contain no Chrono. Unchanged cargo-deny 0.20.2
 passes advisories, bans, licenses and sources (duplicate-version warnings remain
 allowed by the existing policy). No gateway suite was run.
+
+The coordinator's separator correction separately passed all 77 OIDC library
+tests with `--features accept-rfc3339-timestamps`, workspace/all-target Clippy
+with that feature and `-D warnings`, formatting, and the complete graph/metadata/
+lock inventory. The new regression uses the public user-info JSON parser with
+subject checking and ID-token claim deserialization. It keeps `T`/`t`/space
+acceptance and rejects `X`, slash, NUL, tab, newline, missing and multibyte
+separators. Before the guard, that regression failed on user-info separator `X`.
+The initial regression compile used a nonexistent direct `Deserialize` path for
+the public user-info wrapper; it was corrected to `from_json` before obtaining
+that runtime failure. An all-feature coordinator build stopped before tests on
+missing host OpenSSL/pkg-config prerequisites; the focused-feature checks above
+exercise the changed parser and do not claim an all-feature rerun.
 
 At prior head `7fe5faf9`, the strict inventory failed on
 inactive Chrono 0.4.45 via serde_with 3.24.0, and cargo-deny failed on adler

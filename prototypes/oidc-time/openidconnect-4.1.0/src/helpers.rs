@@ -529,6 +529,11 @@ impl Timestamp {
             }
             #[cfg(feature = "accept-rfc3339-timestamps")]
             Timestamp::Rfc3339(iso) => {
+                // Only T, t or space separates the date and time; the native
+                // RFC3339 parser alone accepts arbitrary separator bytes.
+                if !matches!(iso.as_bytes().get(10), Some(b'T' | b't' | b' ')) {
+                    return Err(());
+                }
                 // OffsetDateTime cannot represent leap seconds. Refuse them rather
                 // than accepting time's normalized stand-in as an earlier instant.
                 if iso.as_bytes().get(17..19) == Some(b"60") {
@@ -676,6 +681,52 @@ mod time_port_contracts {
                 .unwrap()
                 .to_utc()
                 .is_err());
+        }
+    }
+
+    #[cfg(feature = "accept-rfc3339-timestamps")]
+    #[test]
+    fn rfc3339_claims_keep_the_original_separator_grammar() {
+        use crate::core::{CoreIdTokenClaims, CoreUserInfoClaims};
+        let subject = crate::SubjectIdentifier::new("subject".to_owned());
+
+        for separator in ["T", "t", " "] {
+            let timestamp = format!("1970-01-01{separator}00:00:00Z");
+            let user = CoreUserInfoClaims::from_json::<std::io::Error>(
+                &serde_json::to_vec(&json!({"sub": "subject", "updated_at": timestamp})).unwrap(),
+                Some(&subject),
+            )
+            .unwrap();
+            assert_eq!(user.updated_at(), Some(time::OffsetDateTime::UNIX_EPOCH));
+            let claims: CoreIdTokenClaims = serde_json::from_value(json!({
+                "iss": "https://issuer.example", "aud": ["client"], "sub": "subject",
+                "exp": timestamp, "iat": 0
+            }))
+            .unwrap();
+            assert_eq!(claims.expiration(), time::OffsetDateTime::UNIX_EPOCH);
+        }
+
+        for separator in ["X", "/", "\0", "\t", "\n", "_", "", "💣", "−"] {
+            let timestamp = format!("1970-01-01{separator}00:00:00Z");
+            assert!(
+                matches!(
+                    CoreUserInfoClaims::from_json::<std::io::Error>(
+                        &serde_json::to_vec(&json!({"sub": "subject", "updated_at": timestamp}))
+                            .unwrap(),
+                        Some(&subject),
+                    ),
+                    Err(crate::UserInfoError::Parse(_))
+                ),
+                "user-info separator {separator:?}"
+            );
+            assert!(
+                serde_json::from_value::<CoreIdTokenClaims>(json!({
+                    "iss": "https://issuer.example", "aud": ["client"], "sub": "subject",
+                    "exp": timestamp, "iat": 0
+                }))
+                .is_err(),
+                "ID-token separator {separator:?}"
+            );
         }
     }
 
