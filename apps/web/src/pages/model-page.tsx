@@ -218,14 +218,18 @@ export function RoutesTable({ set, model, workload, writable, selection }: { set
     <Td><RouteStatus row={r} /></Td>
     <Td stickyEnd><RouteActions row={r} model={model} workload={workload} writable={writable} /></Td>
   </Tr>; };
+  // Keep every route in one keyed sibling list. Separate tier arrays remount a
+  // row on enable/disable, removing its focused trigger after dialog dismissal.
   return <Table caption={`Routes for ${model.display_name}`} columns={columns} framed className={m.routesTable}>
-    {primary.map(row)}
-    {fallback.length > 0 && <TableDividerRow colSpan={span} label="Fallback only · not used by default" reason={set.tiers.fallbackReason} />}
-    {fallback.map(row)}
-    {unknown.length > 0 && <TableDividerRow colSpan={span} label="Routing order unknown" reason={set.policy.isError ? "The routing policy couldn't be loaded, so which route serves by default is unknown." : "Loading routing settings…"} />}
-    {unknown.map(row)}
-    {inactive.length > 0 && <TableDividerRow colSpan={span} label="Not serving" reason="Disabled routes, and routes on disabled connections, receive no requests." />}
-    {inactive.map(row)}
+    {[
+      ...primary.map(row),
+      ...(fallback.length > 0 ? [<TableDividerRow key="fallback" colSpan={span} label="Fallback only · not used by default" reason={set.tiers.fallbackReason} />] : []),
+      ...fallback.map(row),
+      ...(unknown.length > 0 ? [<TableDividerRow key="unknown" colSpan={span} label="Routing order unknown" reason={set.policy.isError ? "The routing policy couldn't be loaded, so which route serves by default is unknown." : "Loading routing settings…"} />] : []),
+      ...unknown.map(row),
+      ...(inactive.length > 0 ? [<TableDividerRow key="inactive" colSpan={span} label="Not serving" reason="Disabled routes, and routes on disabled connections, receive no requests." />] : []),
+      ...inactive.map(row),
+    ]}
   </Table>;
 }
 type RouteMeter = Parameters<typeof basePrice>[1];

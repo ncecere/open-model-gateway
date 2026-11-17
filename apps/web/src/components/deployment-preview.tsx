@@ -19,7 +19,8 @@ export function DeploymentStatusActions({ record, name, children }: { record: Re
   const [review, setReview] = useState<{ retire: boolean; returnFocus: HTMLElement } | null>(null), triggerId = useId();
   // Pass plain buttons/menu items to the containing header, not an opaque
   // component: its narrow layout must merge these with any sibling actions.
-  const actions = <><Button id={triggerId} variant="secondary" onClick={event => setReview({ retire: false, returnFocus: event.currentTarget })}>Review changes</Button><ActionMenu label={`Actions for ${name}`} actions={[{ label: "Retire resource…", danger: true, hidden: !record.enabled, onSelectWithTrigger: origin => setReview({ retire: true, returnFocus: origin }) }]} /></>;
+  // Stable keys preserve these controls when asynchronously loaded header siblings appear.
+  const actions = <><Button key="deployment-review" id={triggerId} variant="secondary" onClick={event => setReview({ retire: false, returnFocus: event.currentTarget })}>Review changes</Button><ActionMenu key="deployment-actions" label={`Actions for ${name}`} actions={[{ label: "Retire resource…", danger: true, hidden: !record.enabled, onSelectWithTrigger: origin => setReview({ retire: true, returnFocus: origin }) }]} /></>;
   return <>{children ? children(actions) : <HeaderActions>{actions}</HeaderActions>}{review && <DeploymentReviewDialog record={record} name={name} retire={review.retire} returnFocus={review.returnFocus} fallbackFocus={() => document.getElementById(triggerId)} onClose={() => setReview(null)} />}</>;
 }
 /** Mounted only while open: every new review fetches a fresh observation. */
@@ -35,9 +36,9 @@ export function DeploymentReviewDialog({ record, name, retire = false, restoreOf
   const preview = !q.isError && !q.isFetching && !mismatch ? q.data : undefined;
   const restoreAfterRefresh = () => {
     const previousFallback = fallbackFocus?.();
-    // ActionProvider has already invalidated these queries. Join its in-flight
-    // refetches without cancelling/restarting them, then resolve the stable id
-    // after the refreshed render (headers and regrouped rows can remount).
+    // Join ActionProvider's invalidated fetches without restarting them. A frame
+    // is not a React commit barrier: the origin/fallback must keep their keyed
+    // identity through the refreshed render, even if it follows this callback.
     void client.refetchQueries({ queryKey: ["api", scope], type: "active", fetchStatus: "fetching" }, { cancelRefetch: false }).then(() => {
       requestAnimationFrame(() => {
         const active = document.activeElement;
