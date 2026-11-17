@@ -25,7 +25,10 @@ BEGIN
   RAISE EXCEPTION 'batch envelope resolution is permanent' USING ERRCODE='23514';
  END IF;
  IF NEW.batch_envelope_resolved AND NOT OLD.batch_envelope_resolved AND
-  (OLD.state<>'unknown' OR NOT EXISTS(
+  (OLD.state<>'unknown'
+   OR (SELECT count(*) FROM inference_executions WHERE id=NEW.execution_id)<>1
+   OR (SELECT count(*) FROM governance_reservations WHERE execution_id=NEW.execution_id)<>1
+   OR NOT EXISTS(
    SELECT FROM async_jobs j JOIN inference_executions e ON e.id=j.execution_id AND e.started_at=NEW.admitted_at
    WHERE j.execution_id=NEW.execution_id AND j.workspace_id=NEW.workspace_id AND j.api_key_id=NEW.api_key_id AND j.deployment_id=NEW.deployment_id
     AND j.kind='batch' AND j.batch_mode='gateway' AND j.state IN('completed','failed','cancelled','expired') AND j.completed_at IS NOT NULL

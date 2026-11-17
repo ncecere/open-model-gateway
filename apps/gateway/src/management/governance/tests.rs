@@ -38,6 +38,8 @@ fn holds_exact_route_and_token_policies() {
 }
 #[cfg(feature = "integration-tests")]
 mod db {
+    #[path = "batch_envelope_paging_tests.rs"]
+    mod batch_envelope_paging_tests;
     #[path = "batch_envelope_tests.rs"]
     mod batch_envelope_tests;
     #[path = "free_price_tests.rs"]
