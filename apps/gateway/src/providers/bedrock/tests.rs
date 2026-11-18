@@ -1145,12 +1145,26 @@ async fn error_tool_sdk_bedrock_opaque_validation_failure(pool: sqlx::PgPool) {
     deployment.upstream_model =
         "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/a1b2c3d4e5".into();
     super::super::contract::run_error_tool_sdk(
-        pool,
+        pool.clone(),
         Arc::new(mock.adapter()),
         deployment,
         Some((400, InferenceError::UpstreamRejected)),
     )
     .await;
+    // Paid requests rejected before the stream opens have no usage evidence.
+    // Each 100-input + 32-output hold remains available for reconciliation.
+    let unknown: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM governance_reservations r
+         JOIN inference_executions e ON e.id=r.execution_id
+         JOIN monetary_ledger l ON l.execution_id=e.id AND l.kind='unknown'
+         WHERE r.state='unknown' AND r.held_microusd=132 AND r.actual_microusd IS NULL
+           AND e.state='failed' AND e.error_code='upstream_rejected'
+           AND e.input_tokens IS NULL AND e.output_tokens IS NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(unknown, 2);
     let capture = mock.requests.lock().unwrap();
     assert_eq!(capture.len(), 2);
     for (request, operation) in capture.iter().zip(["/converse", "/converse-stream"]) {

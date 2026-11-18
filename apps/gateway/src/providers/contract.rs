@@ -329,6 +329,13 @@ pub async fn run_error_tool_sdk(
         .execute(&pool)
         .await
         .unwrap();
+    if matches!(
+        refusal,
+        Some((_, crate::inference::error::InferenceError::UpstreamRejected))
+    ) {
+        sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version) SELECT gen_random_uuid(),id,1000000,1000000,100,50,1 FROM deployments")
+            .execute(&pool).await.unwrap();
+    }
     let mut registry = crate::providers::ProviderRegistry::default();
     registry.register(adapter).unwrap();
     let engine = Engine::new(Arc::new(store.clone()), registry, EngineLimits::default()).unwrap();

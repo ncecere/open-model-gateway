@@ -62,11 +62,7 @@ struct Resolved {
     legacy: bool,
 }
 
-/// Test-only counters proving [`Jobs::every_candidate_route_refuses`]'s two
-/// model-level, read-only lookups (`Store::deployments`, `Store::route_plan`)
-/// are memoized at most once per model per scan (#238 follow-up), not once
-/// per explicit-maximum line. Incremented only at those two call sites;
-/// never read outside tests.
+/// Database lookups during explicit-maximum route selection, counted across one scan.
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct PlanLookupCounts {
@@ -74,25 +70,12 @@ pub(crate) struct PlanLookupCounts {
     pub(crate) route_plan: std::sync::atomic::AtomicUsize,
 }
 
-/// Per-scan memoization of [`Jobs::every_candidate_route_refuses`]'s
-/// model-level, read-only lookups. With configuration caches bypassed
-/// (`GATEWAY_CONFIG_CACHE=off`, or a version-unconfirmed cache miss), a
-/// naive per-line call ran `Store::deployments` and (when every capable
-/// route refused) `Store::route_plan` for every explicit-maximum line, so a
-/// large upload amplified database load before `admit_batch` ever checked a
-/// budget or job limit. Neither entry survives this one scan: nothing here
-/// is cached across scans or requests.
+/// One scan fixes the principal, endpoint and routing seed. Each line is
+/// validated separately, while equivalent candidate sets share a route plan.
 #[derive(Default)]
-struct RefusalMemo {
-    /// A model's candidate deployments (`Store::deployments`) never depend
-    /// on a line's body: fetched at most once per model per scan.
+struct RouteMemo {
     deployments: HashMap<String, Arc<Vec<Deployment>>>,
-    /// The routes the read-only routing policy would use (`route_plan`)
-    /// for a given set of refused candidates, keyed by model and the sorted
-    /// refused deployment ids. Which routes are capable depends on the line
-    /// (coarse feature support), and the refusal *kind* depends on the
-    /// line's body, so only this usable-route set is reused; the 400/501
-    /// decision is still made per line from its own adapter verdicts.
+    /// Policy-ordered routes by model and candidate set, for selection or refusal classification.
     usable: HashMap<(String, Vec<Uuid>), Arc<Vec<Uuid>>>,
 }
 
@@ -143,9 +126,9 @@ struct ScanState {
     // deterministically: excluded from the parent envelope, not from the
     // batch (see the end of the scan).
     deterministic_rejects: Vec<(u64, InferenceError)>,
-    // Model-level memoization of `every_candidate_route_refuses`'s
+    // Model-level memoization of `explicit_chat_route`'s
     // read-only lookups, scoped to this one scan (#238 follow-up).
-    refusal_memo: RefusalMemo,
+    route_memo: RouteMemo,
 }
 
 impl Jobs {
@@ -186,40 +169,18 @@ impl Jobs {
         })
     }
 
-    /// Whether *every* authorized, protocol-capable candidate deployment of
-    /// `model` would deterministically refuse `request` on `protocol`: the
-    /// same per-adapter/provider enumeration `Engine::execute_protocol` runs
-    /// before interactive admission (#228), reused here read-only so an
-    /// unpinned batch line's exclusion from the parent envelope matches what
-    /// the runner's own dispatch would actually do (#238) - not just what
-    /// the one deployment planning happened to size the line against.
-    ///
-    /// `Ok(None)`: at least one capable candidate accepts, or none was even
-    /// protocol-capable for this request (the coarse whole-batch check
-    /// already reports that case). `Ok(Some(error))`: every capable
-    /// candidate refuses, classified like the engine would (400
-    /// `invalid_request_error` only when a route the live routing policy
-    /// would actually use returned it, else 501 `unsupported_capability`).
-    /// No admission, reservation or routing-health write happens here.
-    ///
-    /// Both DB-backed lookups this needs are memoized in `memo` for the
-    /// whole scan (#238 follow-up): `Store::deployments` once per model, and
-    /// (only when every capable route refuses) `Store::route_plan` once per
-    /// model and refused-route set. The refusal kind stays per line:
-    /// a 50,000-line upload must not run ~50k deployment reads and ~100k
-    /// routing selects before `admit_batch` ever checks a budget or job
-    /// limit. Per-line adapter validation (bodies differ) still runs on
-    /// every line, deduplicated per provider within that line as before;
-    /// nothing here survives past this one scan.
-    async fn every_candidate_route_refuses(
+    /// Select the deployment for an explicit-maximum line from candidates
+    /// accepting its exact body. Refusals use the interactive 400/501
+    /// classification restricted to routes the routing policy would use.
+    async fn explicit_chat_route(
         &self,
-        principal: &Principal,
-        model: &str,
-        protocol: ApiProtocol,
-        request_id: Uuid,
+        scope: ScanScope<'_>,
+        preferred: Arc<Resolved>,
         request: &ChatRequest,
-        memo: &mut RefusalMemo,
-    ) -> Result<Option<InferenceError>, JobError> {
+        memo: &mut RouteMemo,
+    ) -> Result<Result<Arc<Resolved>, InferenceError>, JobError> {
+        let model = request.model.as_str();
+        let protocol = scope.endpoint.protocol();
         let deployments = match memo.deployments.get(model) {
             Some(cached) => cached.clone(),
             None => {
@@ -227,7 +188,7 @@ impl Jobs {
                 self.plan_lookup_counts
                     .deployments
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let fetched = Arc::new(self.store.deployments(principal, model).await?);
+                let fetched = Arc::new(self.store.deployments(scope.principal, model).await?);
                 memo.deployments.insert(model.to_owned(), fetched.clone());
                 fetched
             }
@@ -273,45 +234,67 @@ impl Jobs {
                 Err(error) => refused.push((deployment.clone(), error)),
             }
         }
-        if !candidates.is_empty() || refused.is_empty() {
-            return Ok(None);
+        if !candidates.is_empty() {
+            let usable = self.scan_route_ids(scope, model, &candidates, memo).await?;
+            let first = usable.first().ok_or(InferenceError::ModelUnavailable)?;
+            let deployment = candidates
+                .into_iter()
+                .find(|d| d.id == *first)
+                .ok_or(InferenceError::Configuration)?;
+            let adapter = self
+                .registry
+                .get(&deployment.provider)
+                .ok_or(InferenceError::Configuration)?;
+            return Ok(Ok(Arc::new(Resolved {
+                deployment,
+                adapter,
+                legacy: false,
+            })));
         }
-        // Every protocol-capable candidate refused: classify it only from
-        // the routes the read-only routing policy would actually use
-        // (residency, operator-disabled routes and cooldown), exactly as
-        // `Engine::execute_protocol` does for an interactive request. The
-        // usable-route set is memoized per (model, refused set); the kind
-        // below is still decided from this line's own verdicts.
-        let mut key_ids: Vec<Uuid> = refused.iter().map(|(d, _)| d.id).collect();
-        key_ids.sort_unstable();
-        let key = (model.to_owned(), key_ids);
-        let usable = match memo.usable.get(&key) {
-            Some(cached) => cached.clone(),
-            None => {
-                #[cfg(test)]
-                self.plan_lookup_counts
-                    .route_plan
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let refused_deployments: Vec<Deployment> =
-                    refused.iter().map(|(d, _)| d.clone()).collect();
-                let plan = self
-                    .store
-                    .route_plan(principal, model, &refused_deployments, request_id)
-                    .await?;
-                let ids = Arc::new(plan.deployment_ids);
-                memo.usable.insert(key, ids.clone());
-                ids
-            }
-        };
+        if refused.is_empty() {
+            // No coarse engine candidate: the native-batch encoder and the
+            // whole-file gateway capability check still judge the preferred route.
+            return Ok(Ok(preferred));
+        }
+        let deployments: Vec<_> = refused.iter().map(|(d, _)| d.clone()).collect();
+        let usable = self
+            .scan_route_ids(scope, model, &deployments, memo)
+            .await?;
         let invalid = refused.iter().find(|(d, error)| {
             matches!(
                 error,
                 InferenceError::InvalidRequest | InferenceError::InvalidField(_)
             ) && usable.contains(&d.id)
         });
-        Ok(Some(
-            invalid.map_or(InferenceError::Unsupported, |(_, e)| *e),
-        ))
+        Ok(Err(invalid.map_or(InferenceError::Unsupported, |(_, e)| *e)))
+    }
+
+    /// Each line has its own wire verdicts. Within one scan, identical
+    /// candidate sets share their routing-policy order and request seed.
+    async fn scan_route_ids(
+        &self,
+        scope: ScanScope<'_>,
+        model: &str,
+        deployments: &[Deployment],
+        memo: &mut RouteMemo,
+    ) -> Result<Arc<Vec<Uuid>>, JobError> {
+        let mut ids: Vec<_> = deployments.iter().map(|d| d.id).collect();
+        ids.sort_unstable();
+        let key = (model.to_owned(), ids);
+        if let Some(cached) = memo.usable.get(&key) {
+            return Ok(cached.clone());
+        }
+        #[cfg(test)]
+        self.plan_lookup_counts
+            .route_plan
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let plan = self
+            .store
+            .route_plan(scope.principal, model, deployments, scope.request_id)
+            .await?;
+        let usable = Arc::new(plan.deployment_ids);
+        memo.usable.insert(key, usable.clone());
+        Ok(usable)
     }
 
     /// Validate `input` (already opened) and copy it to the batch's private
@@ -421,8 +404,7 @@ impl Jobs {
                 // Keep scanning for problems, but stop copying.
                 continue;
             }
-            state.record(endpoint, &line);
-            scan::copy_line(work, raw, &line).await?;
+            scan::copy_line(work, raw, line).await?;
         }
         state.finish(endpoint, force_gateway)
     }
@@ -442,7 +424,7 @@ impl ScanState {
             native_ok: true,
             gateway_unsupported: None,
             deterministic_rejects: Vec::new(),
-            refusal_memo: RefusalMemo::default(),
+            route_memo: RouteMemo::default(),
         }
     }
 
