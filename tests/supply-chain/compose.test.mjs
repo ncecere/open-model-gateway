@@ -36,7 +36,11 @@ test("every YAML file with Compose services is checked, wherever it is", () => {
     mkdirSync(join(dir, "tools/x"), { recursive: true });
     writeFileSync(join(dir, "tools/x/stack.yml"), "services:\n  app:\n    build:\n      context: .\n      target: build\n");
     writeFileSync(join(dir, "notes.yml"), "title: not compose\n");
-    assert.deepEqual(repoComposeFiles(dir), ["tools/x/stack.yml"]);
+    writeFileSync(join(dir, "quoted.yml"), "'services': {app: {image: postgres:17}}\n");
+    writeFileSync(join(dir, "flow.yaml"), "{services: {app: {image: postgres:17}}}\n");
+    writeFileSync(join(dir, "nested.yml"), "spec: {services: {app: {}}}\n");
+    writeFileSync(join(dir, "inherited.yml"), "x-stack: &stack {services: {app: {}}}\n<<: *stack\n");
+    assert.deepEqual(repoComposeFiles(dir), ["flow.yaml", "inherited.yml", "quoted.yml", "tools/x/stack.yml"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

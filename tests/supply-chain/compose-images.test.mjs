@@ -49,6 +49,13 @@ test("fixtures distinguish pinned upstream defaults, local build outputs and ove
   const floating = source.replace(pinned, "postgres:17-alpine");
   assert.match(violations("compose.yml", toData(parseStrict(floating, "compose.yml"))).join(), /services\.db\.image/);
   const check = (file, name, service) => violations(file, { services: { [name]: service } });
+  const digest = pinned.slice(pinned.indexOf("@"));
+  for (const name of ["registry.example:5000/team/db:V1.0", "library/db", "[::1]:5000/team/db:dev"]) {
+    assert.deepEqual(check("compose.yml", "db", { image: name + digest }), []);
+  }
+  for (const name of ["postgres:", "/postgres", "library//db", "registry:abc/team/db", "postgres:.bad"]) {
+    assert.match(check("compose.yml", "db", { image: name + digest }).join(), /pinned by digest/, name);
+  }
   const local = { image: candidate, pull_policy: "never", build: { context: "../..", dockerfile: "Dockerfile" } };
   assert.deepEqual(check(staging, "gateway", local), []);
   assert.deepEqual(check(loadtest, "gateway-cli", { image: loadImage, pull_policy: "never" }), []);

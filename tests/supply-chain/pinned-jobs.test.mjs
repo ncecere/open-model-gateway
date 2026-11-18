@@ -141,6 +141,17 @@ test("staging.env.example is read as staging.py reads it (quotes and spaces stri
   assert.deepEqual(candidate(EXAMPLE.replace("GATEWAY_IMAGE=open-model-gateway:staging", '  GATEWAY_IMAGE="open-model-gateway:staging"')), []);
 });
 
+test("a policy-only overlay preserves local staging images", () => {
+  for (const name of ["gateway", "migrate", "grant-runtime"]) {
+    const file = "deploy/staging/compose.openai.yaml";
+    const layer = policy => ({ [file]: { services: { [name]: { pull_policy: policy } } } });
+    assert.deepEqual(candidate(EXAMPLE, layer("never")), []);
+    for (const policy of ["always", "missing", null]) {
+      assert.match(candidate(EXAMPLE, layer(policy)).join(), /pull_policy/);
+    }
+  }
+});
+
 const REFUSED_OVERLAYS = [
   ["an image on the gateway", "deploy/staging/compose.oidc.yaml", d => { d.services ??= {}; d.services.gateway = { ...d.services.gateway, image: "ghcr.io/ncecere/open-model-gateway:v0.4.1" }; }, /compose\.oidc\.yaml: service 'gateway' may not set image/],
   ["an image on an ops service", "deploy/staging/compose.openai.yaml", d => { d.services ??= {}; d.services.migrate = { image: "ghcr.io/ncecere/open-model-gateway:v0.4.1" }; }, /service 'migrate' may not set image/],

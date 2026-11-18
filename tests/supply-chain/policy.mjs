@@ -8,6 +8,7 @@
 // workflows and these tests; mandatory review of workflow diffs and of pinned-jobs.yaml is.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, posix } from "node:path";
+import { isMap, parseDocument } from "yaml";
 import { gitFiles } from "../git.mjs";
 import {
   DOCKERFILE_SKIP_DIRS, KNOWN_DOCKERFILES, actionName, jobPermissions, actionsDir, isMapping, jobsOf, loadWorkflow, parseStrict, readLocalFromRepo, root, sourceFiles, stepsOf, toData, workflowsDir,
@@ -21,7 +22,13 @@ import {
 // expression, a computed services mapping, a missing image) is refused unless listed here as
 // `<file>: <where>` with the reason; every entry must be used. None is listed.
 export const CONTAINER_IMAGE_EXPRESSIONS = new Map([]);
-export const PINNED_IMAGE = /^[^\s@$]+@sha256:[0-9a-f]{64}$/;
+// Registry, repository and tag components follow distribution/reference/regexp.go.
+const domainLabel = "[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?";
+const registry = `(?:${domainLabel}(?:\\.${domainLabel})*|\\[[a-fA-F0-9:]+\\])(?::[0-9]+)?`;
+const pathComponent = "[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*";
+const repository = `(?:${registry}/)?${pathComponent}(?:/${pathComponent})*`;
+const tag = "[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}";
+export const PINNED_IMAGE = new RegExp(`^${repository}(?::${tag})?@sha256:[0-9a-f]{64}$`);
 
 // Container `options:` that reach the host or replace what the image runs, refused unless
 // listed here as `<file>: <where>: <option>` with the reason. None is listed: today's options
@@ -401,6 +408,9 @@ export function stagingCandidateViolations(compose, envExample, ci, overlays = r
   for (const [file, overlay] of Object.entries(overlays ?? {})) {
     for (const [name, service] of Object.entries(isMapping(overlay?.services) ? overlay.services : {})) {
       if (candidates.includes(name) && isMapping(service) && "image" in service) out.push(`${file}: service '${name}' may not set image; the rehearsal runs the candidate under test`);
+      if (candidates.includes(name) && isMapping(service) && "pull_policy" in service && service.pull_policy !== "never") {
+        out.push(`${file}: service '${name}' must retain pull_policy: never for the local candidate`);
+      }
       if (isMapping(service) && "build" in service) out.push(`${file}: service '${name}' may not set build; only deploy/staging/compose.yaml builds the candidate`);
     }
   }
@@ -813,8 +823,15 @@ export function composeBuildViolations(file, data, builds = []) {
 // top-level `services:` key, in the Git source inventory outside the skipped directories
 // and .github. Only these may be passed to `docker compose -f`.
 export function repoComposeFiles(dir = root) {
-  return sourceFiles(dir).filter(file => !file.startsWith(".github/") && /\.ya?ml$/i.test(file))
-    .filter(file => COMPOSE_FILE.test(posix.basename(file)) || /^services[ \t]*:/m.test(readFileSync(join(dir, file), "utf8")));
+  return sourceFiles(dir).filter(file => {
+    if (file.startsWith(".github/") || !/\.ya?ml$/i.test(file)) return false;
+    if (COMPOSE_FILE.test(posix.basename(file))) return true;
+    const doc = parseDocument(readFileSync(join(dir, file), "utf8"), { merge: true });
+    if (!isMap(doc.contents)) return false;
+    if (doc.has("services")) return true;
+    // YAML merges can also supply the root mapping's services key.
+    return doc.contents.items.some(pair => pair.key?.source === "<<") && Object.hasOwn(toData(doc), "services");
+  });
 }
 
 // Compose reads `.env` from the project directory (that of the first file) and takes
