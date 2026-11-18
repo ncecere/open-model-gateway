@@ -30,6 +30,48 @@ Run from the repository root. None of them make paid provider calls or touch the
 
 CI (`.github/workflows/ci.yml`) runs all of these; the `browser` job uses a PostgreSQL service container, and `test:container` runs in the `staging-image` job (and on each pushed digest in `image.yml`). The binary's startup secret handling and `healthcheck` are also covered by `cargo test` (`apps/gateway/src/startup.rs`, `apps/gateway/src/healthcheck.rs`, `apps/gateway/tests/startup.rs`).
 
+### Shared configuration source inventory
+
+`configuration_source_tests::production_sources` supplies the configuration,
+unsafe-site and entropy guards, as well as the management JSON write matrix.
+It follows `lib.rs`, `main.rs`, both conventional Cargo binary layouts
+(`bin/name.rs` and `bin/name/main.rs`), ordinary file and inline modules, and
+unconditional literal `#[path]` attributes. A file reached
+by production and test declarations stays production; filenames alone never
+exclude it. Unreferenced `.rs` files are conservatively scanned too. The existing
+test-gate predicate and the consumers' policy exceptions are unchanged.
+
+The inventory fails closed on conditional module paths (`cfg_attr`, including
+nested and raw-identifier forms), missing or ambiguous modules, and resolved file
+modules outside `src` or without an exact `.rs` extension (#510). Inline module
+directory overrides remain supported. Child resolution distinguishes ordinary
+file modules from explicit paths, including when both reach the same file.
+Symlinks are refused to avoid aliases, escapes and recursive directory walks.
+
+A production `include!` must have a literal path to an `.rs` file in the final
+scanned production set and parse as a Rust item file. A test-only target, missing
+file, computed path or file outside the source tree fails. Included files with
+external module declarations are unsupported because their resolution depends on
+the inclusion context.
+Imports/aliases of `include!`, module or `include` tokens inside opaque macros,
+and macro calls with metavariable names also fail rather than assume coverage.
+Ordinary item macros, strings, comments and test-gated helper includes remain
+supported. Benign fixtures in `configuration_source_tests::coverage` exercise
+these refusals and the supported layouts through `sources_at`.
+
+Run the source guards and the management matrix with the commands below.
+The matrix requires a disposable PostgreSQL test instance with database creation privileges.
+
+```sh
+cargo test -p open-model-gateway --lib configuration_
+cargo test -p open-model-gateway --lib entropy::tests::only_this_module_draws_randomness
+cargo test -p open-model-gateway --all-features --lib every_json_management_write_rejects_unknown_fields_after_valid_control
+```
+
+This is source-inventory coverage, not Rust macro expansion or a sandbox:
+generated code from external procedural macros/derives, `build.rs` and other
+crates still require review.
+
 ### CI scheduling and Rust shards
 
 CI runs on every pull request, and pushes only to `main` or `v*` tags. New PR runs cancel superseded runs for that PR; each main/tag run has a unique concurrency group and is never cancelled by this policy. CodeQL, branch images and release-image workflows are unchanged.
