@@ -1,0 +1,93 @@
+# One test run on the Spark test platform (scripts/spark-test.py): the pod fetches the public
+# repository at an exact commit and runs the chosen suites against the run's own PostgreSQL
+# (test-cluster.yaml). The toolchain is the Dockerfile's pinned Rust image (linux/arm64 from its
+# multi-arch index) plus Node copied from the Dockerfile's pinned Node image; nothing else is
+# installed at run time except what rustup, Cargo and npm download and verify themselves
+# (docs/verification.md, "Tests on the Spark platform"). The script comes from the ConfigMap
+# omg-test-script. The tool substitutes only the double-underscore values below, each after a strict
+# pattern check.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: omg-test
+  labels: {app.kubernetes.io/name: omg-test}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: __DEADLINE__
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: omg-test}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: node
+          image: &node mirror.gcr.io/library/node:22.23.4-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d
+          command:
+            - sh
+            - -ec
+            - |
+              mkdir -p /opt/node/bin /opt/node/lib
+              cp /usr/local/bin/node /opt/node/bin/node
+              cp -R /usr/local/lib/node_modules /opt/node/lib/node_modules
+              ln -s ../lib/node_modules/npm/bin/npm-cli.js /opt/node/bin/npm
+              ln -s ../lib/node_modules/npm/bin/npx-cli.js /opt/node/bin/npx
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext: &locked
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts: [{name: node, mountPath: /opt/node}]
+      containers:
+        - name: tests
+          # rust:1.99.1-bookworm, the Dockerfile's build image: its multi-arch index digest.
+          image: mirror.gcr.io/library/rust:1.99.1-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c
+          command: [bash, /scripts/test-run.sh]
+          env:
+            - {name: OMG_SUITE, value: "__SUITE__"}
+            - {name: OMG_SHA, value: "__SHA__"}
+            - {name: OMG_REPO_URL, value: "https://github.com/bitop-dev/open-model-gateway.git"}
+            - {name: OMG_NONCE, value: "__NONCE__"}
+            - {name: OMG_FRESH, value: "__FRESH__"}
+            # Cargo jobs, libtest threads and Vitest workers follow the CPU limit (--fast raises all three). The
+            # libtest default would be 2 and the database-bound tests mostly wait; Vitest gets an explicit worker limit.
+            - {name: OMG_JOBS, value: "__JOBS__"}
+            - {name: OMG_TEST_THREADS, value: "__TEST_THREADS__"}
+            - {name: OMG_WEB_WORKERS, value: "__WEB_WORKERS__"}
+            - {name: OMG_NPM_CI_FLAGS, value: "__NPM_FLAGS__"}
+            - {name: OMG_TEST_ARGS, value: "__TEST_ARGS__"}
+            - {name: OMG_DB_HOST, value: omg-test-db-rw}
+            - {name: OMG_TARGET_LIMIT_GIB, value: "12"}
+            - {name: OMG_CACHE_LIMIT_GIB, value: "17"}
+          # Burstable: a request that leaves room for a second run and a demo environment in the
+          # shared quota (tests/supply-chain/spark-test-manifests.test.mjs does the arithmetic).
+          resources:
+            requests: {cpu: "1500m", memory: 6Gi}
+            limits: {cpu: "1800m", memory: 10Gi}
+          securityContext: *locked
+          volumeMounts:
+            - {name: cache, mountPath: /cache}
+            - {name: pg, mountPath: /secrets, readOnly: true}
+            - {name: node, mountPath: /opt/node, readOnly: true}
+            - {name: scripts, mountPath: /scripts, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: cache
+          persistentVolumeClaim: {claimName: omg-test-cache}
+        # The PostgreSQL superuser password is a file, not an environment variable: only with_db reads it.
+        - name: pg
+          secret: {secretName: omg-test-pg-superuser, defaultMode: 0440, items: [{key: password, path: password}]}
+        - name: node
+          emptyDir: {sizeLimit: 512Mi}
+        - name: scripts
+          configMap: {name: omg-test-script}
+        - name: tmp
+          emptyDir: {sizeLimit: 8Gi}
