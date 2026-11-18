@@ -109,7 +109,7 @@ pub(crate) fn map_with_endpoints(
         list.and_then(|l| choose_endpoint(l, evidence).map(|c| (l, c)))
     else {
         let mut out = map(model, workload, images);
-        if workload != WorkloadKind::Images {
+        if workload != WorkloadKind::Images && !all_rates_unknown(&out) {
             out["endpoint"] = json!({"selection":"catalog"});
             push_warning(
                 &mut out,
@@ -122,12 +122,7 @@ pub(crate) fn map_with_endpoints(
     let endpoint = &list[index];
     let (priced, tiers_dropped, unusable_limit) = endpoint_model(model, endpoint);
     let mut out = map(&priced, workload, images);
-    // A whole-import refusal has no selected price to describe. Keep its
-    // manual-review warning instead of claiming this endpoint was priced.
-    if out["draft"]["price_lines"]
-        .as_array()
-        .is_some_and(|lines| lines.iter().all(|line| line["unknown"] == true))
-    {
+    if all_rates_unknown(&out) {
         return out;
     }
     if unusable_limit {
@@ -147,6 +142,13 @@ pub(crate) fn map_with_endpoints(
     }
     out
 }
+// A whole-import refusal has no price source to report to the operator.
+fn all_rates_unknown(out: &Value) -> bool {
+    out["draft"]["price_lines"]
+        .as_array()
+        .is_some_and(|lines| lines.iter().all(|line| line["unknown"] == true))
+}
+
 fn endpoint_model(model: &Value, endpoint: &Value) -> (Value, bool, bool) {
     let mut priced = model.clone();
     let mut pricing = endpoint["pricing"].clone();

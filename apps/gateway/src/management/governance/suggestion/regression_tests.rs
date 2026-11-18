@@ -101,6 +101,16 @@ fn hostile_entries_are_bounded_and_do_not_offer_partial_prices() {
             .iter()
             .all(|p| p["unknown"] == true)
     );
+    // Neither a missing endpoint list nor an unpriced endpoint turns a refused
+    // catalog import into a selected price.
+    let incomplete = json!({"endpoints":[{"pricing":{"prompt":"1"}}]});
+    for endpoints in [None, Some(&incomplete)] {
+        let fallback = map_with_endpoints(&model, WorkloadKind::Generation, None, endpoints, &[]);
+        assert_eq!(
+            fallback, out,
+            "catalog fallback must preserve the entire refusal"
+        );
+    }
     let endpoints =
         json!({"endpoints":[{"pricing":{"prompt":"1","completion":"2","request":"0"}}]});
     let selected = map_with_endpoints(

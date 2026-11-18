@@ -24,7 +24,8 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
                 let tiers: Vec<_> = (1..=20_000).map(|n|json!({"min_prompt_tokens":n,"prompt":"1"})).collect();
                 ([("content-type", "application/json")], json!({"data":[
                     {"id":"v/m","context_length":4096,"top_provider":{"max_completion_tokens":100},"pricing":{"prompt":"3","completion":"3","input_cache_write":"1e400","overrides":[{"min_prompt_tokens":1,"input_cache_write":"0"}]}},
-                    {"id":"v/large","pricing":{"prompt":"1","overrides":tiers}}
+                    {"id":"v/large","pricing":{"prompt":"1","overrides":tiers}},
+                    {"id":"v/tiers","pricing":{"prompt":"1","overrides":&tiers[..64]}}
                 ]}).to_string())
             }
         }))
@@ -40,7 +41,8 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
         catalog_url,
         std::time::Duration::from_secs(2),
     ));
-    let (connection, model, deployment, large) = (
+    let (connection, model, deployment, large, tiered) = (
+        Uuid::new_v4(),
         Uuid::new_v4(),
         Uuid::new_v4(),
         Uuid::new_v4(),
@@ -48,7 +50,7 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
     );
     sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref,endpoint,enabled) VALUES($1,'Preview','openrouter','env:NOT_USED','https://openrouter.ai/api/v1',false)").bind(connection).execute(&f.store.pool).await.unwrap();
     sqlx::query("INSERT INTO models(id,public_name,supported_protocols) VALUES($1,'preview',ARRAY['chat_completions'])").bind(model).execute(&f.store.pool).await.unwrap();
-    sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model) VALUES($1,$3,$4,'v/m'),($2,$3,$4,'v/large')").bind(deployment).bind(large).bind(model).bind(connection).execute(&f.store.pool).await.unwrap();
+    sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model) VALUES($1,$3,$4,'v/m'),($2,$3,$4,'v/large'),($5,$3,$4,'v/tiers')").bind(deployment).bind(large).bind(model).bind(connection).bind(tiered).execute(&f.store.pool).await.unwrap();
     // Create an actual immutable price first. Preview is read-only even when
     // parsing fails or refuses a hostile entry.
     let admin = user(f.owner, true);
@@ -110,25 +112,29 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
             .any(|p| p["meter"] == "cache_write_tokens" && p["min_prompt_tokens"] == 1)
     );
     assert_eq!(out["needs_review"], true);
-    let r = client
-        .get(format!(
-            "{gateway_url}/api/v1/platform/deployments/{large}/price-suggestion"
-        ))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(r.status(), StatusCode::OK);
-    let bytes = r.bytes().await.unwrap();
-    assert!(bytes.len() < 16_384);
-    let out: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(out["needs_review"], true);
-    assert!(
-        out["draft"]["price_lines"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|p| p["unknown"] == true)
-    );
+    for refused in [large, tiered] {
+        let r = client
+            .get(format!(
+                "{gateway_url}/api/v1/platform/deployments/{refused}/price-suggestion"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        let bytes = r.bytes().await.unwrap();
+        assert!(bytes.len() < 16_384);
+        let out: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(out["needs_review"], true);
+        assert!(
+            out["draft"]["price_lines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|p| p["unknown"] == true)
+        );
+        assert!(out.get("endpoint").is_none());
+        assert!(!out["warnings"].to_string().contains("price was used"));
+    }
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     let r = client
         .get(format!(
