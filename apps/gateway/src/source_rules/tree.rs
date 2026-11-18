@@ -372,19 +372,25 @@ pub(super) fn dropped_spans(file: &syn::File) -> Vec<SpanRange> {
 pub(super) fn words(ident: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut word = String::new();
-    let mut previous_lower = false;
-    for c in ident.chars() {
+    let mut chars = ident.chars().peekable();
+    let mut previous: Option<char> = None;
+    while let Some(c) = chars.next() {
         if !c.is_alphanumeric() {
             if !word.is_empty() {
                 out.push(std::mem::take(&mut word));
             }
-            previous_lower = false;
+            previous = None;
             continue;
         }
-        if c.is_uppercase() && previous_lower && !word.is_empty() {
+        let starts_word = previous.is_some_and(|p| {
+            p.is_lowercase()
+                || p.is_ascii_digit()
+                || (p.is_uppercase() && chars.peek().is_some_and(|next| next.is_lowercase()))
+        });
+        if c.is_uppercase() && starts_word {
             out.push(std::mem::take(&mut word));
         }
-        previous_lower = c.is_lowercase() || c.is_ascii_digit();
+        previous = Some(c);
         word.extend(c.to_lowercase());
     }
     if !word.is_empty() {

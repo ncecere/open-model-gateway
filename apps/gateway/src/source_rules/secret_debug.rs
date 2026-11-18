@@ -275,7 +275,7 @@ fn planted_derived_and_manual_debug_are_refused() {
         #[derive(Debug)] struct Other { token_hash: [u8; 32], key_ref: String }
         #[r#cfg_attr(true, r#derive(Debug))] struct Refresh { refresh_token: String }
         #[cfg_attr(false, derive(Debug))] struct Disabled { password: String }
-        #[derive(Debug)] struct Keyboard { monkey: String }
+        #[derive(Debug)] struct Keyboard { monkey: String, clientAPIKey: String }
         #[cfg(test)] #[derive(Debug)] struct TestOnly { token: String }
         #[cfg_attr(test, derive(Debug))] struct OnlyTestDebug { credential: String }
     "#;
@@ -302,6 +302,7 @@ fn planted_derived_and_manual_debug_are_refused() {
     );
     let found = surfaces(&sources);
     assert_eq!(found, BTreeSet::from([
+        "lib.rs::<file>::Keyboard::clientAPIKey: String".into(),
         "lib.rs::<file>::Login::password: String".into(),
         "lib.rs::<file>::Settings::Local::client_secret: String".into(),
         "lib.rs::<file>::Settings::Local::credentials: String".into(),

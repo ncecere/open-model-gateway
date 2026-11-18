@@ -775,6 +775,7 @@ mod tests {
             }"#,
         );
         let found = denied_problems(&entries, &[]);
+        assert!(denied("clientAPIKey").contains("api_key"));
         for word in [
             "body",
             "messages",
