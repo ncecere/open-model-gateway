@@ -1,7 +1,10 @@
 // Check credential inputs before any step can relay them through a wrapper, action or GITHUB_ENV.
 import assert from "node:assert/strict";
+import { lstatSync } from "node:fs";
+import { posix } from "node:path";
 import { test } from "node:test";
-import { parseStrict, repoFiles, toData } from "./lib.mjs";
+import { shellCommands } from "./policy.mjs";
+import { parseStrict, readLocalFromRepo, repoFiles, root, sourceFiles, toData } from "./lib.mjs";
 
 // GitHub secrets have arbitrary names. Check the source of a value, including
 // whole-context and dynamic lookups, instead of guessing provider variable names.
@@ -50,30 +53,153 @@ function readsSecret(value, condition) {
   return false;
 }
 
-function checkInputs(data, file) {
-  const jobs = Object.values(data.jobs ?? {});
-  const steps = jobs.flatMap(job => job.steps ?? []).concat(data.runs?.steps ?? []);
-  const conditions = new Set([...jobs, ...steps]);
-  for (const [id, job] of Object.entries(data.jobs ?? {})) {
-    assert.ok(!(job.uses && job.secrets === "inherit"), `${file}.jobs.${id}: inheriting secrets in a reusable workflow`);
+// Only resolve literal repository paths. The index bounds reads, including when a
+// candidate workflow contains absolute paths or references outside the checkout.
+const paths = new Set(sourceFiles());
+const scripts = new Map();
+function repoScript(path) {
+  if (!paths.has(path)) return;
+  if (!scripts.has(path)) {
+    assert.ok(lstatSync(posix.join(root, path)).isFile(), `wrapper must be a regular file: ${path}`);
+    scripts.set(path, readLocalFromRepo(path));
   }
-  function visit(parent, path) {
-    for (const [key, value] of Object.entries(parent)) {
-      const child = `${path}.${key}`;
-      if (value && typeof value === "object") {
-        visit(value, child);
-      } else if (typeof value === "string" && readsSecret(value, (key === "if" && conditions.has(parent))
-          || (parent === data.runs && ["pre-if", "post-if"].includes(key)))) {
-        assert.ok(["GH_TOKEN", "GITHUB_TOKEN"].includes(key) && /^\$\{\{\s*secrets\.GITHUB_TOKEN\s*}}$/i.test(value),
-          `${child}: only the automatic GitHub token may be imported from secrets`);
-      }
-    }
-  }
-  visit(data, file);
+  return scripts.get(path);
 }
 
-test("CI workflows and their local actions cannot import provider secrets", () => {
-  for (const { file, text } of repoFiles()) checkInputs(toData(parseStrict(text, file)), file);
+const documents = new Map(repoFiles().map(({ file, text }) => [file, toData(parseStrict(text, file))]));
+const liveNames = new Set(["OPENAI_KEY", "OPEN_ROUTER"]);
+const fixtureValues = new Set(["", "fixture", "test-only"]);
+
+function runsCargo(source, read, seen, shellSources, shell) {
+  if (!source) return false;
+  // Wrappers can assemble Cargo arguments in code (as rust-shards.mjs does).
+  // Treat a literal Cargo executable as sufficient, regardless of subcommand.
+  const commands = shell ? shellCommands(source) : [];
+  const words = shell
+    ? commands.filter(command => !["echo", "printf"].includes(command[0].text)).flat().map(word => word.text)
+    : source.split(/[^a-zA-Z0-9_./-]+/);
+  let cargo = words.some(word => word === "cargo" || word.endsWith("/cargo"));
+  for (const word of words) {
+    const path = word.replace(/^\.\//, "");
+    if ((!word.startsWith("./") && !/\.(?:sh|bash|m?js|cjs|py)$/.test(path) && !path.startsWith("scripts/"))
+        || seen.has(path)) continue;
+    seen.add(path);
+    const script = read(path);
+    if (!script) continue;
+    const isShell = /\.(?:sh|bash)$/.test(path) || /^#![^\n]*\b(?:ba)?sh\b/.test(script);
+    if (isShell) shellSources.set(path, script);
+    if (runsCargo(script, read, seen, shellSources, isShell)) cargo = true;
+  }
+  for (const [program, verb, name] of commands) {
+    if (program.text !== "npm" || verb?.text !== "run" || !name || seen.has(`npm:${name.text}`)) continue;
+    seen.add(`npm:${name.text}`);
+    const manifest = read("package.json");
+    const script = manifest && JSON.parse(manifest).scripts?.[name.text];
+    if (typeof script !== "string") continue;
+    shellSources.set(`npm:${name.text}`, script);
+    if (runsCargo(script, read, seen, shellSources, true)) cargo = true;
+  }
+  return cargo;
+}
+
+function checkInputs(data, file, docs = documents, read = repoScript) {
+  function local(ref, ancestors) {
+    const path = ref.slice(2);
+    const file = [path, path + "/action.yml", path + "/action.yaml"].find(key => docs.has(key));
+    assert.ok(file, `unresolved local workflow/action ${ref}`);
+    assert.ok(!ancestors.has(file), `recursive workflow/action ${file}`);
+    return { node: docs.get(file), file, ancestors: new Set([...ancestors, file]) };
+  }
+
+  function runner(block, file, ancestors, action) {
+    const steps = block.steps ?? [];
+    const conditions = new Set([block, ...steps]);
+    const checks = [() => inspect(action ?? block, file, conditions, action?.runs)];
+    const seen = new Set();
+    const shellSources = new Map();
+    const scan = (source, shell) => runsCargo(source, read, seen, shellSources, shell);
+    let tests = false;
+    for (const step of steps) {
+      const source = action && step.run
+        ? step.run.replace(/\$\{\{\s*github\.action_path\s*}}|\$\{GITHUB_ACTION_PATH}|\$GITHUB_ACTION_PATH\b/gi, posix.dirname(file))
+        : step.run;
+      if (scan(source, true)) tests = true;
+    }
+    if (action) {
+      for (const key of ["pre", "main", "post"]) {
+        if (block[key] && scan(read(posix.join(posix.dirname(file), block[key])), false)) tests = true;
+      }
+    }
+    for (const step of steps) {
+      if (!step.uses?.startsWith("./")) continue;
+      const child = local(step.uses, ancestors);
+      const nested = runner(child.node.runs, child.file, child.ancestors, child.node);
+      tests ||= nested.tests;
+      checks.push(...nested.checks);
+    }
+    for (const [path, script] of shellSources) checks.push(() => checkAssignments(script, path));
+    return { tests, checks };
+  }
+
+  function workflow(node, file, ancestors) {
+    let tests = false;
+    for (const [id, job] of Object.entries(node.jobs)) {
+      const path = `${file}.jobs.${id}`;
+      if (job.uses?.startsWith("./")) {
+        const called = local(job.uses, ancestors);
+        if (!workflow(called.node, called.file, called.ancestors)) continue;
+        assert.notEqual(job.secrets, "inherit", `${path}: inheriting secrets in a test job`);
+        inspect(job, path, new Set([job]));
+      } else {
+        const result = runner(job, path, ancestors);
+        if (!result.tests) continue;
+        // Actions in earlier steps can prepare the environment for later steps.
+        result.checks.forEach(check => check());
+        inspect({ env: node.env }, file, new Set());
+      }
+      tests = true;
+    }
+    return tests;
+  }
+  const ancestors = new Set([file]);
+  if (data.jobs) workflow(data, file, ancestors);
+  else {
+    const result = runner(data.runs, file, ancestors, data);
+    if (result.tests) result.checks.forEach(check => check());
+  }
+}
+
+function checkAssignments(script, path) {
+  for (const { text, variable } of shellCommands(script).flat()) {
+    const eq = text.indexOf("=");
+    if (eq >= 0 && liveNames.has(text.slice(0, eq))) {
+      assert.ok(!variable && fixtureValues.has(text.slice(eq + 1)), `${path}: live credential assignment`);
+    }
+  }
+}
+
+function inspect(parent, path, conditions, runs) {
+  if (!parent || typeof parent !== "object") return;
+  for (const [key, value] of Object.entries(parent)) {
+    const child = `${path}.${key}`;
+    if (liveNames.has(key.toUpperCase())) {
+      assert.ok(fixtureValues.has(value), `${child}: live credential destination`);
+    }
+    if (typeof value !== "string") {
+      inspect(value, child, conditions, runs);
+      continue;
+    }
+    if (key === "run") checkAssignments(value, child);
+    if (readsSecret(value, (key === "if" && conditions.has(parent))
+        || (parent === runs && ["pre-if", "post-if"].includes(key)))) {
+      assert.ok(["GH_TOKEN", "GITHUB_TOKEN"].includes(key) && /^\$\{\{\s*secrets\.GITHUB_TOKEN\s*}}$/i.test(value),
+        `${child}: only the automatic GitHub token may be imported from secrets`);
+    }
+  }
+}
+
+test("Cargo jobs and their local calls cannot import provider secrets", () => {
+  for (const [file, data] of documents) if (data.jobs) checkInputs(data, file);
 });
 
 test("provider secret references and inheritance are refused regardless of the credential alias", () => {
@@ -88,11 +214,14 @@ test("provider secret references and inheritance are refused regardless of the c
     { jobs: { tests: { uses: "./.github/workflows/tests.yml", secrets: { alias: ref } } } },
     { jobs: { tests: { steps: [{ uses: "./.github/actions/test", with: { token: ref } }] } } },
     { jobs: { tests: { steps: [{ run: "KEY=${{ format('}}', secrets.ALIAS) }} cargo test" }] } } },
-    { jobs: { publish: { env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN_EXTRA }}" } } } },
+    { jobs: { tests: { ...job, env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN_EXTRA }}" } } } },
     { jobs: { tests: { if: "secrets[vars.NAME]", ...job } } },
     { runs: { using: "node24", main: "main.js", post: "post.js", "post-if": "secrets.ALIAS" } },
     { runs: { using: "composite", steps: [{ run: `KEY=${ref} cargo test` }] } },
-  ]) assert.throws(() => checkInputs(data, "fixture.yml"), /fixture\.yml.*secret/i);
+  ]) assert.throws(() => checkInputs(data, "fixture.yml", new Map([
+    [".github/workflows/tests.yml", { jobs: { leg: job } }],
+    [".github/actions/test/action.yml", { runs: job }],
+  ]), path => path === "main.js" ? "cargo test" : undefined), /fixture\.yml.*(?:secret|live credential)/i, JSON.stringify(data));
 
   checkInputs({ jobs: { prose: { steps: [{ run: "echo 'scan for secrets at ${{ github.sha }}'" }] },
     tests: job, publish: { env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" } } } }, "ok.yml");
@@ -112,4 +241,83 @@ test("expression boundaries respect Actions strings across interpolations", () =
   assert.equal(readsSecret(first + " secrets outside ${{ inputs.secrets }}", false), false);
   assert.equal(readsSecret(first + " ${{ secrets.SYNTHETIC }}", false), true);
   assert.throws(() => readsSecret("label: ${{ inputs.name", false), /unterminated expression/);
+});
+
+test("notification credentials stay in their job alongside Cargo tests", () => {
+  checkInputs({ jobs: {
+    tests: { steps: [{ run: "cargo test" }] },
+    notify: { env: { HOOK: "${{ secrets.NOTIFICATION_HOOK }}" }, steps: [{ run: "echo cargo test completed" }] },
+  } }, "fixture.yml");
+});
+
+test("live destinations refuse variable and input values inherited by test wrappers", () => {
+  for (const name of ["OPEN_ROUTER", "OPENAI_KEY"]) {
+    for (const value of ["${{ inputs.fixture }}", "${{ vars.FIXTURE }}"]) {
+      for (const scope of ["workflow", "job", "step"]) {
+        const step = { run: "node .github/scripts/rust-shards.mjs --shard 0 --count 4" };
+        const job = { steps: [step] };
+        const workflow = { jobs: { leg: job } };
+        ({ workflow, job, step })[scope].env = { [name]: value };
+        assert.throws(() => checkInputs(workflow, "fixture.yml"), /live credential/);
+      }
+    }
+  }
+});
+
+test("a called workflow and nested actions keep test credentials out at each boundary", () => {
+  const workflow = ".github/workflows/suite.yml";
+  const outer = ".github/actions/outer";
+  const inner = ".github/actions/inner";
+  const wrapper = "scripts/fixture-check";
+  const variable = "${{ vars.FIXTURE }}";
+  const hook = "${{ secrets.NOTIFICATION_HOOK }}";
+  const call = { uses: "./" + workflow };
+  const action = { uses: "./" + outer };
+  const run = { run: "./" + wrapper, env: { OPEN_ROUTER: "fixture", AUDIO_LIVE: "${{ inputs.enabled }}" } };
+  const suite = { jobs: { leg: { steps: [action] }, notify: { steps: [{ env: { HOOK: hook }, run: "notify" }] } } };
+  const docs = new Map([
+    [workflow, suite],
+    [outer + "/action.yml", { runs: { using: "composite", steps: [{ uses: "./" + inner }] } }],
+    [inner + "/action.yaml", { runs: { using: "composite", steps: [run] } }],
+  ]);
+  const source = new Map([[wrapper, "bash scripts/suite.sh"], ["scripts/suite.sh", "cargo test"]]);
+  const check = () => checkInputs({ jobs: { call } }, "caller.yml", docs, path => source.get(path));
+  check();
+  for (const [target, key, input] of [
+    [call, "with", { OPENAI_KEY: variable }],
+    [call, "secrets", "inherit"],
+    [suite, "env", { OUTBOUND: hook }],
+    [suite.jobs.leg, "env", { OPEN_ROUTER: variable }],
+    [action, "with", { label: hook }],
+    [run, "env", { OPENAI_KEY: "${{ inputs.value }}" }],
+    [run, "run", 'echo "OPEN_ROUTER=${{ inputs.value }}" >> "$GITHUB_ENV"; ./' + wrapper],
+  ]) {
+    const before = target[key];
+    target[key] = input;
+    assert.throws(check, /(?:secret|live credential)/);
+    if (before === undefined) delete target[key];
+    else target[key] = before;
+  }
+});
+
+test("action-relative shell wrappers check their own live destinations", () => {
+  const action = ".github/actions/local/action.yml";
+  const scriptPath = ".github/actions/local/check.sh";
+  const data = { jobs: { leg: { steps: [{ uses: "./.github/actions/local" }] } } };
+  const docs = new Map([[action, { runs: { using: "composite", steps: [
+    { shell: "bash", run: 'bash "$GITHUB_ACTION_PATH/check.sh"' },
+  ] } }]]);
+  const check = script => checkInputs(data, "caller.yml", docs, path => path === scriptPath ? script : undefined);
+  check("OPENAI_KEY=test-only cargo test");
+  assert.throws(() => check('OPENAI_KEY="$FIXTURE" cargo test'), /check.sh: live credential/);
+});
+
+test("only the root npm wrapper leading to Cargo restricts its job inputs", () => {
+  const manifest = JSON.stringify({ scripts: { verify: "node scripts/check.mjs", notify: "notify" } });
+  const source = new Map([["package.json", manifest], ["scripts/check.mjs", 'spawn("cargo", ["test"])']]);
+  const job = { env: { TOKEN: "${{ secrets.FIXTURE }}" }, steps: [{ run: "npm run notify" }] };
+  const check = () => checkInputs({ jobs: { job } }, "fixture.yml", new Map(), path => source.get(path));
+  check();
+  job.steps[0].run = "npm run verify";
+  assert.throws(check, /fixture.yml.jobs.job.env.TOKEN: .*secrets/);
 });
