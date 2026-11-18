@@ -110,6 +110,18 @@ impl<'ast> Visit<'ast> for Unreadable<'_> {
         }
     }
 
+    fn visit_variant(&mut self, variant: &'ast syn::Variant) {
+        if !cfg_excludes(&variant.attrs) {
+            syn::visit::visit_variant(self, variant);
+        }
+    }
+
+    fn visit_field(&mut self, field: &'ast syn::Field) {
+        if !cfg_excludes(&field.attrs) {
+            syn::visit::visit_field(self, field);
+        }
+    }
+
     fn visit_impl_item(&mut self, item: &'ast ImplItem) {
         if !self.in_block || !cfg_excludes(impl_item_attrs(item)) {
             syn::visit::visit_impl_item(self, item);
@@ -650,6 +662,36 @@ mod tests {
                 assert_loader_refuses(|| load(cfg), "lib.rs: block-local file module `child`");
             }
         }
+    }
+
+    #[test]
+    fn variant_and_field_cfg_guard_const_blocks() {
+        for declaration in [
+            "enum E { A, CFG B = { MOD 1 } }",
+            "struct S { CFG a: [u8; { MOD 1 }] }",
+        ] {
+            let load = |cfg: &str| {
+                let source = declaration
+                    .replace("CFG", cfg)
+                    .replace("MOD", r#"#[path = "child.rs"] mod child;"#);
+                tree(&[("lib.rs", &source), ("child.rs", "")], "lib.rs")
+            };
+            assert_eq!(load("#[cfg(test)]"), ["lib.rs"]);
+            assert_loader_refuses(
+                || load("#[cfg(unix)]"),
+                "lib.rs: block-local file module `child`",
+            );
+        }
+    }
+
+    #[test]
+    fn crate_root_respects_its_inner_cfg() {
+        let load = |cfg: &str| {
+            let root = format!("#![cfg({cfg})] mod child;");
+            tree(&[("lib.rs", &root), ("child.rs", "")], "lib.rs")
+        };
+        assert!(load("test").is_empty());
+        assert_eq!(load("unix"), ["child.rs", "lib.rs"]);
     }
 
     #[test]
