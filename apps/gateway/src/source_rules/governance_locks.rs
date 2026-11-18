@@ -693,6 +693,14 @@ fn explicit_sqlx_macro_renames_require_inspection() {
             "governance/jobs.rs:2: inspect renamed SQLx query query_file",
         ),
         (
+            "mod sqlx { pub fn query() {} }\nuse self::sqlx::query as local_query;",
+            "governance/jobs.rs:2: inspect renamed SQLx query query",
+        ),
+        (
+            "use sqlx; mod child {\nuse crate::sqlx::query_file as load; }",
+            "governance/jobs.rs:2: inspect renamed SQLx query query_file",
+        ),
+        (
             "use sqlx::{postgres::{self as pg}, query_file as load};",
             "governance/jobs.rs:1: inspect renamed SQLx query query_file",
         ),
