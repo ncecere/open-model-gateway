@@ -34,7 +34,7 @@ async fn seed_data(store: &Store) -> Result<bool> {
         tx.commit().await?;
         return Ok(false);
     }
-    ensure_empty(&mut tx).await?;
+    crate::bootstrap::ensure_empty(&mut tx).await?;
     seed_people(&mut tx).await?;
     seed_group_mappings(&mut tx).await?;
     seed_catalogs(&mut tx).await?;
@@ -58,14 +58,6 @@ async fn lock(tx: &mut PgConnection) -> Result<()> {
 async fn already_seeded(tx: &mut PgConnection) -> Result<bool> {
     let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM audit_events WHERE action='installation.bootstrap_demo') AND EXISTS(SELECT 1 FROM users WHERE lower(email)='operator@demo.invalid')").fetch_one(&mut *tx).await?;
     Ok(exists)
-}
-async fn ensure_empty(tx: &mut PgConnection) -> Result<()> {
-    let occupied: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users) OR EXISTS(SELECT 1 FROM workspaces) OR EXISTS(SELECT 1 FROM inference_executions)").fetch_one(&mut *tx).await?;
-    anyhow::ensure!(
-        !occupied,
-        "Demo bootstrap requires an empty dedicated enterprise demo; existing identities/history are never replaced"
-    );
-    Ok(())
 }
 async fn seed_people(tx: &mut PgConnection) -> Result<()> {
     sqlx::query("UPDATE installation SET name='Open Model Gateway' WHERE singleton")

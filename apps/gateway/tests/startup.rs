@@ -772,3 +772,127 @@ fn ordinary_local_upstream_approvals_are_unaffected_at_startup() {
     );
     assert!(!stderr.contains("GATEWAY_LOCAL_UPSTREAMS"), "{stderr}");
 }
+
+#[test]
+fn bootstrap_dev_refuses_remote_database_before_connecting_or_printing_keys() {
+    let f = Fixture::new();
+    for host in ["example.invalid", "192.0.2.1", "localhost"] {
+        let database = format!("postgres://gateway:private-marker@{host}/gateway");
+        let output = f.run(
+            &["bootstrap-dev"],
+            [
+                ("GATEWAY_ENV", "development"),
+                ("DATABASE_URL", database.as_str()),
+            ],
+        );
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        let stderr = text(&output.stderr);
+        assert!(
+            stderr.contains("bootstrap-dev requires a loopback database"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("could not connect"));
+        assert!(!stderr.contains("private-marker"));
+    }
+}
+
+#[test]
+fn bootstrap_dev_refuses_a_socket_override_before_connecting() {
+    let f = Fixture::new();
+    let mut database = reqwest::Url::parse("postgres://gateway@127.0.0.1/db").unwrap();
+    database
+        .query_pairs_mut()
+        .append_pair("host", f.dir.path().to_str().unwrap());
+    let output = f.run(
+        &["bootstrap-dev"],
+        [
+            ("GATEWAY_ENV", "development"),
+            ("DATABASE_URL", database.as_str()),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(text(&output.stderr).contains("bootstrap-dev requires a loopback database"));
+}
+
+#[test]
+fn bootstrap_dev_refuses_production_before_database_access() {
+    let f = Fixture::new();
+    let output = f.run(
+        &["bootstrap-dev"],
+        [
+            ("GATEWAY_ENV", "production"),
+            (
+                "DATABASE_URL",
+                "postgres://user:private-marker@127.0.0.1:1/db",
+            ),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = text(&output.stderr);
+    assert!(stderr.contains("bootstrap-dev requires GATEWAY_ENV=development"));
+    assert!(!stderr.contains("could not connect"));
+    assert!(!stderr.contains("private-marker"));
+}
+
+#[cfg(feature = "integration-tests")]
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn bootstrap_dev_cli_refuses_unrelated_installation(pool: sqlx::PgPool) {
+    let f = Fixture::new();
+    use sqlx::ConnectOptions;
+    let database = pool.connect_options().to_url_lossy().to_string();
+    let run = || {
+        f.run(
+            &["bootstrap-dev"],
+            [
+                ("GATEWAY_ENV", "development"),
+                ("DATABASE_URL", database.as_str()),
+            ],
+        )
+    };
+    sqlx::query("INSERT INTO workspaces(id,name,kind) VALUES(gen_random_uuid(),'Existing','team')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let refused = run();
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(refused.stdout.is_empty());
+    assert!(text(&refused.stderr).contains("requires an empty"));
+    let counts: (i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM users),(SELECT count(*) FROM api_keys),(SELECT count(*) FROM audit_events)").fetch_one(&pool).await.unwrap();
+    assert_eq!(counts, (0, 0, 0));
+}
+
+#[cfg(feature = "integration-tests")]
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn bootstrap_dev_cli_seeds_once(pool: sqlx::PgPool) {
+    use sqlx::ConnectOptions;
+    let f = Fixture::new();
+    let database = pool.connect_options().to_url_lossy().to_string();
+    let run = || {
+        f.run(
+            &["bootstrap-dev"],
+            [
+                ("GATEWAY_ENV", "development"),
+                ("DATABASE_URL", database.as_str()),
+            ],
+        )
+    };
+    let seeded = run();
+    assert!(seeded.status.success(), "{}", text(&seeded.stderr));
+    let keys: serde_json::Value = serde_json::from_slice(&seeded.stdout).unwrap();
+    assert!(keys["personal_api_key"].is_string());
+    assert!(keys["team_api_key"].is_string());
+    let repeated = run();
+    assert!(repeated.status.success());
+    assert!(text(&repeated.stdout).contains("already initialized"));
+    for name in ["personal_api_key", "team_api_key"] {
+        let token = keys[name].as_str().unwrap();
+        assert!(!text(&seeded.stderr).contains(token));
+        assert!(!text(&repeated.stdout).contains(token));
+        assert!(!text(&repeated.stderr).contains(token));
+    }
+    let counts: (i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM api_keys),(SELECT count(*) FROM audit_events WHERE action='installation.bootstrap_dev')").fetch_one(&pool).await.unwrap();
+    assert_eq!(counts, (2, 1));
+}

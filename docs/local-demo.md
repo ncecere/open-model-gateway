@@ -78,3 +78,12 @@ docker compose -p omg-enterprise-demo -f deploy/demo/compose.yaml stop
 ```
 
 Stopping the issuer/gateway is separate. Do not use `down -v` as a recovery or upgrade procedure.
+
+`bootstrap-dev` is a separate minimal development fixture. It requires
+`GATEWAY_ENV=development` and a TCP database connection to `127.0.0.1` or `::1`.
+The command rejects Unix socket overrides before connecting. On a fresh, explicitly selected migrated database it creates
+an admin and prints two inference keys once; keep that terminal output private.
+It refuses existing users, workspaces or execution history unless its own
+successful bootstrap marker and developer identity are present. Repeating a
+successful bootstrap makes no changes and never prints or rotates existing keys.
+It does not reset databases or enable upstream providers.

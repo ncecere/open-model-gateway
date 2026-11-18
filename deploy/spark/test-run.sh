@@ -60,14 +60,18 @@ with_db() { # run a command with DATABASE_URL pointing at the run's PostgreSQL; 
   DATABASE_URL="postgres://postgres:${pw}@${OMG_DB_HOST}:${OMG_DB_PORT}/gateway" "$@"
 }
 
-with_loopback_db() { # the load-generator and datetime tests require loopback (CI's service container is on localhost): relay 127.0.0.1 to the service
+with_loopback_db() { # bootstrap fixtures and workspace tests require a literal loopback database address
   local code pw relay
   pw=$(<"$OMG_SECRETS/password") || return 1
   PG_FORWARD_TARGET="$OMG_DB_HOST" node "$OMG_SCRIPTS/pg-forward.mjs" &
   relay=$!
   sleep 1
-  local url="postgres://postgres:${pw}@127.0.0.1:5432/gateway"
-  DATABASE_URL="$url" DATETIME_PG_URL="$url" "$@"
+  if ! kill -0 "$relay" 2>/dev/null; then
+    wait "$relay" 2>/dev/null
+    echo "PostgreSQL loopback relay exited before running tests" >&2
+    return 1
+  fi
+  DATABASE_URL="postgres://postgres:${pw}@127.0.0.1:5432/gateway" "$@"
   code=$?
   kill "$relay" 2>/dev/null
   wait "$relay" 2>/dev/null
@@ -263,7 +267,7 @@ lib_shard() { # lib_shard <index> <names file>: the tests of one shard, and a ch
   out=$(mktemp "$OMG_TMP/lib-shard.XXXXXX")
   mark "lib-shard index=$index tests=$expected"
   # shellcheck disable=SC2046
-  with_db "${LIB[@]}" -- --exact $(shard_names "$index" "$names") 2>&1 | tee "$out"
+  with_loopback_db "${LIB[@]}" -- --exact $(shard_names "$index" "$names") 2>&1 | tee "$out"
   code=${PIPESTATUS[0]}
   if ! awk -v want="$expected" '/^test result: / { for (i = 1; i <= NF; i++) { if ($i == "passed;" || $i == "failed;" || $i == "ignored;") n += $(i - 1) } found = 1 } END { exit !(found && n == want) }' "$out"; then
     echo "shard $index: the passed, failed and ignored counts are not the $expected tests selected"
@@ -281,7 +285,7 @@ suite_lib() {
   db_marker
   extra_args || return 1
   if [ -n "${OMG_TEST_ARGS:-}" ]; then
-    step lib filtered with_db "${LIB[@]}" -- "${EXTRA[@]}"
+    step lib filtered with_loopback_db "${LIB[@]}" -- "${EXTRA[@]}"
     return
   fi
   names=$(mktemp "$OMG_TMP/lib-names.XXXXXX")
@@ -312,6 +316,10 @@ exact_probe() { # a dedicated exact test must run once; libtest succeeds even if
   return "$code"
 }
 
+workspace_targets() {
+  DATETIME_PG_URL="$DATABASE_URL" node "$OMG_SCRIPTS/test-integration.mjs" workspace
+}
+
 suite_integration() {
   local bad=0
   prepare_npm integration || return 1
@@ -321,13 +329,13 @@ suite_integration() {
   # except filestore_s3 (it starts MinIO and RustFS containers: no Docker in a pod) and the backup drill.
   # The tools' step includes the datetime workspace crate's PostgreSQL tests and all
   # non-gateway doctests; the gateway's doctests have their own step.
-  step integration targets with_db node "$OMG_SCRIPTS/test-integration.mjs" gateway || return 1
-  step integration runtime-privileges with_db node "$OMG_SCRIPTS/test-integration.mjs" runtime || bad=1
-  step integration runtime-privileges-ignored with_db node "$OMG_SCRIPTS/test-integration.mjs" runtime-ignored || bad=1
-  step integration key-issuance-contention exact_probe with_db env RUST_TEST_NOCAPTURE=1 cargo test -p open-model-gateway --all-features --lib management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement -- --ignored --exact || bad=1
-  step integration anthropic-terminal exact_probe with_db cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact || bad=1
-  step integration tools with_loopback_db node "$OMG_SCRIPTS/test-integration.mjs" workspace || bad=1
-  step integration doctests with_db cargo test -p open-model-gateway --all-features --doc || bad=1
+  step integration targets with_loopback_db node "$OMG_SCRIPTS/test-integration.mjs" gateway || return 1
+  step integration runtime-privileges with_loopback_db node "$OMG_SCRIPTS/test-integration.mjs" runtime || bad=1
+  step integration runtime-privileges-ignored with_loopback_db node "$OMG_SCRIPTS/test-integration.mjs" runtime-ignored || bad=1
+  step integration key-issuance-contention exact_probe with_loopback_db env RUST_TEST_NOCAPTURE=1 cargo test -p open-model-gateway --all-features --lib management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement -- --ignored --exact || bad=1
+  step integration anthropic-terminal exact_probe with_loopback_db cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact || bad=1
+  step integration tools with_loopback_db workspace_targets || bad=1
+  step integration doctests with_loopback_db cargo test -p open-model-gateway --all-features --doc || bad=1
   return "$bad"
 }
 

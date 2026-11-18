@@ -120,11 +120,11 @@ paths = ['''^apps/web/bitop-lock\.json$''']
 regexes = ['''^tokens\.css": "[0-9a-f]{64}"$''']
 
 [[allowlists]]
-description = "Marker passwords in connection-string fixtures that the startup integration tests assert are never printed or dialed: private-database-marker, password-sensitive, never-dialed-marker and credential-canary, on 127.0.0.1:1 or .example hosts (apps/gateway/tests/startup.rs)."
+description = "Marker passwords in connection-string fixtures that the startup integration tests assert are never printed or dialed: private-marker, private-database-marker, password-sensitive, never-dialed-marker and credential-canary (apps/gateway/tests/startup.rs)."
 condition = "AND"
 targetRules = ["omg-url-credentials"]
 paths = ['''^apps/gateway/tests/startup\.rs$''']
-regexes = ['''^(?:private-database-marker|password-sensitive|never-dialed-marker|credential-canary)$''']
+regexes = ['''^(?:private-marker|private-database-marker|password-sensitive|never-dialed-marker|credential-canary)$''']
 
 [[allowlists]]
 description = "The marker password canary-password in an OTLP metrics endpoint fixture on collector.invalid (apps/gateway/src/metrics_export_config_tests.rs)."

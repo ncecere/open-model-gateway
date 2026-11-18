@@ -49,7 +49,7 @@ function validateGraph(data) {
   for (const name of dependencies) required(data.jobs[name]);
   for (const name of ["gateway-tests", "gateway-special"]) {
     assert.ok(data.jobs[name].services.postgres);
-    assert.ok(data.jobs[name].env.DATABASE_URL);
+    assert.equal(new URL(data.jobs[name].env.DATABASE_URL).hostname, "127.0.0.1");
     assert.ok(runs(data.jobs[name]).includes("npm ci"));
   }
   assert.deepEqual(runs(data.jobs["gateway-lint"]), [

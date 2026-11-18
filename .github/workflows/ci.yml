@@ -90,8 +90,8 @@ jobs:
           --health-timeout 3s
           --health-retries 10
     env:
-      DATABASE_URL: postgres://gateway:gateway@localhost:5432/gateway
-      DATETIME_PG_URL: postgres://gateway:gateway@localhost:5432/gateway
+      DATABASE_URL: postgres://gateway:gateway@127.0.0.1:5432/gateway
+      DATETIME_PG_URL: postgres://gateway:gateway@127.0.0.1:5432/gateway
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # 1.99.1, matches rust-toolchain.toml
@@ -122,8 +122,8 @@ jobs:
           --health-timeout 3s
           --health-retries 10
     env:
-      DATABASE_URL: postgres://gateway:gateway@localhost:5432/gateway
-      DATETIME_PG_URL: postgres://gateway:gateway@localhost:5432/gateway
+      DATABASE_URL: postgres://gateway:gateway@127.0.0.1:5432/gateway
+      DATETIME_PG_URL: postgres://gateway:gateway@127.0.0.1:5432/gateway
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Exact version from rust-toolchain.toml, not the floating 'stable' channel (#354);

@@ -35,6 +35,12 @@ echo "cargo $*" >> "$STUB_LOG"
 pw=$(cat "$STUB_PASSWORD_FILE")
 echo "env cargo db=${DATABASE_URL:+set} vars=$(env | grep -F -- "$pw" | cut -d= -f1 | tr '\n' ',') nonce=$(env | grep -c '^OMG_NONCE=')" >> "$STUB_LOG"
 args="$*"
+if [[ "$1" == test && " $args " != *" --no-run "* && " $args " != *" --list "* ]]; then
+  if [[ "${DATABASE_URL:-}" != "postgres://postgres:${pw}@127.0.0.1:5432/gateway" ]]; then
+    echo "gateway fixtures require the run's database through the literal loopback relay"
+    exit 101
+  fi
+fi
 case "$1" in
   metadata) cat "$STUB_METADATA"; exit 0 ;;
 esac
