@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "../process.mjs";
 import path from "node:path";
 import { api, expectAccessible, expectNoCspViolations, expectNoHorizontalScroll, signIn } from "./helpers";
 

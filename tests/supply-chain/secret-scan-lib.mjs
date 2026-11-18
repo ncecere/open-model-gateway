@@ -2,7 +2,7 @@
 // gitleaks on PATH that records its arguments, and temporary git repositories. Every secret
 // here is built from pieces at run time; none is written into the repository.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "../process.mjs";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

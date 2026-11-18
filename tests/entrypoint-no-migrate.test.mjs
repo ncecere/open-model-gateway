@@ -10,7 +10,7 @@
 // Not covered: what the binary does for `serve` (Rust test), a compose file or an orchestrator
 // that overrides the command, and a base image's own entrypoint (the final stage sets its own).
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync } from "./process.mjs";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
