@@ -657,23 +657,7 @@ pub(super) fn denied_problems(entries: &[Entry], exempt: &[(&str, &str)]) -> Vec
 
 /// Differences between the scan and a snapshot, as `+`/`-` lines.
 pub(super) fn diff(entries: &[Entry], snapshot: &str) -> Vec<String> {
-    let have: Vec<String> = entries.iter().map(Entry::line).collect();
-    let want: Vec<String> = snapshot
-        .lines()
-        .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
-        .map(str::to_owned)
-        .collect();
-    let mut remaining = want.clone();
-    let mut out = Vec::new();
-    for line in &have {
-        if let Some(at) = remaining.iter().position(|w| w == line) {
-            remaining.remove(at);
-        } else {
-            out.push(format!("+ {line}"));
-        }
-    }
-    out.extend(remaining.into_iter().map(|l| format!("- {l}")));
-    out
+    super::snapshot_diff(entries.iter().map(Entry::line), snapshot)
 }
 
 #[cfg(test)]
