@@ -26,7 +26,8 @@ async fn local_files(dir: &std::path::Path) -> FileStoreRuntime {
         "GATEWAY_FILE_ENCRYPTION_KEYS_ENV" => Some("TEST_KEY".into()),
         "TEST_KEY" => Some(format!(
             "test:{}",
-            base64::engine::general_purpose::STANDARD.encode([19u8; 32])
+            base64::engine::general_purpose::STANDARD
+                .encode(std::array::from_fn::<u8, 32, _>(|i| i as u8))
         )),
         _ => None,
     })
