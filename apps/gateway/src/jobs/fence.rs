@@ -19,8 +19,8 @@
 //! reservation and totals rows (docs/governance.md). Transactions that change
 //! the job row take it `FOR NO KEY UPDATE` at the start, so no transaction
 //! upgrades a lock it already holds; `KEY SHARE` and `NO KEY UPDATE` do not
-//! conflict, so admissions, segment writes and counter updates of one run do
-//! not queue behind each other on it.
+//! conflict, so admission can proceed while a segment or progress update holds
+//! the job row. Segment registrations serialize their sequence allocation.
 //!
 //! A frozen runner inside a fenced transaction would hold the row against
 //! every claim: each fenced transaction therefore ends the session after
@@ -396,14 +396,11 @@ impl BatchFence {
                         .bind(self.job).bind(seq).bind(lines).execute(&mut *tx).await.map_err(job_storage)?;
                 }
             }
+            // Once COMMIT is sent, keep the file on any missing acknowledgement.
+            // Retention can reclaim an orphan; a committed segment still needs its file.
             tx.commit().await.map_err(|e| {
-                let unknown = outcome_unknown(&e);
                 job_storage(e);
-                if unknown {
-                    FenceError::Unknown
-                } else {
-                    FenceError::Storage
-                }
+                FenceError::Unknown
             })?;
             return Ok(seq);
         }
