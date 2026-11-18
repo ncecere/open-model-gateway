@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import socket
 import signal
+import shlex
 import sys
 import subprocess
 import tempfile
@@ -137,10 +138,35 @@ class LoopbackPorts(unittest.TestCase):
                 self.assertFalse(spark.port_is_free(listener.getsockname()[1]))
 
 
+class SidecarProbe(unittest.TestCase):
+    def test_node_entrypoint_through_regular_and_configmap_paths(self):
+        script = ROOT / "deploy/spark/loopback-probe.mjs"
+        with tempfile.TemporaryDirectory() as folder:
+            mount = Path(folder)
+            revision = mount / "..revision"
+            revision.mkdir()
+            (revision / script.name).symlink_to(script)
+            (mount / "..data").symlink_to(revision.name)
+            entry = mount / script.name
+            entry.symlink_to(Path("..data") / script.name)
+            for path in (script, entry):
+                with self.subTest(entry=path):
+                    def probe(argument):
+                        return subprocess.run(["node", str(path), argument], timeout=5, check=False).returncode
+
+                    with socket.socket() as listener:
+                        listener.bind(("127.0.0.1", 0))
+                        listener.listen()
+                        port = str(listener.getsockname()[1])
+                        self.assertEqual(probe(port), 0)
+                    self.assertEqual(probe(port), 1)
+                    self.assertEqual(probe("invalid"), 1)
+
+
 class ForwardLifecycle(unittest.TestCase):
     # No kubectl or cluster: each wrapper owns one disposable Python listener.
     CHILD = """
-import os, signal, socket, sys, time
+import os, select, signal, socket, sys
 if sys.argv[2] == 'ignore':
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 s = socket.socket()
@@ -148,8 +174,8 @@ s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind(('127.0.0.1', int(sys.argv[1])))
 s.listen()
 print(str(os.getpid()) + " " + str(s.getsockname()[1]), flush=True)
-while True:
-    time.sleep(1)
+# The test owns the write end of stdin. EOF releases even an orphaned fixture.
+select.select([sys.stdin], [], [], 20)
 """
 
     def wrapper(self, port, mode="normal"):
@@ -165,7 +191,7 @@ spark.DEMO_PORTS = ({port},)
 with contextlib.redirect_stdout(sys.stderr):
     env.forward('t599')
 """
-        return subprocess.Popen([sys.executable, "-u", "-c", code], stdout=subprocess.PIPE,
+        return subprocess.Popen([sys.executable, "-u", "-c", code], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True, start_new_session=True)
 
     def ready(self, wrapper):
@@ -176,15 +202,10 @@ with contextlib.redirect_stdout(sys.stderr):
         self.assertEqual(len(line.split()), 2, f"child did not start: {line!r}")
         return tuple(map(int, line.split()))
 
-    def stop_wrapper(self, wrapper, child_fd=None):
-        if child_fd is not None:
-            try:
-                signal.pidfd_send_signal(child_fd, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            os.close(child_fd)
+    def stop_wrapper(self, wrapper):
         if wrapper.poll() is None:
             wrapper.kill()
+        # communicate closes the pipe, including after a failed readiness handshake.
         wrapper.communicate(timeout=5)
 
     def test_parent_only_signals_reap_owned_child_and_allow_immediate_reforward(self):
@@ -196,31 +217,35 @@ with contextlib.redirect_stdout(sys.stderr):
                 self.addCleanup(sentinel.wait, timeout=5)
                 self.addCleanup(sentinel.terminate)
                 wrapper = self.wrapper(0, mode)
-                child_fd = None
                 try:
                     child_pid, port = self.ready(wrapper)
-                    child_fd = os.pidfd_open(child_pid)
                     self.assertFalse(spark.port_is_free(port))
                     wrapper.send_signal(signum)  # PID only, never its process group.
                     if mode == "ignore":
                         wrapper.send_signal(signum)
                         wrapper.send_signal(signum)
-                    self.assertEqual(wrapper.wait(timeout=9), 128 + signum)
+                    self.assertEqual(wrapper.wait(timeout=9), 0 if signum == signal.SIGINT else 143)
                     with self.assertRaises(ProcessLookupError):
                         os.kill(child_pid, 0)  # gone, including no unreaped zombie
                     self.assertIsNone(sentinel.poll(), "an unrelated disposable process survives")
                     self.assertFalse(spark.port_is_free(unrelated.getsockname()[1]))
                     replacement = self.wrapper(port)
-                    replacement_fd = None
                     try:
-                        replacement_pid, _ = self.ready(replacement)
-                        replacement_fd = os.pidfd_open(replacement_pid)
+                        self.ready(replacement)
                         replacement.send_signal(signal.SIGTERM)
                         self.assertEqual(replacement.wait(timeout=9), 143)
                     finally:
-                        self.stop_wrapper(replacement, replacement_fd)
+                        self.stop_wrapper(replacement)
                 finally:
-                    self.stop_wrapper(wrapper, child_fd)
+                    self.stop_wrapper(wrapper)
+
+    def test_fixture_releases_port_if_wrapper_cleanup_is_interrupted(self):
+        wrapper = self.wrapper(0, "ignore")
+        try:
+            _, port = self.ready(wrapper)
+        finally:
+            self.stop_wrapper(wrapper)
+        self.assertTrue(spark.port_is_free(port))
 
     def test_real_occupied_port_is_refused_before_any_child_starts(self):
         with socket.socket() as listener:
@@ -731,6 +756,12 @@ class Workflow(unittest.TestCase):
             self.assertIn("down t599", err.getvalue(), fail)
         self.assertFalse([c for c in Recorder(fail_on="install omg").commands() if "install" in c])
 
+    def test_log_hint_preserves_a_kubeconfig_path_containing_spaces(self):
+        env = spark.Spark(Path("/k/Spark Config/config"), Recorder())
+        command = shlex.split(env.logs_hint("coder-03-omg-t599", "deployment/omg-demo"))
+        self.assertEqual(command, ["kubectl", "--kubeconfig", "/k/Spark Config/config", "-n",
+                                   "coder-03-omg-t599", "logs", "deployment/omg-demo", "--all-containers"])
+
     def test_rollout_timeout_points_to_scoped_sidecar_status_and_events(self):
         recorder = Recorder(fail_on="rollout status")
         self.patches()
@@ -850,9 +881,8 @@ class Forward(unittest.TestCase):
         with self.assertRaisesRegex(spark.SparkError, "status 1"):
             self.forward(returncode=1)
 
-    def test_ctrl_c_reaches_the_cli_interrupt_exit(self):
-        with self.assertRaises(KeyboardInterrupt):
-            self.forward(interrupt=True)
+    def test_ctrl_c_is_a_normal_stop(self):
+        self.forward(interrupt=True)
 
     def test_the_port_probe_sees_a_listener(self):
         with socket.socket() as listener:

@@ -214,6 +214,8 @@ def launch_forward(command):
         finally:
             for sig, handler in handlers.items():
                 signal.signal(sig, handler)
+    if received == signal.SIGINT:
+        raise KeyboardInterrupt
     if received is not None:
         raise SystemExit(128 + received)
     return subprocess.CompletedProcess(command, code)
@@ -468,7 +470,7 @@ class Spark:
         return namespace
 
     def logs_hint(self, namespace, target):
-        return f"kubectl --kubeconfig {self.config} -n {namespace} logs {target} --all-containers"
+        return shlex.join(kubectl_command(self.config, self.base, ["logs", target, "--all-containers"], namespace))
 
     def wait_for_job(self, namespace, job, polls=100):
         for _ in range(polls):
@@ -557,7 +559,10 @@ class Spark:
             if not self.port_free(port):
                 raise SparkError(f"local port {port} is already in use (only one environment can be forwarded at a time); stop what holds it and retry")
         print("Forwarding http://127.0.0.1:3000 (dashboard and API) and 127.0.0.1:18084 (demo issuer); Ctrl-C stops. Loopback only.")
-        code = self.launcher(self.forward_command(name)).returncode
+        try:
+            code = self.launcher(self.forward_command(name)).returncode
+        except KeyboardInterrupt:
+            return
         if code:
             raise SparkError(f"kubectl port-forward exited with status {code}")
 
