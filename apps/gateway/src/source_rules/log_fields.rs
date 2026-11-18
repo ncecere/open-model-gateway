@@ -142,30 +142,6 @@ const SPANS: &[&str] = &[
 ];
 const PRINTS: &[&str] = &["print", "println", "eprint", "eprintln", "dbg"];
 
-fn words(ident: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut word = String::new();
-    let mut previous_lower = false;
-    for c in ident.chars() {
-        if !c.is_alphanumeric() {
-            if !word.is_empty() {
-                out.push(std::mem::take(&mut word));
-            }
-            previous_lower = false;
-            continue;
-        }
-        if c.is_uppercase() && previous_lower && !word.is_empty() {
-            out.push(std::mem::take(&mut word));
-        }
-        previous_lower = c.is_lowercase() || c.is_ascii_digit();
-        word.extend(c.to_lowercase());
-    }
-    if !word.is_empty() {
-        out.push(word);
-    }
-    out
-}
-
 /// The text with the contents of double-quoted strings removed.
 fn without_literals(text: &str) -> String {
     let mut out = String::new();
@@ -205,7 +181,7 @@ fn denied_item(item: &str) -> BTreeSet<String> {
 
 /// Denied words in a stretch of token text (a name or an expression).
 fn denied(text: &str) -> BTreeSet<String> {
-    let all = words(text);
+    let all = super::tree::words(text);
     let mut out: BTreeSet<String> = all
         .iter()
         .filter(|w| DENIED_WORDS.contains(&w.as_str()))

@@ -232,7 +232,11 @@ fn cfg_holds(meta: &Meta) -> Tri {
     }
 }
 
-fn kept(attrs: &[Attribute]) -> bool {
+pub(super) fn possible_in_production(predicate: &Meta) -> bool {
+    cfg_holds(predicate) != Tri::False
+}
+
+pub(super) fn kept(attrs: &[Attribute]) -> bool {
     attrs.iter().all(|attr| {
         let last = attr
             .path()
@@ -242,7 +246,7 @@ fn kept(attrs: &[Attribute]) -> bool {
         match (&attr.meta, last.as_deref()) {
             (Meta::List(list), Some("cfg")) => list
                 .parse_args::<Meta>()
-                .map(|m| cfg_holds(&m) != Tri::False)
+                .map(|m| possible_in_production(&m))
                 .unwrap_or(true),
             (_, Some("test")) => false,
             _ => true,
@@ -362,6 +366,30 @@ pub(super) fn dropped_spans(file: &syn::File) -> Vec<SpanRange> {
     }
     let mut out = Vec::new();
     collect(&file.items, &mut out);
+    out
+}
+
+pub(super) fn words(ident: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut word = String::new();
+    let mut previous_lower = false;
+    for c in ident.chars() {
+        if !c.is_alphanumeric() {
+            if !word.is_empty() {
+                out.push(std::mem::take(&mut word));
+            }
+            previous_lower = false;
+            continue;
+        }
+        if c.is_uppercase() && previous_lower && !word.is_empty() {
+            out.push(std::mem::take(&mut word));
+        }
+        previous_lower = c.is_lowercase() || c.is_ascii_digit();
+        word.extend(c.to_lowercase());
+    }
+    if !word.is_empty() {
+        out.push(word);
+    }
     out
 }
 
