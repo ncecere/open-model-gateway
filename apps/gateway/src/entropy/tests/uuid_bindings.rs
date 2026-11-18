@@ -21,6 +21,10 @@ fn uuid_value(expr: &Expr) -> bool {
         Expr::MethodCall(e) => uuid_value(&e.receiver),
         Expr::Paren(e) => uuid_value(&e.expr),
         Expr::Reference(e) => uuid_value(&e.expr),
+        Expr::Unary(e) if matches!(e.op, syn::UnOp::Deref(_)) => uuid_value(&e.expr),
+        Expr::Block(e) => {
+            matches!(e.block.stmts.last(), Some(syn::Stmt::Expr(tail, None)) if uuid_value(tail))
+        }
         Expr::Call(e) => {
             let constructor = matches!(&*e.func, Expr::Path(p) if {
                 let mut path = p.path.segments.iter().rev();
@@ -217,7 +221,7 @@ fn sql_values_are_matched_to_their_target_columns() {
         ),
         (
             "ALTER TABLE t ALTER COLUMN \"SessionToken\" SET DEFAULT pg_catalog.gen_random_uuid()",
-            &["sessiontoken"],
+            &["SessionToken"],
         ),
         (
             "UPDATE t SET secret=coalesce($1, gen_random_uuid()) WHERE token=gen_random_uuid()",
@@ -260,4 +264,51 @@ fn sql_values_are_matched_to_their_target_columns() {
             .collect();
         assert_eq!(names, expected, "{text}");
     }
+}
+
+#[test]
+fn block_bindings_use_the_tail_value() {
+    let ast = syn::parse_file("fn f() { let client_nonce = { Uuid::now_v7() }; let api_key = { log(Uuid::new_v4()); existing }; }").unwrap();
+    let found = rust("fixture.rs", &ast);
+    assert_eq!(found.len(), 1);
+    assert!(found[0].ends_with("client_nonce"));
+}
+
+#[test]
+fn sql_bindings_respect_expression_depth_and_identifier_case() {
+    for (query, names) in [
+        (
+            "UPDATE t SET id = (SELECT id FROM src WHERE active), nonce = gen_random_uuid()",
+            vec!["nonce"],
+        ),
+        (
+            "SELECT coalesce(gen_random_uuid(), id) AS client_secret FROM t",
+            vec!["client_secret"],
+        ),
+        ("SELECT gen_random_uuid() FROM t AS tokens", vec![]),
+        (
+            "INSERT INTO t(KEY_ID, \"key_id\", \"KEY_ID\") VALUES(gen_random_uuid(),gen_random_uuid(),gen_random_uuid())",
+            vec!["KEY_ID"],
+        ),
+    ] {
+        let mut problems = Vec::new();
+        sql::scan("fixture.sql", query, &mut problems);
+        assert_eq!(
+            problems,
+            names
+                .iter()
+                .map(|name| format!("fixture.sql: gen_random_uuid bound to {name}"))
+                .collect::<Vec<_>>(),
+            "{query}"
+        );
+    }
+}
+
+#[test]
+fn dereferenced_uuid_bytes_retain_the_binding() {
+    let ast = syn::parse_file("fn f() { let nonce = *Uuid::new_v4().as_bytes(); }").unwrap();
+    assert_eq!(
+        rust("fixture.rs", &ast),
+        ["fixture.rs:1: UUID bound to nonce"]
+    );
 }

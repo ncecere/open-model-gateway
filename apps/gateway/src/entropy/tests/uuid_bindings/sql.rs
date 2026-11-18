@@ -10,28 +10,36 @@ fn generated(expr: &[&str]) -> bool {
     expr.windows(3).any(|w| w == ["gen_random_uuid", "(", ")"])
 }
 
-// Split an expression list only at its own depth. Nested calls may have commas.
-fn list<'a>(tokens: &'a [&'a str]) -> (Vec<&'a [&'a str]>, usize) {
-    let mut items = Vec::new();
-    let mut start = 0;
+// Stop at the next delimiter at this expression's own depth.
+fn expression_len(tokens: &[&str]) -> usize {
     let mut depth = 0;
     for (i, token) in tokens.iter().enumerate() {
         match *token {
-            ")" | ";" | "from" | "where" | "returning" | "on" if depth == 0 => {
-                items.push(&tokens[start..i]);
-                return (items, i);
-            }
-            "," if depth == 0 => {
-                items.push(&tokens[start..i]);
-                start = i + 1;
+            "," | ")" | ";" | "from" | "where" | "returning" | "on" | "into" | "group"
+            | "order" | "having" | "limit" | "union" | "intersect" | "except"
+                if depth == 0 =>
+            {
+                return i;
             }
             "(" => depth += 1,
             ")" => depth -= 1,
             _ => {}
         }
     }
-    items.push(&tokens[start..]);
-    (items, tokens.len())
+    tokens.len()
+}
+
+fn list<'a>(tokens: &'a [&'a str]) -> (Vec<&'a [&'a str]>, usize) {
+    let mut items = Vec::new();
+    let mut start = 0;
+    loop {
+        let end = start + expression_len(&tokens[start..]);
+        items.push(&tokens[start..end]);
+        if tokens.get(end) != Some(&",") {
+            return (items, end);
+        }
+        start = end + 1;
+    }
 }
 
 fn insert(tokens: &[&str], mut report: impl FnMut(&str)) {
@@ -90,7 +98,15 @@ pub(super) fn scan(path: &str, text: &str, problems: &mut Vec<String>) {
     }
     let tokens: Vec<_> = TOKEN
         .find_iter(&lower)
-        .map(|m| m.as_str())
+        .map(|m| {
+            // Offsets agree because ASCII case folding preserves byte length. Quoted
+            // PostgreSQL identifiers keep their case, including for exact exceptions.
+            if m.as_str().starts_with('"') {
+                &text[m.range()]
+            } else {
+                m.as_str()
+            }
+        })
         .filter(|t| !t.starts_with("--") && !t.starts_with("/*"))
         .collect();
     for stmt in tokens.split(|t| *t == ";") {
@@ -98,8 +114,6 @@ pub(super) fn scan(path: &str, text: &str, problems: &mut Vec<String>) {
             continue;
         }
         let probe = path == "deploy/staging/verify-privileges.sql";
-        let mut set = false;
-        let mut outbox_update = false;
         let mut report = |name: &str| {
             let name = name.trim_matches('"');
             if super::sensitive(name) {
@@ -117,39 +131,43 @@ pub(super) fn scan(path: &str, text: &str, problems: &mut Vec<String>) {
                     }
                 }),
                 "set" => {
-                    set = true;
-                    // These staging probes exercise the fence compared alongside lease_owner.
-                    outbox_update = probe
+                    // An inner WHERE belongs to its subquery. Each outer assignment
+                    // ends at the next comma or clause at the SET list's own depth.
+                    let fence_probe = probe
                         && (stmt[..i].ends_with(&["update", "alert_webhook_outbox"])
                             || stmt[..i].ends_with(&["update", "alert_recipient_outbox"]));
-                }
-                "where" | "returning" => set = false,
-                "as" if i > 0 && tail.first().is_some_and(|t| identifier(t)) => {
-                    // Restrict the alias to its own projection.
-                    let start = stmt[..i]
-                        .iter()
-                        .rposition(|t| matches!(*t, "," | "select"))
-                        .map_or(0, |n| n + 1);
-                    if generated(&stmt[start..i]) {
-                        report(tail[0]);
+                    for assignment in list(tail).0 {
+                        if let [name, "=", value @ ..] = assignment
+                            && identifier(name)
+                            && generated(value)
+                            && !(fence_probe && *name == "lease_token")
+                        {
+                            report(name);
+                        }
                     }
                 }
-                _ if identifier(token) && super::sensitive(token.trim_matches('"')) => {
-                    let field = list(tail).0[0];
-                    let expression = if set && field.starts_with(&["="]) {
-                        Some(&field[1..])
-                    } else if i > 0 && matches!(stmt[i - 1], "(" | "," | "column" | "add") {
-                        // CREATE/ADD column ... DEFAULT, or ALTER COLUMN name SET DEFAULT.
-                        field
-                            .iter()
-                            .position(|t| *t == "default")
-                            .map(|at| &field[at + 1..])
-                    } else {
-                        None
-                    };
-                    if expression.is_some_and(generated)
-                        && !(set && outbox_update && token == "lease_token")
-                    {
+                "select" | "returning" => {
+                    for projection in list(tail).0 {
+                        if let [value @ .., "as", name] = projection
+                            && identifier(name)
+                            && generated(value)
+                        {
+                            report(name);
+                        }
+                    }
+                }
+                _ if i > 0
+                    && matches!(stmt[i - 1], "(" | "," | "column" | "add")
+                    && identifier(token)
+                    && super::sensitive(token.trim_matches('"')) =>
+                {
+                    // CREATE/ADD column ... DEFAULT, or ALTER COLUMN name SET DEFAULT.
+                    let field = &tail[..expression_len(tail)];
+                    let expression = field
+                        .iter()
+                        .position(|t| *t == "default")
+                        .map(|at| &field[at + 1..]);
+                    if expression.is_some_and(generated) {
                         report(token);
                     }
                 }
