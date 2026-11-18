@@ -144,6 +144,8 @@ impl Scan<'_> {
                         | "credentials"
                         | "key"
                         | "keys"
+                        | "apikey"
+                        | "apikeys"
                 )
             });
             // The startup importer stores the secret under a neutral name.
@@ -270,12 +272,12 @@ fn planted_derived_and_manual_debug_are_refused() {
         mod formatting;
         #[cfg_attr(feature = "fixture", cfg_attr(unix, derive(core::fmt::Debug)))]
         struct Login { r#password: String }
-        enum Entry<T> { Auth { api_key: T } }
+        enum Entry<T> { Auth { api_key: T, APIkeys: T } }
         #[derive(Debug)] enum Settings { Local { client_secret: String, credentials: String } }
         #[derive(Debug)] struct Other { token_hash: [u8; 32], key_ref: String }
         #[r#cfg_attr(true, r#derive(Debug))] struct Refresh { refresh_token: String }
         #[cfg_attr(false, derive(Debug))] struct Disabled { password: String }
-        #[derive(Debug)] struct Keyboard { monkey: String, clientAPIKey: String, clientKEYs: String }
+        #[derive(Debug)] struct Keyboard { monkey: String, clientAPIKey: String, clientKEYs: String, APIkey: String }
         #[cfg(test)] #[derive(Debug)] struct TestOnly { token: String }
         #[cfg_attr(test, derive(Debug))] struct OnlyTestDebug { credential: String }
     "#;
@@ -302,6 +304,7 @@ fn planted_derived_and_manual_debug_are_refused() {
     );
     let found = surfaces(&sources);
     assert_eq!(found, BTreeSet::from([
+        "lib.rs::<file>::Keyboard::APIkey: String".into(),
         "lib.rs::<file>::Keyboard::clientAPIKey: String".into(),
         "lib.rs::<file>::Keyboard::clientKEYs: String".into(),
         "lib.rs::<file>::Login::password: String".into(),
@@ -311,6 +314,7 @@ fn planted_derived_and_manual_debug_are_refused() {
         "lib.rs::<file>::Other::token_hash: [u8 ; 32]".into(),
         "lib.rs::<file>::Other::key_ref: String".into(),
         "formatting.rs::<file>::impl Debug for Stored < T > => lib.rs::<file>::Entry::Auth::api_key: T".into(),
+        "formatting.rs::<file>::impl Debug for Stored < T > => lib.rs::<file>::Entry::Auth::APIkeys: T".into(),
     ]));
 }
 
