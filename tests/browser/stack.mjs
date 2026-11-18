@@ -1,7 +1,7 @@
 // Boots an isolated stack for the Playwright suite: a disposable PostgreSQL database,
 // the gateway binary serving a test-only SPA build, the passwordless local OIDC issuer
 // (tests only) and a deterministic mock upstream. No paid providers, never the demo.
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "../process.mjs";
 import { randomBytes } from "node:crypto";
 import { createWriteStream, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";

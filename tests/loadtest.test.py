@@ -1,10 +1,13 @@
 """Host-side load-test runner safety tests. No Docker or database access."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import stat
+import subprocess
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("loadtest", ROOT / "scripts" / "loadtest.py")
@@ -30,6 +33,52 @@ def sample_report(label="empty-1r-pgbouncer-60", violations=(), consistent=True)
 
 
 class LoadtestTests(unittest.TestCase):
+    def test_stack_facts_git_uses_selected_checkout_despite_inherited_git_env(self):
+        git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        git_env.update({"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"})
+        with tempfile.TemporaryDirectory() as folder:
+            repo = Path(folder)
+            subprocess.run(["git", "init", "-q"], cwd=repo, env=git_env, check=True)
+            subprocess.run(["git", "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
+                            "commit", "-q", "--allow-empty", "-m", "fixture"], cwd=repo, env=git_env, check=True)
+            expected = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo, env=git_env,
+                                      capture_output=True, text=True, check=True).stdout.strip()
+            run = subprocess.run
+
+            def only_git(command, **kwargs):
+                if command[0] != "git":
+                    raise subprocess.CalledProcessError(1, command)
+                self.assertNotIn("GIT_DIR", kwargs.get("env", {}))
+                self.assertNotIn("GIT_INDEX_FILE", kwargs.get("env", {}))
+                self.assertNotIn("GIT_CONFIG_COUNT", kwargs.get("env", {}))
+                return run(command, **kwargs)
+
+            stack = Mock(db="omg_loadtest")
+            stack.psql.return_value = "0"
+            with patch.object(loadtest, "ROOT", repo), patch.object(loadtest.subprocess, "run", side_effect=only_git), \
+                    patch.object(loadtest, "multixact_counters", return_value=None), \
+                    patch.dict(os.environ, {"GIT_DIR": str(ROOT / ".git"), "GIT_INDEX_FILE": str(repo / "absent-index"),
+                                            "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.bare",
+                                            "GIT_CONFIG_VALUE_0": "true"}):
+                self.assertEqual(loadtest.stack_facts(stack)["git"], expected)
+
+    def test_stack_facts_git_failure_is_not_reported_as_an_empty_revision(self):
+        for error in (subprocess.CalledProcessError(128, ["git", "rev-parse"]), FileNotFoundError("git")):
+            with self.subTest(error=type(error).__name__):
+                def fail_git(command, **kwargs):
+                    if command[0] == "git":
+                        if isinstance(error, subprocess.CalledProcessError) and not kwargs.get("check"):
+                            return subprocess.CompletedProcess(command, 128, stdout="", stderr="git failed")
+                        raise error
+                    raise subprocess.CalledProcessError(1, command)
+
+                stack = Mock(db="omg_loadtest")
+                stack.psql.return_value = "0"
+                with patch.object(loadtest.subprocess, "run", side_effect=fail_git), \
+                        patch.object(loadtest, "multixact_counters", return_value=None):
+                    with self.assertRaises(type(error)):
+                        loadtest.stack_facts(stack)
+
     def test_only_throwaway_database_names(self):
         for name in ("omg_loadtest", "omg_loadtest_seeded", "omg_loadtest2"):
             self.assertEqual(loadtest.check_db_name(name), name)

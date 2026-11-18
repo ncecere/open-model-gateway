@@ -14,7 +14,7 @@
 // against adversarial in-memory workflows at the bottom of this file.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./process.mjs";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
@@ -24,6 +24,7 @@ import { runInNewContext } from "node:vm";
 import { isMap, isScalar, parseDocument, visit } from "yaml";
 import { bashPath, runBash } from "./bash-preflight.mjs";
 import { APPROVED_RUNTIME, OTHER_BASE, hasWrite, jobCanWrite, jobPermissions, APPROVED_RUST, KNOWN_DOCKERFILES, RUNTIME_DOCKERFILES, SHA, actionName, containerImagesIn, findDockerfiles, jobsOf, parseStrict, readLocalFromRepo, repoFiles, root, stepsOf, toData, unknownDockerfileViolations, walk, wf, workflowsDir } from "./supply-chain/lib.mjs";
+import { git } from "./supply-chain/secret-scan-lib.mjs";
 
 // An unsupported shell fails this file here, before any test or fixture runs (#380).
 bashPath();
@@ -3283,6 +3284,7 @@ test("no workflow or composite action installs operating-system packages at run 
 test("fixtures: the Dockerfile walker finds Dockerfile*, *.dockerfile and Containerfile* in any case, outside the skipped directories (#488)", () => {
   const dir = mkdtempSync(join(tmpdir(), "omg-walker-"));
   try {
+    git(dir, "init", "-q");
     const unpinned = "FROM alpine:3\n";
     // No two names differ only in case, so the fixture also holds on a case-insensitive file system.
     const files = ["Dockerfile", "Dockerfile.release", "DOCKERFILE.dev", "app.dockerfile", "Containerfile", "containerfile.prod", "deploy/dockerfile", "deploy/x.Dockerfile", "deploy/sub/CONTAINERFILE",
@@ -3300,6 +3302,7 @@ test("fixtures: the Dockerfile walker finds Dockerfile*, *.dockerfile and Contai
 test("fixtures: a .dockerignore is not a Dockerfile, and an unknown Dockerfile name fails clearly (#488)", () => {
   const dir = mkdtempSync(join(tmpdir(), "omg-walker-"));
   try {
+    git(dir, "init", "-q");
     for (const file of ["Dockerfile", "Dockerfile.dockerignore", "app.Dockerfile.dockerignore"]) writeFileSync(join(dir, file), "x\n");
     assert.deepEqual(findDockerfiles(dir).map(p => p.slice(dir.length + 1)), ["Dockerfile"]);
   } finally {
