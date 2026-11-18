@@ -10,7 +10,7 @@ import { admin, auditor, session, testClient } from "../lib/test-fixtures";
 const root = "/api/v1/platform", imports = `${root}/provider-cost-imports`, mappings = `${root}/provider-cost-mappings`;
 const report = { id: "import", account_id: "account", provider: "anthropic", period_start: "2026-10-01T00:00:00Z", period_end: "2026-10-02T00:00:00Z", supersedes: "previous", line_count: 2 };
 const binding = { provider_workspace_id: "already-mapped", connection_id: "connection", deployment_id: null, workspace_id: null, effective_start: report.period_start, effective_end: report.period_end, exclusive: false, non_omg_traffic: true, attested: true, evidence_reference: "old-proof", model_mappings: [] };
-function serve(options: { refusal?: number; conflict?: number; modelMappings?: { provider_model: string; upstream_model: string }[] } = {}) {
+function serve(options: { reports?: Promise<Response>; refusal?: number; conflict?: number; modelMappings?: { provider_model: string; upstream_model: string }[] } = {}) {
   let latest = "mapping-old";
   const fetch = vi.fn().mockImplementation((url: string, init: RequestInit) => {
     if (init.method === "POST") {
@@ -20,7 +20,7 @@ function serve(options: { refusal?: number; conflict?: number; modelMappings?: {
       return Promise.resolve(Response.json({ id: url === imports ? "import" : url === mappings ? "mapping-new" : "frozen-new" }));
     }
     let data: unknown = { data: [] };
-    if (url.startsWith(`${imports}?`)) data = { data: [report] };
+    if (url.startsWith(`${imports}?`)) return options.reports ?? Promise.resolve(Response.json({ data: [report] }));
     if (url === `${imports}/import/lines?limit=200&offset=0`) data = { data: [
       { amount_microusd: "-9007199254740993", dimensions: { workspace_id: null, model: "claude" } },
       { amount_microusd: "-2", dimensions: { workspace_id: "already-mapped" } },
@@ -38,6 +38,14 @@ function renderView(viewer = admin, client = testClient()) {
   return userEvent.setup({ applyAccept: false });
 }
 async function open(client = testClient()) { const user = renderView(admin, client); await user.click(screen.getByRole("button", { name: "Upload & manage" })); return user; }
+async function selectExistingImport(user: ReturnType<typeof userEvent.setup>) {
+  const select = screen.getByLabelText<HTMLSelectElement>("Existing import");
+  await waitFor(() => {
+    expect(select.disabled).toBe(false);
+    expect(Array.from(select.options, option => option.value)).toContain(report.id);
+  });
+  await user.selectOptions(select, report.id);
+}
 async function upload(user: ReturnType<typeof userEvent.setup>) {
   const file = new File([' {"pages":[], "pages":[]}\r\n'], "report.json", { type: "application/json" });
   await user.upload(screen.getByLabelText("Anthropic report JSON"), file);
@@ -85,7 +93,7 @@ describe("Admin provider-cost writes", () => {
   });
   it("lists default/unmapped dimensions and attests a replacement preserving existing bindings", async () => {
     const fetch = serve(), user = await open();
-    await user.selectOptions(await screen.findByLabelText("Existing import"), "import");
+    await selectExistingImport(user);
     await user.click(screen.getByRole("tab", { name: "Mappings" }));
     const table = await screen.findByRole("table", { name: "Provider dimensions" });
     const panel = within(screen.getByRole("tabpanel", { name: "Mappings" }));
@@ -110,8 +118,13 @@ describe("Admin provider-cost writes", () => {
     expect(body.bindings[1]).toEqual({ ...binding, provider_workspace_id: null, non_omg_traffic: false, evidence_reference: "finance:attestation" });
   });
   it("hands a newly saved mapping revision to freeze with exact import and mapping IDs", async () => {
-    const fetch = serve(), user = await open();
-    await user.selectOptions(await screen.findByLabelText("Existing import"), "import");
+    let releaseReports!: (response: Response) => void;
+    const reports = new Promise<Response>(resolve => { releaseReports = resolve; });
+    const fetch = serve({ reports }), user = await open();
+    expect(screen.getByLabelText<HTMLSelectElement>("Existing import").disabled).toBe(true);
+    const selecting = selectExistingImport(user);
+    releaseReports(Response.json({ data: [report] }));
+    await selecting;
     await user.click(screen.getByRole("tab", { name: "Mappings" }));
     expect((await screen.findByRole("table", { name: "Whole mapping draft" })).textContent).toContain("already-mapped");
     await user.type(screen.getByLabelText("Mapping revision evidence reference"), "finance:revision");
