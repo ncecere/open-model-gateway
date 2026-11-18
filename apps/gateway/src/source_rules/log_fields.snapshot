@@ -9,8 +9,7 @@ inference/attempt.rs :: impl Engine::eligible_candidates :: warn :: error=?other
 inference/attempt.rs :: report_unsettled :: error :: execution_id=%id ; trace_id=trace.as_ref().map(LogTraceId::as_str)
 inference/mod.rs :: impl ExecutionGuard::drop :: error :: execution_id=%execution_id ; trace_id=log_trace_id.as_ref().map(LogTraceId::as_str)
 inference/mod.rs :: impl ExecutionGuard::finish :: warn :: execution_id=%self.id ; trace_id=self.log_trace_id.as_ref().map(LogTraceId::as_str)
-inference/realtime.rs :: impl RealtimeSession::drop :: error :: execution_id=%record.id
-inference/realtime.rs :: impl RealtimeSession::finish :: error :: execution_id=%self.id
+inference/realtime.rs :: impl RealtimeSession::final_write :: error :: execution_id=%record.id
 inference/realtime.rs :: impl RealtimeSession::finish :: warn :: execution_id=%self.id
 jobs/batch.rs :: impl Jobs::discard_work_file :: warn :: job_id=%job.id
 jobs/mod.rs :: impl Attempt::drop :: error :: execution_id=%record.id
