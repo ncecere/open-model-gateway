@@ -79,7 +79,32 @@ fn cfg_predicates(attrs: &[syn::Attribute]) -> impl Iterator<Item = String> {
     })
 }
 
+// A renamed attribute loses its recognizable final path segment. Require
+// explicit test spelling in live sources, including cfg-disabled imports.
+fn test_alias(tree: &syn::UseTree, parent_is_test: bool) -> Option<&syn::Ident> {
+    match tree {
+        syn::UseTree::Path(path) => test_alias(&path.tree, path.ident.unraw() == "test"),
+        syn::UseTree::Group(group) => group
+            .items
+            .iter()
+            .find_map(|item| test_alias(item, parent_is_test)),
+        syn::UseTree::Rename(rename)
+            if rename.ident.unraw() == "test" || (parent_is_test && rename.ident == "self") =>
+        {
+            Some(&rename.rename)
+        }
+        _ => None,
+    }
+}
+
 impl<'ast> Visit<'ast> for Ungated {
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        if let Some(alias) = test_alias(&item.tree, false) {
+            self.cases
+                .push(format!("explicit test attribute alias {alias}"));
+        }
+    }
+
     fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
         let outer = self.active.len();
         self.active.extend(cfg_predicates(&item.attrs));
@@ -119,7 +144,7 @@ fn live_provider_tests_require_ignore() {
             let cases = ungated(&std::fs::read_to_string(&path).unwrap());
             assert!(
                 cases.is_empty(),
-                "{}: missing #[ignore]: {cases:?}",
+                "{}: missing #[ignore] or renamed test attribute: {cases:?}",
                 path.display()
             );
         }
@@ -158,4 +183,20 @@ fn ignore_applies_only_to_its_own_case() {
             "ordinary"
         ]
     );
+}
+
+#[test]
+fn live_sources_refuse_explicit_test_aliases_even_in_disabled_modules() {
+    for source in [
+        "use tokio::test as probe; #[probe] async fn example() {}",
+        "mod m { use tokio::{r#test as probe}; #[cfg_attr(any(), probe)] async fn case() {} }",
+        "#[cfg(any())] mod m { use tokio::test::{self as probe}; }",
+    ] {
+        assert_eq!(
+            ungated(source),
+            ["explicit test attribute alias probe"],
+            "{source}"
+        );
+    }
+    assert!(ungated("use std::fmt::{Debug as DisplayDebug}; fn helper() {}").is_empty());
 }

@@ -2,6 +2,7 @@
 // shell interpolation, ignored-test sweeps, or third-party runners.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const TERMINAL = "providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence";
@@ -22,6 +23,19 @@ function identity(packageId, target) {
   else if (target.kind.length === 1 && ["bin", "test", "example", "bench"].includes(target.kind[0])) kind = target.kind[0];
   else fail(`Unsupported Cargo test target kind: ${JSON.stringify(target.kind)}`);
   return { packageId, name: target.name, kind, key: JSON.stringify([packageId, [...target.kind].sort(), target.name]) };
+}
+
+async function checkSpecialSources() {
+  const metadata = JSON.parse(await runCargo(["metadata", "--no-deps", "--all-features", "--format-version", "1", "--locked"]));
+  const packages = metadata.packages.filter(pkg =>
+    pkg.name === "open-model-gateway" && metadata.workspace_members.includes(pkg.id));
+  assert.equal(packages.length, 1, "expected one gateway workspace package");
+  for (const name of SPECIAL) {
+    const targets = packages[0].targets.filter(target => target.name === name && target.kind.includes("test"));
+    assert.equal(targets.length, 1, `expected one gateway test target named ${name}`);
+    assert.equal(targets[0].src_path, join(metadata.workspace_root, "apps/gateway/tests", `${name}.rs`),
+      `unexpected ${name} source path`);
+  }
 }
 
 export function discoverTargets(metadata, output) {
@@ -233,9 +247,13 @@ export function runCargo(args, { echo = false } = {}) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const args = process.argv.slice(2);
-    if (args.length !== 4 || args[0] !== "--shard" || args[2] !== "--count"
-        || !/^(0|[1-9]\d*)$/.test(args[1]) || !/^[1-9]\d*$/.test(args[3])) fail("usage: rust-shards.mjs --shard INDEX --count COUNT");
-    await runShard(Number(args[1]), Number(args[3]));
+    if (args.length === 1 && args[0] === "--check-special-sources") {
+      await checkSpecialSources();
+    } else {
+      if (args.length !== 4 || args[0] !== "--shard" || args[2] !== "--count"
+          || !/^(0|[1-9]\d*)$/.test(args[1]) || !/^[1-9]\d*$/.test(args[3])) fail("usage: rust-shards.mjs --check-special-sources | --shard INDEX --count COUNT");
+      await runShard(Number(args[1]), Number(args[3]));
+    }
   } catch (error) {
     console.error(error.stack);
     process.exitCode = 1;

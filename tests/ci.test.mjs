@@ -163,6 +163,7 @@ test("special probes retain sequential ACL, exact contention/terminal, Docker an
   assert.ok(job, "missing special coverage job");
   assert.deepEqual(runs(job), [
     "npm ci",
+    "node .github/scripts/rust-shards.mjs --check-special-sources",
     "cargo test -p open-model-gateway --all-features --test filestore_s3",
     "cargo test -p open-model-gateway --all-features --test runtime_privileges",
     "cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored --test-threads=1",
@@ -183,6 +184,40 @@ test("special probes retain sequential ACL, exact contention/terminal, Docker an
   assert.equal(webRuns.filter(run => run === AGE_INSTALL).length, 1);
   assert.equal(webRuns.filter(run => /\bage\b/.test(run)).length, 1, "no other step touches age");
   assert.ok(webRuns.indexOf(AGE_INSTALL) < webRuns.indexOf("npm run test:staging"));
+});
+
+test("special job validates both source paths before invoking any test", () => {
+  const dir = mkdtempSync(join(tmpdir(), "gateway-special-"));
+  try {
+    const cargo = join(dir, "cargo");
+    const calls = join(dir, "calls");
+    writeFileSync(cargo, `#!${process.execPath}
+      import { appendFileSync } from 'node:fs';
+      appendFileSync(process.env.CALLS, process.argv.slice(2).join(' ') + '\\n');
+      console.log(process.env.METADATA);`, { mode: 0o755 });
+    const command = runs(loadWorkflow().jobs["gateway-special"])[1].split(" ");
+    assert.equal(command[0], "node");
+    for (const remap of ["filestore_s3", "runtime_privileges", undefined]) {
+      const meta = fixtures();
+      meta.workspace_root = "/repo";
+      for (const t of meta.packages[0].targets) {
+        t.src_path = `/repo/apps/gateway/tests/${t.name}.rs`;
+        if (t.name === remap) t.src_path = remap === "runtime_privileges"
+          ? "/repo/apps/gateway/tests/remapped_live.rs" : `/repo/elsewhere/tests/${t.name}.rs`;
+      }
+      writeFileSync(calls, "");
+      const result = spawnSync(process.execPath, command.slice(1), {
+        cwd: root, encoding: "utf8", env: { PATH: dir, CALLS: calls, METADATA: JSON.stringify(meta) },
+      });
+      if (remap) {
+        assert.notEqual(result.status, 0, remap);
+        assert.ok(result.stderr.includes(`unexpected ${remap} source path`), result.stderr);
+      } else assert.equal(result.status, 0, result.stderr);
+      assert.match(readFileSync(calls, "utf8"), /^--color never metadata [^\n]+\n$/);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("aggregate executable accepts only the exact dependency set with every result successful", () => {

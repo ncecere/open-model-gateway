@@ -135,6 +135,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - uses: ./.github/actions/setup-node
       - run: npm ci
+      - run: node .github/scripts/rust-shards.mjs --check-special-sources
       - name: S3-compatible file store against MinIO and RustFS containers
         # Images are pinned by digest in tests/filestore_s3.rs; random loopback ports;
         # containers are removed by the test. Missing Docker fails instead of skipping.

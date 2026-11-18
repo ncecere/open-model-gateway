@@ -15,6 +15,7 @@
     {"ci": "npm run test:web", "suite": "web", "script": "npm run test --workspace @omg/web -- --maxWorkers"}
   ],
   "uncovered": [
+    {"ci": "node .github/scripts/rust-shards.mjs --check-special-sources", "why": "Spark checks the runtime_privileges source independently and does not run filestore_s3", "suites": ["integration", "all"]},
     {"ci": "cargo test -p open-model-gateway --all-features --test filestore_s3", "why": "filestore_s3 starts MinIO and RustFS containers; a pod has no Docker", "suites": ["integration", "all"]},
     {"ci": "cargo build -p open-model-gateway --all-features --bin open-model-gateway", "why": "the backup/restore drill's binary build (the drill needs Docker and age)", "suites": ["integration", "all"]},
     {"ci": "python3 tests/backup.test.py", "why": "the backup/restore drill (Docker, age)", "suites": ["integration", "all"]},
