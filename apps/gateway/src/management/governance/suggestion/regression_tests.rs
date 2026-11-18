@@ -101,6 +101,27 @@ fn hostile_entries_are_bounded_and_do_not_offer_partial_prices() {
             .iter()
             .all(|p| p["unknown"] == true)
     );
+    let endpoints =
+        json!({"endpoints":[{"pricing":{"prompt":"1","completion":"2","request":"0"}}]});
+    let selected = map_with_endpoints(
+        &model,
+        WorkloadKind::Generation,
+        None,
+        Some(&endpoints),
+        &[],
+    );
+    assert!(
+        selected["draft"]["price_lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["unknown"] == true)
+    );
+    assert!(
+        selected.get("endpoint").is_none(),
+        "a refusal has no priced endpoint"
+    );
+    assert!(!selected["warnings"].to_string().contains("Priced from"));
     let body = json!({"endpoints":[{"pricing":(0..20_000).map(|n|json!({"billable":"output_image","unit":"image","cost_usd":"1","variant":n.to_string()})).collect::<Vec<_>>()}]}).to_string();
     let out = map(
         &json!({"id":"v/m"}),

@@ -122,6 +122,14 @@ pub(crate) fn map_with_endpoints(
     let endpoint = &list[index];
     let (priced, tiers_dropped, unusable_limit) = endpoint_model(model, endpoint);
     let mut out = map(&priced, workload, images);
+    // A whole-import refusal has no selected price to describe. Keep its
+    // manual-review warning instead of claiming this endpoint was priced.
+    if out["draft"]["price_lines"]
+        .as_array()
+        .is_some_and(|lines| lines.iter().all(|line| line["unknown"] == true))
+    {
+        return out;
+    }
     if unusable_limit {
         push_warning(
             &mut out,
