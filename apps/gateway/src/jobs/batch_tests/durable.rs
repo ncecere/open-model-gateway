@@ -17,10 +17,79 @@ enum Boundary {
     AfterCommit,
 }
 
+// A fresh worker process reopens the same encrypted files and disposable database.
+async fn local_files(dir: &std::path::Path) -> FileStoreRuntime {
+    use base64::Engine as _;
+    let config = crate::filestore::FileStoreConfig::from_lookup(&|key| match key {
+        "GATEWAY_FILE_STORE" => Some("local".into()),
+        "GATEWAY_FILE_STORE_DIR" => Some(dir.join("files").to_str().unwrap().into()),
+        "GATEWAY_FILE_ENCRYPTION_KEYS_ENV" => Some("TEST_KEY".into()),
+        "TEST_KEY" => Some(format!(
+            "test:{}",
+            base64::engine::general_purpose::STANDARD.encode([19u8; 32])
+        )),
+        _ => None,
+    })
+    .unwrap();
+    FileStoreRuntime::build(config).await.unwrap()
+}
+
+fn loopback_engine(store: &crate::store::Store, base: &str) -> Engine {
+    let mut registry = ProviderRegistry::default();
+    registry
+        .register(Arc::new(crate::providers::openai::OpenAiAdapter::for_test(
+            Arc::new(Resolver),
+            format!("{base}/v1"),
+        )))
+        .unwrap();
+    Engine::new(Arc::new(store.clone()), registry, EngineLimits::default()).unwrap()
+}
+
+#[tokio::test]
+#[ignore = "child process of the batch crash tests"]
+async fn crash_worker() {
+    let dir = std::env::var("BATCH_TEST_DIR").unwrap();
+    let db = std::env::var("BATCH_TEST_DB").unwrap();
+    assert!(db.starts_with("_sqlx_test_"));
+    let options = std::env::var("DATABASE_URL")
+        .unwrap()
+        .parse::<sqlx::postgres::PgConnectOptions>()
+        .unwrap()
+        .database(&db);
+    let pool = PgPool::connect_with(options).await.unwrap();
+    let store = crate::store::Store::new(pool);
+    let engine = loopback_engine(&store, &std::env::var("BATCH_TEST_UPSTREAM").unwrap());
+    let jobs = Jobs::new(store, &engine).with_files(Some(local_files(dir.as_ref()).await));
+    jobs.finalize_hold.arm();
+    assert!(Runner::new(jobs).run_next().await.unwrap());
+}
+
+fn start_process(w: &World, dir: &std::path::Path, upstream: &Server) -> tokio::process::Child {
+    let module = module_path!().split_once("::").unwrap().1;
+    tokio::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--ignored", "--exact", &format!("{module}::crash_worker")])
+        .env(
+            "BATCH_TEST_DB",
+            w.f.store.pool.connect_options().get_database().unwrap(),
+        )
+        .env("BATCH_TEST_DIR", dir)
+        .env("BATCH_TEST_UPSTREAM", &upstream.base)
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap()
+}
+
 async fn run_case(pool: PgPool, fault: Option<(Boundary, Loss)>) {
     let size = if fault.is_some() { 1 } else { 32 };
     let before = matches!(fault, Some((Boundary::BeforeCommit, _)));
     let mut w = world(pool, false, false, 1).await;
+    let dir = tempfile::tempdir().unwrap();
+    let crash = matches!(fault, Some((_, Loss::Crash)));
+    if crash {
+        let runtime = local_files(dir.path()).await;
+        w.jobs = w.jobs.with_files(Some(runtime.clone()));
+        w.files = crate::filestore::FileStorage::new(w.f.store.clone(), runtime);
+    }
     let input: Vec<_> = (0..size)
         .map(|n| chat_line(&n.to_string(), "company/smart", "test"))
         .collect();
@@ -31,19 +100,7 @@ async fn run_case(pool: PgPool, fault: Option<(Boundary, Loss)>) {
         seen.fetch_add(1, Ordering::SeqCst);
         async { axum::Json(json!({"id":"chatcmpl-test","model":"smart","choices":[{"index":0,"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}})) }
     })).await;
-    let mut registry = ProviderRegistry::default();
-    registry
-        .register(Arc::new(crate::providers::openai::OpenAiAdapter::for_test(
-            Arc::new(Resolver),
-            format!("{}/v1", upstream.base),
-        )))
-        .unwrap();
-    let engine = Engine::new(
-        Arc::new(w.f.store.clone()),
-        registry,
-        EngineLimits::default(),
-    )
-    .unwrap();
+    let engine = loopback_engine(&w.f.store, &upstream.base);
     let gateway = Server::start(
         crate::http::router_with_engine(w.f.store.clone(), None, engine.clone())
             .layer(axum::Extension(w.files.runtime().clone())),
@@ -68,11 +125,12 @@ async fn run_case(pool: PgPool, fault: Option<(Boundary, Loss)>) {
             .execute(&mut *lock)
             .await
             .unwrap();
-    } else if fault.is_some() {
+    } else if fault.is_some() && !crash {
         w.jobs.finalize_hold.arm();
     }
     let started = std::time::Instant::now();
-    let old = start(&w);
+    let mut process = crash.then(|| start_process(&w, dir.path(), &upstream));
+    let old = (!crash).then(|| start(&w));
     if let Some((_, loss)) = fault {
         if before {
             tokio::time::timeout(Duration::from_secs(20),async {
@@ -82,6 +140,14 @@ async fn run_case(pool: PgPool, fault: Option<(Boundary, Loss)>) {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
             }).await.unwrap();
+        } else if crash {
+            tokio::time::timeout(Duration::from_secs(20), async {
+                while w.reload(&job).await.finalizing_at.is_none() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
         } else {
             tokio::time::timeout(Duration::from_secs(20), w.jobs.finalize_hold.reached())
                 .await
@@ -97,14 +163,11 @@ async fn run_case(pool: PgPool, fault: Option<(Boundary, Loss)>) {
         } else {
             assert_eq!(row, ("succeeded".into(), Some(0), 1));
         }
-        let surviving_runner = match loss {
-            Loss::Crash => {
-                old.abort();
-                assert!(old.await.unwrap_err().is_cancelled());
-                None
-            }
-            Loss::Takeover => Some(old),
-        };
+        if let Loss::Crash = loss {
+            let child = process.as_mut().unwrap();
+            child.kill().await.unwrap();
+            assert!(!child.wait().await.unwrap().success());
+        }
         lapse(&w, &job).await;
         let owner = start(&w);
         tokio::time::timeout(Duration::from_secs(10), async {
@@ -122,13 +185,13 @@ async fn run_case(pool: PgPool, fault: Option<(Boundary, Loss)>) {
         .unwrap();
         lock.rollback().await.unwrap();
         w.jobs.finalize_hold.release();
-        if let Some(old) = surviving_runner {
+        if let Some(old) = old {
             assert!(old.await.unwrap().unwrap());
         }
         assert!(owner.await.unwrap().unwrap());
     } else {
         lock.rollback().await.unwrap();
-        assert!(old.await.unwrap().unwrap());
+        assert!(old.unwrap().await.unwrap().unwrap());
         eprintln!("32 serial lines took {:?}", started.elapsed());
     }
     assert_eq!(calls.load(Ordering::SeqCst), size);
