@@ -88,7 +88,8 @@ function interpreterLanguage(program) {
 function interpreterScript(args, language) {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg.variable || arg.text === "-") return;
+    if (arg.variable) return;
+    if (arg.text === "-") return language === "shell" ? args[i + 1] : undefined;
     if (arg.text === "--") return args[i + 1];
     if (!arg.text.startsWith("-")) return arg;
     // Each of these modes consumes code, a module, or a separate option operand.
@@ -163,17 +164,25 @@ export function cargoScanner(read, shellSources) {
   function scanCommands(commands, cwd, direct) {
     let cargo = false;
     for (const command of commands) {
-      const [program, ...args] = command;
+      let first = 0;
+      while (!command[first]?.variable && ["exec", "env", "command"].includes(command[first]?.text)) {
+        first++;
+        if (command[first]?.text === "--") first++;
+        while (/^[A-Za-z_][A-Za-z_0-9]*=/.test(command[first]?.text ?? "")) first++;
+      }
+      const invocation = command.slice(first);
+      const [program, ...args] = invocation;
+      if (!program) continue;
       if (!program.variable && ["echo", "printf"].includes(program.text)) continue;
       if (!program.variable && program.text === "npm") {
-        if (npmScript(command, cwd)) cargo = true;
+        if (npmScript(invocation, cwd)) cargo = true;
         continue;
       }
       const interpreter = !program.variable && interpreterLanguage(program.text);
       // Direct process calls supply argv as data. Only a script operand is executable.
-      const words = direct ? [program] : command;
+      const words = direct ? [program] : invocation;
       for (const word of words) {
-        if (word.variable || word.forwarded) continue;
+        if (word.variable || (word.forwarded && word !== program)) continue;
         if (word.text === "cargo" || word.text.endsWith("/cargo")) cargo = true;
         if (follow(word, cwd)) cargo = true;
       }

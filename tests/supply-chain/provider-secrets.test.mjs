@@ -440,3 +440,22 @@ test("npm forwards mixed positional arguments without treating data as executabl
   check("npm run node -- check.sh");
   assert.throws(() => check("npm run script check.sh -- --verbose"), /env.TOKEN/);
 });
+
+test("an npm launch script inspects the forwarded executable and its script operand", () => {
+  const files = new Map([["check", "cargo test"]]);
+  const check = run => checkInputs({ jobs: { job: credentialJob(run) } }, "fixture.yml", new Map(), p => files.get(p));
+  for (const launcher of ["exec", "env", "exec env"]) {
+    files.set("package.json", JSON.stringify({ scripts: { launch: launcher } }));
+    check("npm run launch -- cat cargo");
+    assert.throws(() => check("npm run launch -- cargo test"), /env.TOKEN/);
+    assert.throws(() => check("npm run launch -- bash check"), /env.TOKEN/);
+  }
+});
+
+test("shell single dash followed by a literal filename executes that script", () => {
+  for (const shell of ["bash", "sh"]) {
+    const files = new Map([["runner.js", `spawn("${shell}", ["-", "check"])`], ["check", "cargo test"]]);
+    assert.throws(() => checkInputs({ jobs: { job: credentialJob("node runner.js") } },
+      "fixture.yml", new Map(), p => files.get(p)), /env.TOKEN/);
+  }
+});
