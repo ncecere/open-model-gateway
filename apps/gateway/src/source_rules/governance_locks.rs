@@ -139,6 +139,7 @@ struct Scan<'a> {
     module: String,
     function: Option<String>,
     findings: Vec<String>,
+    in_block: bool,
     used: HashSet<&'static str>,
 }
 
@@ -183,7 +184,33 @@ impl<'ast> Visit<'ast> for Scan<'_> {
         self.function = enclosing;
     }
 
+    fn visit_block(&mut self, block: &'ast syn::Block) {
+        let parent = self.in_block;
+        self.in_block = true;
+        visit::visit_block(self, block);
+        self.in_block = parent;
+    }
+
+    fn visit_item_extern_crate(&mut self, item: &'ast syn::ItemExternCrate) {
+        if item.ident.unraw() == "sqlx" && item.rename.is_some() {
+            self.findings.push(format!(
+                "{}:{}: inspect renamed SQLx namespace",
+                self.path,
+                item.ident.span().start().line
+            ));
+        }
+        visit::visit_item_extern_crate(self, item);
+    }
+
     fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        if self.in_block && item.content.is_none() {
+            self.findings.push(format!(
+                "{}:{}: inspect block-local file module {}",
+                self.path,
+                item.ident.span().start().line,
+                item.ident
+            ));
+        }
         let parent_len = self.module.len();
         self.module.push_str("::");
         self.module.push_str(&item.ident.unraw().to_string());
@@ -282,6 +309,15 @@ impl Scan<'_> {
                 for item in &group.items {
                     self.check_sqlx_renames(item, sqlx);
                 }
+            }
+            syn::UseTree::Rename(rename)
+                if rename.ident.unraw() == "sqlx" || (sqlx && rename.ident.unraw() == "self") =>
+            {
+                self.findings.push(format!(
+                    "{}:{}: inspect renamed SQLx namespace",
+                    self.path,
+                    rename.ident.span().start().line
+                ));
             }
             syn::UseTree::Rename(rename) if sqlx => {
                 let name = rename.ident.unraw().to_string();
@@ -406,6 +442,7 @@ fn violations(source: &Source) -> Vec<String> {
         module: source.module.clone(),
         function: None,
         findings: Vec::new(),
+        in_block: false,
         used: HashSet::new(),
     };
     scan.visit_file(&source.file);
@@ -659,4 +696,23 @@ fn explicit_sqlx_macro_renames_require_inspection() {
         ))
         .is_empty()
     );
+}
+
+#[test]
+fn renamed_sqlx_namespace_and_file_modules_in_blocks_require_inspection() {
+    for (source, rule) in [
+        ("use sqlx as db; use db::query_file as q;", "SQLx namespace"),
+        ("use sqlx::{self as db};", "SQLx namespace"),
+        ("extern crate sqlx as db;", "SQLx namespace"),
+        (
+            r#"fn owner() { #[path = "child.rs"] mod locks; }"#,
+            "block-local file module",
+        ),
+    ] {
+        let findings = violations(&parse_fixture("governance.rs", source));
+        assert!(
+            findings.iter().any(|finding| finding.contains(rule)),
+            "{source}: {findings:?}"
+        );
+    }
 }
