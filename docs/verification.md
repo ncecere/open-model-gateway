@@ -362,6 +362,12 @@ Five parsers and encoders that read or build untrusted data are checked by `prop
 
 Every rule in AGENTS.md's Invariants and Deployment lists is either enforced by a deterministic check, enforced in part (the gap is stated), or left to review (the reason and the review that covers it are stated). A correction to an agent becomes a check where one can be written (#591); text and keyword scans kept losing to code the compiler resolves (#509, #488), so the new source checks parse the production build with `syn`, and each has planted-violation tests proving it fails. The Rust checks share one module-tree reader (`source_rules/tree.rs`): it follows `mod x;` and `#[path]`, keeps every item whose `cfg` could be true in a production build (`cfg` is three-valued: only a definitely false predicate such as `test` or `all(test, ..)` drops an item, so `not(feature = "x")` and `not(debug_assertions)` stay), and fails closed (the test panics) on a `mod` it cannot find, `include!`, a `mod` declared inside a macro, and `cfg_attr(.., path = ..)` on a module. "Review" is the code review every change gets, and for security-relevant changes the two independent reviews AGENTS.md requires.
 
+The shared rule reader refuses a file module declared inside a production block,
+including one nested in a block-local inline module. Declare file modules at
+module scope so the reader can resolve them. Inline modules with self-contained
+bodies are supported inside blocks. The reader skips local items with a
+definitely false `#[cfg(..)]`; expression-level conditions are conservative.
+
 Commands, from the repository root: `LIB` is `cargo test -p open-model-gateway --all-features --lib`; the database-backed checks need `DATABASE_URL` (see the table at the top).
 
 | Rule (AGENTS.md) | Status | Check | Gap, or what review covers |

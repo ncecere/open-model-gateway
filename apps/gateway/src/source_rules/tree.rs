@@ -1,5 +1,5 @@
 //! The production module tree, read the way the compiler reads it: start at
-//! a crate root, follow every `mod x;` (with `#[path]`), drop what a test
+//! a crate root, follow module-scope `mod x;` declarations (with `#[path]`), drop what a test
 //! build alone compiles. Shared by the source rules in this directory.
 //!
 //! `cfg` predicates are three-valued. `test` is False (the production build
@@ -13,7 +13,7 @@
 //! or `#[sqlx::test]` are dropped.
 //!
 //! Fails closed (panics, so the rule tests fail) on what it cannot read: a
-//! `mod x;` it cannot find, `include!`, a `mod` declared inside a macro
+//! block-local file module, a `mod x;` it cannot find, `include!`, a `mod` declared inside a macro
 //! body, and `#[cfg_attr(.., path = ..)]` on a module. Statement-level `cfg`
 //! is not pruned (rare; the rules over-report).
 use std::path::{Path, PathBuf};
@@ -56,7 +56,11 @@ fn load(read: &dyn Fn(&Path) -> Option<String>, rel: &Path, bin: bool, out: &mut
     let text = read(rel).unwrap_or_else(|| panic!("{}: cannot read", rel.display()));
     let mut file = syn::parse_file(&text).unwrap_or_else(|e| panic!("{}: {e}", rel.display()));
     prune(&mut file.items);
-    Unreadable { from: rel }.visit_file(&file);
+    Unreadable {
+        from: rel,
+        in_block: false,
+    }
+    .visit_file(&file);
     let name = rel.file_name().and_then(|n| n.to_str()).unwrap_or_default();
     let parent = rel.parent().unwrap_or(Path::new(""));
     let children = if matches!(name, "lib.rs" | "main.rs" | "mod.rs") {
@@ -79,9 +83,38 @@ fn load(read: &dyn Fn(&Path) -> Option<String>, rel: &Path, bin: bool, out: &mut
 /// Constructs that add code the scan would not read.
 struct Unreadable<'a> {
     from: &'a Path,
+    in_block: bool,
 }
 
 impl<'ast> Visit<'ast> for Unreadable<'_> {
+    fn visit_block(&mut self, block: &'ast syn::Block) {
+        // File resolution only walks file and inline-module item lists.
+        // Keep the block context through inline modules and nested items.
+        syn::visit::visit_block(
+            &mut Self {
+                from: self.from,
+                in_block: true,
+            },
+            block,
+        );
+    }
+
+    fn visit_item(&mut self, item: &'ast Item) {
+        // prune() has already handled module-scope items. Within a block,
+        // only a built-in cfg predicate can establish this item is absent.
+        if self.in_block
+            && item_attrs(item).iter().any(|attr| {
+                attr.path().is_ident("cfg")
+                    && attr
+                        .parse_args::<Meta>()
+                        .is_ok_and(|meta| cfg_holds(&meta) == Tri::False)
+            })
+        {
+            return;
+        }
+        syn::visit::visit_item(self, item);
+    }
+
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
         if mac
             .path
@@ -115,6 +148,13 @@ impl<'ast> Visit<'ast> for Unreadable<'_> {
     }
 
     fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+        if self.in_block && module.content.is_none() {
+            panic!(
+                "{}: block-local file module `{}` is unsupported by the source rules",
+                self.from.display(),
+                module.ident
+            );
+        }
         for attr in &module.attrs {
             if attr.path().is_ident("cfg_attr")
                 && let Meta::List(list) = &attr.meta
@@ -540,6 +580,41 @@ mod tests {
                 "a.rs", "a/d.rs", "b/c.rs", "e/f.rs", "e/mod.rs", "lib.rs", "x/y.rs"
             ]
         );
+    }
+
+    #[test]
+    fn block_local_file_modules_fail_closed() {
+        for source in [
+            r#"fn f() { #[path = "other.rs"] mod child; }"#,
+            r#"impl S { fn f() { mod inner { #[path = "other.rs"] mod child; } } }"#,
+            r#"trait T { const C: () = { #[cfg(unix)] #[path = "other.rs"] mod child; }; }"#,
+        ] {
+            let refused = std::panic::catch_unwind(|| {
+                tree(
+                    &[("lib.rs", source), ("other.rs", "const _: () = ();")],
+                    "lib.rs",
+                )
+            })
+            .expect_err(source);
+            let message = refused.downcast_ref::<String>().expect("loader diagnostic");
+            assert!(
+                message.contains("lib.rs: block-local file module `child`"),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn block_local_inline_and_test_only_modules_are_allowed() {
+        let source = r#"
+            fn f() {
+                mod local { pub fn helper() {} }
+                #[cfg(all(test, unix))] #[path = "absent.rs"] mod child;
+            }
+            #[test] fn fixture() { #[path = "absent.rs"] mod child; }
+            impl S { #[cfg(test)] fn helper() { #[path = "absent.rs"] mod child; } }
+        "#;
+        assert_eq!(tree(&[("lib.rs", source)], "lib.rs"), ["lib.rs"]);
     }
 
     #[test]
