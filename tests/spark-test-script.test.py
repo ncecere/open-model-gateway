@@ -403,8 +403,23 @@ fi
 
 
 class CacheDiagnostics(Pod):
+    def test_existing_cache_measurement_failure_stops_pruning(self):
+        result = self.call_functions('mkdir -p "$OMG_CACHE/npm"; du() { return 1; }; prune_cache')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("cache total_mib=", result.stdout)
+
+
+    def test_populated_cache_and_target_pruning(self):
+        result = self.call_functions(
+            'mkdir -p "$OMG_CACHE/target/debug/incremental" "$SRC"; '
+            'dd if=/dev/zero of="$OMG_CACHE/target/debug/incremental/test" bs=1M count=2 status=none; '
+            'prune_cache && test ! -e "$OMG_CACHE/target/debug/incremental"', OMG_TARGET_LIMIT_GIB="0")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("removing incremental data", result.stdout)
+        self.assertIn("target_mib=0", result.stdout)
+
     def test_missing_cache_subdirectories_report_zero_without_integer_errors(self):
-        result = self.call_functions('mkdir -p "$OMG_CACHE/target" "$OMG_CACHE/npm"; prune_cache')
+        result = self.call_functions('mkdir -p "$OMG_CACHE/target" "$OMG_CACHE/npm" "$SRC"; prune_cache')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(result.stderr, "")
         self.assertRegex(result.stdout, r"cache total_mib=\d+ target_mib=0 crates_mib=0 npm_mib=0 src_mib=0")

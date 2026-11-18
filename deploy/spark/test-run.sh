@@ -141,22 +141,56 @@ prepare_toolchain() {
   rustc --version && cargo --version
 }
 
-mib() { du -sk "$1" 2>/dev/null | awk 'END {printf "%d", $1 / 1024}'; }
+mib() {
+  if [ "${2:-required}" = optional ] && [ ! -e "$1" ]; then
+    # A shell existence test also fails on access errors. Only ENOENT means zero.
+    python3 -c 'import os, sys
+try:
+    os.lstat(sys.argv[1])
+except FileNotFoundError:
+    print(0)
+    sys.exit(0)
+sys.exit("cache entry is not accessible: " + sys.argv[1])' "$1"
+    return
+  fi
+  du -sk -- "$1" | awk 'NR == 1 && $1 ~ /^[0-9]+$/ {size=$1; valid=1} END {if (!valid || NR != 1) exit 1; printf "%d", size / 1024}'
+}
 
 prune_cache() { # bounded growth: the local-path volume does not enforce its size
   local c=$OMG_CACHE target_limit=$((OMG_TARGET_LIMIT_GIB * 1024)) total_limit=$((OMG_CACHE_LIMIT_GIB * 1024))
-  [ "$(mib "$c/npm")" -gt 3072 ] && { echo "npm cache over 3 GiB: removed"; rm -rf "$c/npm"; mkdir -p "$c/npm"; }
-  [ "$(mib "$c/cargo/registry/cache")" -gt 4096 ] && { echo "crate cache over 4 GiB: removed"; rm -rf "$c/cargo/registry/cache"; }
-  [ "$(mib "$c/cargo/git/db")" -gt 2048 ] && { echo "git databases over 2 GiB: removed"; rm -rf "$c/cargo/git/db"; }
-  if [ "$(mib "$c/target")" -gt "$target_limit" ]; then
+  local npm crates git_db target total src
+  npm=$(mib "$c/npm" optional) || return 1
+  crates=$(mib "$c/cargo/registry/cache" optional) || return 1
+  git_db=$(mib "$c/cargo/git/db" optional) || return 1
+  if [ "$npm" -gt 3072 ]; then
+    rm -rf "$c/npm" && mkdir -p "$c/npm" || return 1
+    echo "npm cache over 3 GiB: removed"
+  fi
+  if [ "$crates" -gt 4096 ]; then
+    rm -rf "$c/cargo/registry/cache" || return 1
+    echo "crate cache over 4 GiB: removed"
+  fi
+  if [ "$git_db" -gt 2048 ]; then
+    rm -rf "$c/cargo/git/db" || return 1
+    echo "git databases over 2 GiB: removed"
+  fi
+  target=$(mib "$c/target") || return 1
+  if [ "$target" -gt "$target_limit" ]; then
     echo "target directory over $OMG_TARGET_LIMIT_GIB GiB: removing incremental data"
-    find "$c/target" -maxdepth 2 -name incremental -type d -prune -exec rm -rf {} +
+    find "$c/target" -maxdepth 2 -name incremental -type d -prune -exec rm -rf {} + || return 1
+    target=$(mib "$c/target") || return 1
   fi
-  if [ "$(mib "$c/target")" -gt "$target_limit" ] || [ "$(mib "$c")" -gt "$total_limit" ]; then
+  total=$(mib "$c") || return 1
+  if [ "$target" -gt "$target_limit" ] || [ "$total" -gt "$total_limit" ]; then
     echo "cache over its limit: removing the target directory"
-    find "$c/target" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+    find "$c/target" -mindepth 1 -maxdepth 1 -exec rm -rf {} + || return 1
+    target=$(mib "$c/target") || return 1
+    total=$(mib "$c") || return 1
   fi
-  mark "cache total_mib=$(mib "$c") target_mib=$(mib "$c/target") crates_mib=$(mib "$c/cargo/registry/cache") npm_mib=$(mib "$c/npm") src_mib=$(mib "$SRC")"
+  crates=$(mib "$c/cargo/registry/cache" optional) || return 1
+  npm=$(mib "$c/npm" optional) || return 1
+  src=$(mib "$SRC") || return 1
+  mark "cache total_mib=$total target_mib=$target crates_mib=$crates npm_mib=$npm src_mib=$src"
 }
 
 NPM_READY=
@@ -318,13 +352,13 @@ main() {
   step setup reset reset_cache || { mark "setup-failed"; return 1; }
   step setup source prepare_source || { mark "setup-failed"; return 1; }
   step setup toolchain prepare_toolchain || { mark "setup-failed"; return 1; }
-  prune_cache
+  prune_cache || { echo "cache measurement or pruning failed"; mark "setup-failed"; return 1; }
   for suite in $suites; do
     mark "suite-start suite=$suite"
     "suite_$suite" || overall=1
     mark "suite-end suite=$suite"
   done
-  prune_cache
+  prune_cache || { echo "cache measurement or pruning failed"; overall=1; }
   mark "done exit=$overall seconds=$((SECONDS - started))"
   return "$overall"
 }
