@@ -1,11 +1,32 @@
 //! Real loopback HTTP + disposable PostgreSQL proof of the operator handler.
-//! Identity is injected as a browser principal; OIDC/CSRF are covered elsewhere.
+//! Full gateway router, persisted browser sessions and restricted runtime grants.
+//! Session rows are seeded; this does not exercise the OIDC callback or SPA.
 use super::*;
+use crate::identity::tests::MockProvider;
 use crate::management::governance::suggestion::{OpenRouterCatalog, tests::mock};
+use sha2::{Digest, Sha256};
+use sqlx::postgres::PgPoolOptions;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
+
+struct Server(tokio::task::JoinHandle<()>);
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+async fn session(pool: &PgPool, id: Uuid, email: &str) -> String {
+    let cookie = crate::entropy::hex_token().unwrap();
+    let csrf = crate::entropy::hex_token().unwrap();
+    sqlx::query("INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email,last_seen_at) VALUES($1,$2,$3,now()+interval '1 hour',$4,now())")
+        .bind(Sha256::digest(cookie.as_bytes()).as_slice()).bind(id)
+        .bind(Sha256::digest(csrf.as_bytes()).as_slice()).bind(email)
+        .execute(pool).await.unwrap();
+    format!("omg_session={cookie}")
+}
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPool) {
@@ -15,6 +36,7 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
     let catalog = axum::Router::new()
         .route("/models", axum::routing::get(move |headers: axum::http::HeaderMap| {
             assert!(headers.get("authorization").is_none());
+            assert!(headers.get("cookie").is_none());
             let c = c.clone();
             async move {
                 // A corrected upstream response must be fetched immediately.
@@ -29,7 +51,9 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
                 ]}).to_string())
             }
         }))
-        .route("/models/v/m/endpoints", axum::routing::get(|| async {
+        .route("/models/v/m/endpoints", axum::routing::get(|headers: axum::http::HeaderMap| async move {
+            assert!(headers.get("authorization").is_none());
+            assert!(headers.get("cookie").is_none());
             axum::Json(json!({"endpoints":[
                 {"provider_name":"Incomplete","status":0,"pricing":{"prompt":"0"}},
                 {"provider_name":"Unknown","status":null,"pricing":{"prompt":"0","completion":"0","request":"0"}},
@@ -37,6 +61,7 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
             ]}))
         }));
     let (catalog_url, catalog_task) = mock(catalog).await;
+    let _catalog_server = Server(catalog_task);
     let catalog = Arc::new(OpenRouterCatalog::for_test(
         catalog_url,
         std::time::Duration::from_secs(2),
@@ -71,27 +96,115 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
             .fetch_all(&f.store.pool)
             .await
             .unwrap();
-    let app = platform_routes()
-        .layer(Extension(crate::identity::ManagementPrincipal::Browser(
-            admin.clone(),
-        )))
-        .layer(Extension(admin))
-        .layer(Extension(catalog.clone()))
-        .with_state(f.store.clone());
-    let (gateway_url, gateway_task) = mock(app).await;
+    assert_eq!(before.len(), 1);
+    let admin_cookie = session(&f.store.pool, f.owner, "owner@test.invalid").await;
+    let member_cookie = session(&f.store.pool, f.other, "member@test.invalid").await;
+    // The allowlist and SET ROLE match the runtime HTTP acceptance fixtures.
+    sqlx::raw_sql("DO $$ BEGIN IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='gateway_runtime') THEN CREATE ROLE gateway_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; END IF; END $$;")
+        .execute(&f.store.pool).await.unwrap();
+    f.store.apply_runtime_grants().await.unwrap();
+    let runtime = PgPoolOptions::new()
+        .max_connections(5)
+        .after_connect(|c, _| {
+            Box::pin(async move {
+                sqlx::Executor::execute(c, "SET ROLE gateway_runtime; SET omg.scope_lock_audit=on")
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect_with((*f.store.pool.connect_options()).clone())
+        .await
+        .unwrap();
+    let role: String = sqlx::query_scalar("SELECT current_user")
+        .fetch_one(&runtime)
+        .await
+        .unwrap();
+    assert_eq!(role, "gateway_runtime");
+    let restricted: bool = sqlx::query_scalar("SELECT NOT (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls) FROM pg_roles WHERE rolname=current_user")
+        .fetch_one(&runtime).await.unwrap();
+    assert!(
+        restricted,
+        "HTTP fixture requires an unprivileged runtime role"
+    );
+    let mock_oidc = MockProvider::start(None).await;
+    let identity = mock_oidc.state(runtime.clone()).await;
+    let store = Store::new(runtime.clone());
+    let engine = crate::inference::Engine::new(
+        Arc::new(store.clone()),
+        crate::providers::ProviderRegistry::default(),
+        crate::inference::EngineLimits::default(),
+    )
+    .unwrap();
+    let app =
+        crate::http::router_with_identity(store, None, engine, identity).layer(Extension(catalog));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway_url = format!("http://{}", listener.local_addr().unwrap());
+    let _gateway_server = Server(tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    }));
     let client = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .timeout(std::time::Duration::from_secs(10))
         .build()
         .unwrap();
     let url = format!("{gateway_url}/api/v1/platform/deployments/{deployment}/price-suggestion");
-    let r = client.get(&url).send().await.unwrap();
+    assert_eq!(
+        client.get(&url).send().await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        client
+            .get(&url)
+            .header("cookie", &member_cookie)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let inference = NewApiKey::generate().unwrap();
+    sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES($1,$2,$3,'preview refusal',$4)")
+        .bind(inference.id).bind(f.principal.workspace_id).bind(f.owner)
+        .bind(inference.digest.as_slice()).execute(&f.store.pool).await.unwrap();
+    assert_eq!(
+        client
+            .get(&url)
+            .bearer_auth(&inference.token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "refused principals cannot fetch the catalog"
+    );
+    let r = client
+        .get(&url)
+        .header("cookie", &admin_cookie)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), StatusCode::BAD_GATEWAY);
     assert_eq!(
         r.json::<Value>().await.unwrap()["error"]["message"],
         "OpenRouter catalog unavailable"
     );
-    let r = client.get(&url).send().await.unwrap();
+    let r = client
+        .get(&url)
+        .header("cookie", &admin_cookie)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
     let out: Value = r.json().await.unwrap();
     assert_eq!(out["endpoint"]["selection"], "cheapest");
@@ -99,6 +212,11 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
     assert_eq!(out["draft"]["output_token_limit"], 100);
     assert_eq!(out["draft"]["input_token_limit"], 4096);
     let lines = out["draft"]["price_lines"].as_array().unwrap();
+    for meter in ["input_tokens", "output_tokens"] {
+        let line = lines.iter().find(|p| p["meter"] == meter).unwrap();
+        assert_eq!(line["batch"], 1_000_000);
+        assert_eq!(line["microusd_per_batch"], "3000000000000");
+    }
     assert!(
         lines
             .iter()
@@ -117,6 +235,7 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
             .get(format!(
                 "{gateway_url}/api/v1/platform/deployments/{refused}/price-suggestion"
             ))
+            .header("cookie", &admin_cookie)
             .send()
             .await
             .unwrap();
@@ -125,13 +244,12 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
         assert!(bytes.len() < 16_384);
         let out: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(out["needs_review"], true);
-        assert!(
-            out["draft"]["price_lines"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|p| p["unknown"] == true)
-        );
+        assert!(out["lines"].as_array().unwrap().len() <= 64);
+        assert!(out["warnings"].as_array().unwrap().len() <= 64);
+        assert!(!out["warnings"].to_string().contains("Priced from"));
+        let refused_lines = out["draft"]["price_lines"].as_array().unwrap();
+        assert!(!refused_lines.is_empty());
+        assert!(refused_lines.iter().all(|p| p["unknown"] == true));
         assert_eq!(out["draft"]["input_token_limit"], 4096);
         assert_eq!(out["draft"]["output_token_limit"], 100);
         assert!(out.get("endpoint").is_none());
@@ -143,6 +261,7 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
             "{gateway_url}/api/v1/platform/deployments/{}/price-suggestion",
             f.deployment
         ))
+        .header("cookie", &admin_cookie)
         .send()
         .await
         .unwrap();
@@ -152,34 +271,51 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
             "{gateway_url}/api/v1/platform/deployments/{}/price-suggestion",
             Uuid::new_v4()
         ))
+        .header("cookie", &admin_cookie)
         .send()
         .await
         .unwrap();
     assert_eq!(r.status(), StatusCode::NOT_FOUND);
-    let member = user(f.other, false);
-    let app = platform_routes()
-        .layer(Extension(crate::identity::ManagementPrincipal::Browser(
-            member.clone(),
-        )))
-        .layer(Extension(member))
-        .layer(Extension(catalog))
-        .with_state(f.store.clone());
-    let (denied_url, denied_task) = mock(app).await;
+    // A stale browser session cannot retain admin authority after revocation.
+    sqlx::query(
+        "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role='admin'",
+    )
+    .bind(f.owner)
+    .execute(&f.store.pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'user','manual')")
+        .bind(f.owner)
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
     let r = client
-        .get(format!(
-            "{denied_url}/api/v1/platform/deployments/{deployment}/price-suggestion"
-        ))
+        .get(&url)
+        .header("cookie", &admin_cookie)
         .send()
         .await
         .unwrap();
     assert_eq!(r.status(), StatusCode::FORBIDDEN);
+    sqlx::query(
+        "INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'auditor','manual')",
+    )
+    .bind(f.other)
+    .execute(&f.store.pool)
+    .await
+    .unwrap();
+    let r = client
+        .get(&url)
+        .header("cookie", &member_cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
     let after: Vec<Value> =
         sqlx::query_scalar("SELECT to_jsonb(p) FROM deployment_prices p ORDER BY id")
             .fetch_all(&f.store.pool)
             .await
             .unwrap();
     assert_eq!(after, before);
-    denied_task.abort();
-    gateway_task.abort();
-    catalog_task.abort();
+    runtime.close().await;
 }
