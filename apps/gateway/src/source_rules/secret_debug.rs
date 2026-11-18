@@ -31,14 +31,41 @@ impl Aliases {
         self.targets(&path.segments.last().unwrap().ident.unraw().to_string())
             .contains("Debug")
     }
+
+    fn import(&mut self, tree: &syn::UseTree, parent: Option<&Ident>) {
+        use syn::UseTree;
+        match tree {
+            UseTree::Path(path) => self.import(&path.tree, Some(&path.ident)),
+            UseTree::Group(group) => {
+                for branch in &group.items {
+                    self.import(branch, parent);
+                }
+            }
+            UseTree::Rename(rename) => {
+                let original = if rename.ident == "self" {
+                    parent.unwrap_or(&rename.ident)
+                } else {
+                    &rename.ident
+                };
+                self.0
+                    .entry(rename.rename.unraw().to_string())
+                    .or_default()
+                    .insert(original.unraw().to_string());
+            }
+            UseTree::Name(_) | UseTree::Glob(_) => {}
+        }
+    }
 }
 
 impl Visit<'_> for Aliases {
-    fn visit_use_rename(&mut self, item: &syn::UseRename) {
-        self.0
-            .entry(item.rename.unraw().to_string())
-            .or_default()
-            .insert(item.ident.unraw().to_string());
+    fn visit_item(&mut self, item: &syn::Item) {
+        if tree::kept(tree::item_attrs(item)) {
+            syn::visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_item_use(&mut self, item: &syn::ItemUse) {
+        self.import(&item.tree, None);
     }
 
     fn visit_item_type(&mut self, item: &syn::ItemType) {
@@ -52,21 +79,28 @@ impl Visit<'_> for Aliases {
 
 fn derives_debug(meta: &Meta, aliases: &Aliases) -> bool {
     let Meta::List(list) = meta else { return false };
-    if list.path.is_ident("derive") {
+    let attr = list.path.get_ident().map(IdentExt::unraw);
+    if attr.as_ref().is_some_and(|name| name == "derive") {
         return list
             .parse_args_with(Punctuated::<syn::Path, Token![,]>::parse_terminated)
             .expect("derive paths")
             .iter()
             .any(|p| aliases.is_debug(p));
     }
-    if !list.path.is_ident("cfg_attr") {
+    if !attr.as_ref().is_some_and(|name| name == "cfg_attr") {
         return false;
     }
-    let args = list
-        .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
-        .expect("cfg_attr arguments");
-    args.first().is_some_and(tree::possible_in_production)
-        && args.iter().skip(1).any(|meta| derives_debug(meta, aliases))
+    list.parse_args_with(|input: syn::parse::ParseStream| {
+        let possible = if input.peek(syn::LitBool) {
+            input.parse::<syn::LitBool>()?.value
+        } else {
+            tree::possible_in_production(&input.parse::<Meta>()?)
+        };
+        input.parse::<Token![,]>()?;
+        let attributes = Punctuated::<Meta, Token![,]>::parse_terminated(input)?;
+        Ok(possible && attributes.iter().any(|attr| derives_debug(attr, aliases)))
+    })
+    .expect("cfg_attr arguments")
 }
 
 #[derive(Default)]
@@ -138,6 +172,9 @@ impl<'ast> Visit<'ast> for Scan<'_> {
     track_scope!();
 
     fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !tree::kept(tree::item_attrs(item)) {
+            return;
+        }
         if let syn::Item::Impl(i) = item
             && let Some((path, _)) = &i.trait_
             && self.aliases.is_debug(path)
@@ -236,6 +273,8 @@ fn planted_derived_and_manual_debug_are_refused() {
         enum Entry<T> { Auth { api_key: T } }
         #[derive(Debug)] enum Settings { Local { client_secret: String, credentials: String } }
         #[derive(Debug)] struct Other { token_hash: [u8; 32], key_ref: String }
+        #[r#cfg_attr(true, r#derive(Debug))] struct Refresh { refresh_token: String }
+        #[cfg_attr(false, derive(Debug))] struct Disabled { password: String }
         #[derive(Debug)] struct Keyboard { monkey: String }
         #[cfg(test)] #[derive(Debug)] struct TestOnly { token: String }
         #[cfg_attr(test, derive(Debug))] struct OnlyTestDebug { credential: String }
@@ -266,8 +305,35 @@ fn planted_derived_and_manual_debug_are_refused() {
         "lib.rs::<file>::Login::password: String".into(),
         "lib.rs::<file>::Settings::Local::client_secret: String".into(),
         "lib.rs::<file>::Settings::Local::credentials: String".into(),
+        "lib.rs::<file>::Refresh::refresh_token: String".into(),
         "lib.rs::<file>::Other::token_hash: [u8 ; 32]".into(),
         "lib.rs::<file>::Other::key_ref: String".into(),
         "formatting.rs::<file>::impl Debug for Stored < T > => lib.rs::<file>::Entry::Auth::api_key: T".into(),
     ]));
+}
+
+#[test]
+fn grouped_imports_and_transparent_self_types_preserve_manual_review() {
+    let source = tree::parse_fixture(
+        "lib.rs",
+        r#"
+        enum Session<T> { Open { token: T } }
+        use std::fmt::Debug::{self as Show};
+        use crate::Session::{self as Imported};
+        type Local<T> = (Imported<T>);
+        impl<T> Show for (Local<T>) {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result { f.write_str("session") }
+        }
+        fn unrelated() {
+            #[cfg(test)] #[derive(Debug)] struct TestOnly { api_key: String }
+        }
+    "#,
+    );
+    assert_eq!(
+        surfaces(&[source]),
+        BTreeSet::from([
+            "lib.rs::<file>::impl Debug for (Local < T >) => lib.rs::<file>::Session::Open::token: T"
+                .into(),
+        ])
+    );
 }

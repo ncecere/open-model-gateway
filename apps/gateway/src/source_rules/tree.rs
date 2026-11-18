@@ -254,7 +254,7 @@ pub(super) fn kept(attrs: &[Attribute]) -> bool {
     })
 }
 
-fn item_attrs(item: &Item) -> &[Attribute] {
+pub(super) fn item_attrs(item: &Item) -> &[Attribute] {
     match item {
         Item::Const(i) => &i.attrs,
         Item::Enum(i) => &i.attrs,
@@ -424,6 +424,8 @@ pub(super) fn type_name(ty: &syn::Type) -> String {
             .map(|s| s.ident.unraw().to_string())
             .unwrap_or_default(),
         syn::Type::Reference(r) => type_name(&r.elem),
+        syn::Type::Paren(p) => type_name(&p.elem),
+        syn::Type::Group(g) => type_name(&g.elem),
         _ => "<type>".to_owned(),
     }
 }
