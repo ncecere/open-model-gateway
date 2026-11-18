@@ -4,7 +4,7 @@
 // the script installs and downloads nothing of its own, and two runs fit the shared quota next to
 // one demo environment.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync } from "../process.mjs";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";

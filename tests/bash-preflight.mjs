@@ -81,7 +81,8 @@ function bashDir() {
 // relative and empty entries: those name whatever directory the fixture happens to be
 // in, which the preflight did not look at.
 export function runBash(args, options = {}) {
+  if ("shell" in options) throw new Error("shell options are forbidden for checked Bash");
   const { PATH = "", ...rest } = options.env ?? process.env;
   const path = [bashDir(), ...String(PATH).split(delimiter).filter(isAbsolute)].join(delimiter);
-  return spawnSync(bashPath(), args, { ...options, env: { ...rest, PATH: path } });
+  return spawnSync(bashPath(), args, { ...options, shell: false, env: { ...rest, PATH: path } });
 }
