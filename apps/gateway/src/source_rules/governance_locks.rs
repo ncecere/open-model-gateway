@@ -302,9 +302,11 @@ impl<'ast> Visit<'ast> for Scan<'_> {
 impl Scan<'_> {
     fn check_sqlx_renames(&mut self, tree: &syn::UseTree, sqlx: bool) {
         match tree {
-            syn::UseTree::Path(path) if !sqlx && path.ident.unraw() == "sqlx" => {
-                self.check_sqlx_renames(&path.tree, true);
-            }
+            syn::UseTree::Path(path) if !sqlx => match path.ident.unraw().to_string().as_str() {
+                "sqlx" => self.check_sqlx_renames(&path.tree, true),
+                "crate" | "super" | "self" => self.check_sqlx_renames(&path.tree, false),
+                _ => {}
+            },
             syn::UseTree::Group(group) => {
                 for item in &group.items {
                     self.check_sqlx_renames(item, sqlx);
@@ -677,16 +679,28 @@ fn block_local_locks_module_does_not_own_the_helper_exception() {
 
 #[test]
 fn explicit_sqlx_macro_renames_require_inspection() {
-    for rust in [
-        r#"use sqlx::query as q; fn f() { q!("SELECT 1 FOR " + "SHARE"); }"#,
-        r#"use sqlx::{query_file as q}; fn f() { q!("fixture.sql"); }"#,
+    for (rust, expected) in [
+        (
+            r#"use sqlx::query as q; fn f() { q!("SELECT 1 FOR " + "SHARE"); }"#,
+            "governance/jobs.rs:1: inspect renamed SQLx query query",
+        ),
+        (
+            r#"use sqlx::{query_file as q}; fn f() { q!("fixture.sql"); }"#,
+            "governance/jobs.rs:1: inspect renamed SQLx query query_file",
+        ),
+        (
+            "use sqlx; mod child {\nuse super::sqlx::query_file as load; }",
+            "governance/jobs.rs:2: inspect renamed SQLx query query_file",
+        ),
+        (
+            "use sqlx::{postgres::{self as pg}, query_file as load};",
+            "governance/jobs.rs:1: inspect renamed SQLx query query_file",
+        ),
     ] {
-        let findings = violations(&parse_fixture("governance/jobs.rs", rust));
-        assert!(
-            findings
-                .iter()
-                .any(|finding| finding.contains("renamed SQLx query")),
-            "{findings:?}"
+        assert_eq!(
+            violations(&parse_fixture("governance/jobs.rs", rust)),
+            [expected],
+            "{rust}"
         );
     }
     assert!(
