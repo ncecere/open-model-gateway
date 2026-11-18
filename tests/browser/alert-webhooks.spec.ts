@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { createServer } from "node:http";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { execFile } from "node:child_process";
+import { execFile } from "../process.mjs";
 import { promisify } from "node:util";
 import path from "node:path";
 import { api, expectNoCspViolations, expectNoHorizontalScroll, signIn } from "./helpers";
