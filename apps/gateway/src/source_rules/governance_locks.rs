@@ -302,8 +302,8 @@ impl<'ast> Visit<'ast> for Scan<'_> {
 impl Scan<'_> {
     fn check_sqlx_renames(&mut self, tree: &syn::UseTree, sqlx: bool) {
         match tree {
-            syn::UseTree::Path(path) => {
-                self.check_sqlx_renames(&path.tree, sqlx || path.ident.unraw() == "sqlx");
+            syn::UseTree::Path(path) if !sqlx && path.ident.unraw() == "sqlx" => {
+                self.check_sqlx_renames(&path.tree, true);
             }
             syn::UseTree::Group(group) => {
                 for item in &group.items {
@@ -700,6 +700,16 @@ fn explicit_sqlx_macro_renames_require_inspection() {
 
 #[test]
 fn renamed_sqlx_namespace_and_file_modules_in_blocks_require_inspection() {
+    for source in [
+        "use sqlx::postgres::{self as pg};",
+        "use app::sqlx as local;",
+    ] {
+        assert!(
+            violations(&parse_fixture("governance.rs", source)).is_empty(),
+            "{source}"
+        );
+    }
+
     for (source, rule) in [
         ("use sqlx as db; use db::query_file as q;", "SQLx namespace"),
         ("use sqlx::{self as db};", "SQLx namespace"),
