@@ -141,7 +141,7 @@ prepare_toolchain() {
   rustc --version && cargo --version
 }
 
-mib() { du -sk "$1" 2>/dev/null | awk '{printf "%d", $1 / 1024}'; }
+mib() { du -sk "$1" 2>/dev/null | awk 'END {printf "%d", $1 / 1024}'; }
 
 prune_cache() { # bounded growth: the local-path volume does not enforce its size
   local c=$OMG_CACHE target_limit=$((OMG_TARGET_LIMIT_GIB * 1024)) total_limit=$((OMG_CACHE_LIMIT_GIB * 1024))

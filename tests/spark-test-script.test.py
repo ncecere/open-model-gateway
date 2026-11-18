@@ -302,6 +302,18 @@ class Shards(Pod):
 
 
 class Integration(Pod):
+    def test_bulk_test_compilation_is_serial_even_with_more_slot_jobs(self):
+        for jobs in ("2", "6"):
+            with self.subTest(jobs=jobs):
+                self.log.unlink(missing_ok=True)
+                result = self.run_script(OMG_SUITE="integration", OMG_JOBS=jobs, timeout=120)
+                self.assertEqual(result.returncode, 0, result.stdout[-3000:])
+                builds = [c for c in self.stub_calls() if "--message-format=json" in c]
+                self.assertEqual(len(builds), 2, "both target groups retain complete workspace discovery")
+                for build in builds:
+                    self.assertIn("--jobs 1", build)
+                    self.assertIn("--workspace --all-features --no-run", build)
+
     def test_runtime_probe_must_be_present_and_ignored(self):
         result = self.run_script(OMG_SUITE="integration", STUB_MISSING_PROBE="1", timeout=120)
         self.assertNotEqual(result.returncode, 0)
@@ -388,6 +400,14 @@ fi
         self.assertIn("running 0 tests", result.stdout, "legitimate empty binary targets are exercised")
         parsed = tool.parse_log(result.stdout, NONCE)
         self.assertEqual({s["name"] for s in parsed["steps"] if s["suite"] == "integration"}, set(tool.REQUIRED_STEPS["integration"]))
+
+
+class CacheDiagnostics(Pod):
+    def test_missing_cache_subdirectories_report_zero_without_integer_errors(self):
+        result = self.call_functions('mkdir -p "$OMG_CACHE/target" "$OMG_CACHE/npm"; prune_cache')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stderr, "")
+        self.assertRegex(result.stdout, r"cache total_mib=\d+ target_mib=0 crates_mib=0 npm_mib=0 src_mib=0")
 
 
 class WebArguments(Pod):

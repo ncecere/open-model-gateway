@@ -27,7 +27,9 @@ async function main() {
   }
   assert.ok(["gateway", "workspace"].includes(group), "unknown integration test group");
   const metadata = JSON.parse(await runCargo(["metadata", "--no-deps", "--all-features", "--format-version", "1", "--locked"]));
-  const artifacts = await runCargo(["test", "--workspace", "--all-features", "--no-run", "--message-format=json"]);
+  // Bulk test compilation can overlap large gateway links at the 10 GiB pod
+  // limit. Serialize it independently of the slot's ordinary build job count.
+  const artifacts = await runCargo(["test", "--workspace", "--all-features", "--no-run", "--message-format=json", "--jobs", "1"]);
   const targets = discoverTargets(metadata, artifacts).filter(target => group === "gateway"
     ? target.packageName === "open-model-gateway" && target.kind !== "lib" && !["filestore_s3", "runtime_privileges"].includes(target.name)
     : target.packageName !== "open-model-gateway");
