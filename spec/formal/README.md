@@ -4,7 +4,7 @@ A time-boxed experiment: a small TLA+ model of admission, settlement, cancellati
 reconciliation, operator evidence, failover, replica crashes, message loss and lease fencing.
 TLC checks the **model**. The original comparison with the implementation was by inspection at
 `1ec1bb23a6`. The transition table and discussion below link current implementation guards by
-exact file and line. Each code link quotes literal text on that line. Run `npm run test:rules`
+exact file and line. Use a single-line inline Markdown link for each source citation, with literal text from the cited line as its code label. Run `npm run test:rules`
 to verify the citations after moving or changing code. The approximate lines in section 5 refer to the original experiment commit.
 
 ```sh
@@ -34,14 +34,15 @@ One execution row (`inference_executions.state`: `started`, then `succeeded`/`fa
 and one reservation row (`governance_reservations.state`: `pending`, `unknown`, `settled`) exist per
 upstream attempt (reservation foreign key [`REFERENCES inference_executions(workspace_id,api_key_id,deployment_id,id,started_at)`](../../apps/gateway/enterprise_migrations/0030_partition_history.sql#L549)), with append-only ledger rows `hold`, `settlement`,
 `unknown`, `reconciliation` (`monetary_ledger_execution_kind_key`, [`UNIQUE(execution_id,kind,admitted_at)`](../../apps/gateway/enterprise_migrations/0030_partition_history.sql#L613),
-0030). What a reservation contributes to `budget_totals` (0015, trigger-maintained): its hold while
-`pending` or `unknown`, its actual cost once settled ([`WHEN r.state='settled' THEN coalesce(r.actual_microusd,0)`](../../apps/gateway/enterprise_migrations/0015_budget_totals.sql#L62)).
+0030). The current budget totals trigger records the actual cost for settled rows
+([`WHEN r.state='settled' THEN coalesce(r.actual_microusd,0)`](../../apps/gateway/enterprise_migrations/0034_history_parent_checks.sql#L162))
+and the held amount for pending or unknown rows ([`ELSE coalesce(r.held_microusd,0)`](../../apps/gateway/enterprise_migrations/0034_history_parent_checks.sql#L163)).
 
 | Transition | Writer | Guard that makes it safe |
 |---|---|---|
 | (none) -> `pending`, execution `started`, ledger `hold` | [`fn admit_unobserved`](../../apps/gateway/src/governance.rs#L282), one statement inserts the execution ([`WITH e AS (INSERT INTO inference_executions`](../../apps/gateway/src/governance.rs#L464)), reservation ([`INSERT INTO governance_reservations`](../../apps/gateway/src/governance.rs#L465)) and ledger hold ([`execution_id,'hold'`](../../apps/gateway/src/governance.rs#L466)); batch and line variants ([`INSERT INTO governance_reservations`](../../apps/gateway/src/governance/batch.rs#L361), [`INSERT INTO governance_reservations`](../../apps/gateway/src/governance/batch.rs#L591)) | Shared catalog and authority locks, then the totals/counter rows ([`authorize(store, &mut tx`](../../apps/gateway/src/governance.rs#L332), [`lock_rows(`](../../apps/gateway/src/governance.rs#L424)); a failover is a new admission with a new execution id (`Engine::attempt`, [`Uuid::now_v7()`](../../apps/gateway/src/inference/attempt.rs#L95) for attempt > 0) |
 | `pending` -> `settled` (usage complete; or a free pre-processing rejection on a free price) / -> `unknown` (anything else, incl. cancelled, timeout, a rejection on a priced model, a 429) | `governance::finish` -> [`fn finish_unobserved`](../../apps/gateway/src/governance/settlement.rs#L562) | Reservation row `FOR UPDATE` ([`WHERE r.execution_id=$1 FOR UPDATE OF r`](../../apps/gateway/src/governance/settlement.rs#L38)), read [`r.state != "pending"`](../../apps/gateway/src/governance/settlement.rs#L623); in the statement itself [`AND state='started' RETURNING 1`](../../apps/gateway/src/governance/settlement.rs#L657) and a row-count check [`(executions, reservations, entries) != (1, 1, 1)`](../../apps/gateway/src/governance/settlement.rs#L666); ledger UNIQUE |
-| `pending` -> `unknown` (lease expired), execution -> `cancelled` | `reconcile_expired` / [`fn reconcile_batch`](../../apps/gateway/src/governance/reconcile.rs#L29), every replica every 5 s ([`reconcile_expired_leases(&store)`](../../apps/gateway/src/maintenance.rs#L87)) | [`WHERE state='pending' AND lease_expires_at<=clock_timestamp() ORDER BY lease_expires_at,execution_id LIMIT $1 FOR UPDATE SKIP LOCKED`](../../apps/gateway/src/governance/reconcile.rs#L33); [`SET state='unknown' WHERE execution_id=ANY($1) AND state='pending'`](../../apps/gateway/src/governance/reconcile.rs#L48); [`ids.len() != claimed.len()`](../../apps/gateway/src/governance/reconcile.rs#L53); [`WHERE id=ANY($1) AND state='started'`](../../apps/gateway/src/governance/reconcile.rs#L57) row count; [`state<>'settled' AND actual_microusd IS NULL`](../../apps/gateway/enterprise_migrations/0083_batch_envelope_resolution.sql#L10) because the UPDATE does not clear `actual`; holds are not touched |
+| `pending` -> `unknown` (lease expired), execution -> `cancelled` | `reconcile_expired` / [`fn reconcile_batch`](../../apps/gateway/src/governance/reconcile.rs#L29), every replica on the [`tokio::time::interval(Duration::from_secs(5))`](../../apps/gateway/src/maintenance.rs#L78) tick ([`reconcile_expired_leases(&store)`](../../apps/gateway/src/maintenance.rs#L87)) | [`WHERE state='pending' AND lease_expires_at<=clock_timestamp() ORDER BY lease_expires_at,execution_id LIMIT $1 FOR UPDATE SKIP LOCKED`](../../apps/gateway/src/governance/reconcile.rs#L33); [`SET state='unknown' WHERE execution_id=ANY($1) AND state='pending'`](../../apps/gateway/src/governance/reconcile.rs#L48); [`ids.len() != claimed.len()`](../../apps/gateway/src/governance/reconcile.rs#L53); [`WHERE id=ANY($1) AND state='started'`](../../apps/gateway/src/governance/reconcile.rs#L57) row count; [`state<>'settled' AND actual_microusd IS NULL`](../../apps/gateway/enterprise_migrations/0083_batch_envelope_resolution.sql#L10) because the UPDATE does not clear `actual`; holds are not touched |
 | `unknown` -> `settled` (operator evidence) | [`fn resolve_usage_once`](../../apps/gateway/src/governance/reconcile.rs#L140) | [`p.role='admin'`](../../apps/gateway/src/governance/reconcile.rs#L183) re-checked in the tx; [`reservation(&mut tx, execution, scoped(store))`](../../apps/gateway/src/governance/reconcile.rs#L177) or the installation row in global mode ([`lock(&mut tx).await?`](../../apps/gateway/src/governance/reconcile.rs#L163)); read [`r.state != "unknown"`](../../apps/gateway/src/governance/reconcile.rs#L230) and require a terminal execution ([`SELECT state<>'started' FROM inference_executions`](../../apps/gateway/src/governance/reconcile.rs#L204)); the UPDATE itself has no state predicate |
 | `settled` -> anything | nobody | Every writer above refuses; the database does not (section 4 assumption 2, finding 4) |
 | `held` changed | settlement raises with [`greatest(held_microusd,$20)`](../../apps/gateway/src/governance/settlement.rs#L658); the batch envelope transfer (`admit_line`, [`SET held_microusd=held_microusd-$2`](../../apps/gateway/src/governance/batch.rs#L605)) moves hold into a line's own reservation; the **realtime** paths (window growth [`SET held_microusd=held_microusd+$2`](../../apps/gateway/src/governance/realtime.rs#L306) and finalization [`r.checked_add(t.actual)`](../../apps/gateway/src/governance/realtime.rs#L598)) can also change it | realtime is out of scope (section 2); `HoldNeverReleased` is stated for the request path |
@@ -66,8 +67,9 @@ with no usage, no stream returned and a pinned price that is entirely free or no
 Three different "leases" exist:
 
 * Reservation lease (`governance_reservations.lease_expires_at`): not a fencing token. It only says
-  when the reconciler may take a `pending` row. `lease = request_timeout + 5 s` ([`fn admit(`](../../apps/gateway/src/inference/attempt.rs#L10))
-  outlives the request deadline ([`fn execute_protocol(`](../../apps/gateway/src/inference/mod.rs#L162)).
+  when the reconciler may take a `pending` row. Admission converts [`.request_timeout`](../../apps/gateway/src/inference/attempt.rs#L47)
+  to whole seconds and adds five seconds of grace ([`+ 5,`](../../apps/gateway/src/inference/attempt.rs#L50)).
+  The request deadline uses [`started + self.limits.request_timeout`](../../apps/gateway/src/inference/mod.rs#L176).
 * Work leases (`work_leases`, 0029, `leases.rs`): singleton background jobs. Each job transaction
   starts with `Fence::check` -> [`SELECT omg_lease_fence($1,$2,$3)`](../../apps/gateway/src/leases.rs#L107) (epoch = fencing token); the `FOR SHARE` lives in
   the 0029 SQL ([`w.expires_at>clock_timestamp() FOR SHARE`](../../apps/gateway/enterprise_migrations/0029_work_leases.sql#L72)) and is held until commit. The money
@@ -197,8 +199,9 @@ Assumptions of the model (some are also properties of the code):
 7. **The database clock alone judges lease expiry** (`clock_timestamp()`); there is no replica
    clock in the money path model. The batch/work-lease local trust (A2, `MARGIN`) is modelled only
    in `LeaseFence`; `InTx` does not need it, `Local` and the batch runner do and still fail.
-8. **Execution and reservation rows are 1:1** through the foreign key; `ExecConsistent` assumes
-   every writer moves both together.
+8. **Admission inserts the execution and reservation together** (section 1). The foreign key requires every
+   reservation to reference its execution. The [`PRIMARY KEY(execution_id,admitted_at)`](../../apps/gateway/enterprise_migrations/0030_partition_history.sql#L538)
+   allows at most one reservation for that pair. `ExecConsistent` assumes every writer moves both together.
 9. **Deadlock retry** ([`macro_rules! retry_deadlocks`](../../apps/gateway/src/governance/locks.rs#L284)) **is safe** under the guards: a retried transaction re-reads
    the row state, so a lost deadlock race behaves like a late arrival. Not modelled.
 10. **Replicas only contribute `up`.** `SKIP LOCKED` claims and the lock order are database

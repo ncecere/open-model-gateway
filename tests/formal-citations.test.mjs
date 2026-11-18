@@ -8,16 +8,16 @@ const readme = new URL("../spec/formal/README.md", import.meta.url);
 // into the gateway or deployment tree must carry a code label.
 function checkCitations(markdown, readSource) {
   let count = 0;
-  for (const [, label, target] of markdown.matchAll(/\[([^\]\n]*)\]\(([^)\n]*)\)/g)) {
-    if (!label.startsWith("`") && !/^\.\.\/\.\.\/(apps|deploy)\//.test(target)) continue;
-    const token = label.match(/^`([^`\n]+)`$/)?.[1];
-    const anchor = target.match(/^(\.\.\/\.\.\/(?:[\w-]+\/)+[\w-]+\.(?:rs|sql))#L([1-9]\d*)$/);
-    assert.ok(token && anchor, `invalid citation: [${label}](${target})`);
-    const [, path, number] = anchor;
+  const inline = /\[`([^`\n]+)`\]\((\.\.\/\.\.\/(?:apps|deploy)\/(?:[\w-]+\/)*[\w-]+\.(?:rs|sql))#L([1-9]\d*)\)/g;
+  const remaining = markdown.replace(inline, (citation, token, path, number) => {
+    assert.ok(token.trim(), `invalid citation: ${citation}`);
     const line = readSource(path).split(/\r?\n/)[Number(number) - 1];
-    assert.ok(line?.includes(token), `${target} should contain ${token}`);
+    assert.ok(line?.includes(token), `${path}#L${number} should contain ${token}`);
     count++;
-  }
+    return "";
+  });
+  // A leftover source path or code label signals a malformed or reference-style citation.
+  assert.doesNotMatch(remaining, /\[`|\.\.\/\.\.\/(?:apps|deploy)\//, "invalid citation: use an inline source link");
   assert.ok(count, "no citations in formal README");
 }
 
@@ -38,6 +38,14 @@ test("empty inventories and malformed source citations fail closed", () => {
       () => checkCitations(fixture + "\n" + malformed, () => "\nFOR UPDATE OF r"),
       /invalid citation/,
     );
+  }
+});
+
+test("a reference-style source link cannot drop out beside a valid citation", () => {
+  const target = "../../apps/gateway/src/governance/settlement.rs#L1";
+  for (const label of ["`FOR UPDATE OF r`", "reservation lock"]) {
+    const markdown = `${fixture}\n[${label}][guard]\n\n[guard]: <${target}>`;
+    assert.throws(() => checkCitations(markdown, () => "\nFOR UPDATE OF r"), /invalid citation/);
   }
 });
 
