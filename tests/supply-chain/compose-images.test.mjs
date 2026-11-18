@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseStrict, readLocalFromRepo, toData } from "./lib.mjs";
-import { PINNED_IMAGE, checkedComposeFiles } from "./policy.mjs";
+import { PINNED_IMAGE, STAGING_CANDIDATE_SERVICES, checkedComposeFiles } from "./policy.mjs";
 
 const staging = "deploy/staging/compose.yaml";
 const loadtest = "deploy/loadtest/compose.yaml";
@@ -11,7 +11,6 @@ const loadImage = "${OMG_LOADTEST_IMAGE:-omg-loadtest:local}";
 
 // staging.py builds gateway once for the gateway and its two ops commands.
 // loadtest.py builds one tag before Compose starts the replicas and tools.
-const stagingConsumers = new Set(["gateway", "migrate", "grant-runtime"]);
 const loadConsumers = new Set(["gateway-1", "gateway-2", "gateway-3", "gateway-cli", "mock-upstream", "loadgen"]);
 const stagingOverrides = new Map([["postgres", "STAGING_POSTGRES_IMAGE"], ["ingress", "STAGING_CADDY_IMAGE"]]);
 
@@ -21,7 +20,7 @@ function violations(file, data) {
     if (!service || !Object.hasOwn(service, "image")) continue;
     let image = service.image;
     if (service.pull_policy === "never") {
-      if (file === staging && stagingConsumers.has(name) && image === candidate &&
+      if (file === staging && STAGING_CANDIDATE_SERVICES.has(name) && image === candidate &&
           service.build?.context === "../.." && service.build.dockerfile === "Dockerfile") continue;
       if (file === loadtest && loadConsumers.has(name) && image === loadImage) continue;
     }

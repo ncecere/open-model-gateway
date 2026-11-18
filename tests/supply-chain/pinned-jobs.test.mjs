@@ -141,6 +141,21 @@ test("staging.env.example is read as staging.py reads it (quotes and spaces stri
   assert.deepEqual(candidate(EXAMPLE.replace("GATEWAY_IMAGE=open-model-gateway:staging", '  GATEWAY_IMAGE="open-model-gateway:staging"')), []);
 });
 
+test("staging ops services must use the candidate even without a build field", () => {
+  for (const name of ["migrate", "grant-runtime"]) {
+    const base = readYaml(STAGING_COMPOSE);
+    const ci = loadWorkflow("ci");
+    delete base.services[name].build;
+    base.services[name].image = "registry.example/other@sha256:" + "a".repeat(64);
+    const layers = { "deploy/staging/compose.openai.yaml": { services: { [name]: { pull_policy: "always" } } } };
+    const errors = stagingCandidateViolations(base, EXAMPLE, ci, layers);
+    assert.ok(errors.some(error => error.includes(`service '${name}' image`)), errors.join());
+    assert.ok(errors.some(error => error.includes(`service '${name}' must retain pull_policy`)), errors.join());
+    delete base.services[name];
+    assert.ok(stagingCandidateViolations(base, EXAMPLE, ci, {}).some(error => error.includes(`no ${name} service`)));
+  }
+});
+
 test("a policy-only overlay preserves local staging images", () => {
   for (const name of ["gateway", "migrate", "grant-runtime"]) {
     const file = "deploy/staging/compose.openai.yaml";

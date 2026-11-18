@@ -8,7 +8,7 @@
 // workflows and these tests; mandatory review of workflow diffs and of pinned-jobs.yaml is.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, posix } from "node:path";
-import { isMap, parseDocument } from "yaml";
+import { isAlias, isMap, parseAllDocuments } from "yaml";
 import { gitFiles } from "../git.mjs";
 import {
   DOCKERFILE_SKIP_DIRS, KNOWN_DOCKERFILES, actionName, jobPermissions, actionsDir, isMapping, jobsOf, loadWorkflow, parseStrict, readLocalFromRepo, root, sourceFiles, stepsOf, toData, workflowsDir,
@@ -393,22 +393,27 @@ export function invisibleCharacterViolations(texts = Object.fromEntries(stagingT
   return out;
 }
 
+export const STAGING_CANDIDATE_SERVICES = new Set(["gateway", "migrate", "grant-runtime"]);
+
 export function stagingCandidateViolations(compose, envExample, ci, overlays = readOverlays()) {
   const out = [];
   const candidate = stepOf(ci?.jobs?.["staging-image"], "docker/build-push-action")?.with?.tags;
   if (typeof candidate !== "string" || candidate.includes("${{") || candidate.includes("\n")) return ["ci.yml: staging-image must load one literal candidate tag"];
   const expected = `\${GATEWAY_IMAGE:-${candidate}}`;
   const services = isMapping(compose?.services) ? compose.services : {};
-  if (!isMapping(services.gateway)) out.push("deploy/staging/compose.yaml: there is no gateway service");
+  const candidates = new Set(STAGING_CANDIDATE_SERVICES);
   for (const [name, service] of Object.entries(services)) {
-    if (!isMapping(service) || (name !== "gateway" && service.build === undefined)) continue;
-    if (service.image !== expected) out.push(`deploy/staging/compose.yaml: service '${name}' image '${service.image}' is not the candidate under test (${expected})`);
+    if (service?.build !== undefined) candidates.add(name);
   }
-  const candidates = Object.entries(services).filter(([name, service]) => name === "gateway" || service?.build !== undefined).map(([name]) => name);
+  for (const name of candidates) {
+    const service = services[name];
+    if (!isMapping(service)) out.push(`deploy/staging/compose.yaml: there is no ${name} service`);
+    else if (service.image !== expected) out.push(`deploy/staging/compose.yaml: service '${name}' image '${service.image}' is not the candidate under test (${expected})`);
+  }
   for (const [file, overlay] of Object.entries(overlays ?? {})) {
     for (const [name, service] of Object.entries(isMapping(overlay?.services) ? overlay.services : {})) {
-      if (candidates.includes(name) && isMapping(service) && "image" in service) out.push(`${file}: service '${name}' may not set image; the rehearsal runs the candidate under test`);
-      if (candidates.includes(name) && isMapping(service) && "pull_policy" in service && service.pull_policy !== "never") {
+      if (candidates.has(name) && isMapping(service) && "image" in service) out.push(`${file}: service '${name}' may not set image; the rehearsal runs the candidate under test`);
+      if (candidates.has(name) && isMapping(service) && "pull_policy" in service && service.pull_policy !== "never") {
         out.push(`${file}: service '${name}' must retain pull_policy: never for the local candidate`);
       }
       if (isMapping(service) && "build" in service) out.push(`${file}: service '${name}' may not set build; only deploy/staging/compose.yaml builds the candidate`);
@@ -826,11 +831,14 @@ export function repoComposeFiles(dir = root) {
   return sourceFiles(dir).filter(file => {
     if (file.startsWith(".github/") || !/\.ya?ml$/i.test(file)) return false;
     if (COMPOSE_FILE.test(posix.basename(file))) return true;
-    const doc = parseDocument(readFileSync(join(dir, file), "utf8"), { merge: true });
-    if (!isMap(doc.contents)) return false;
-    if (doc.has("services")) return true;
-    // YAML merges can also supply the root mapping's services key.
-    return doc.contents.items.some(pair => pair.key?.source === "<<") && Object.hasOwn(toData(doc), "services");
+    const docs = parseAllDocuments(readFileSync(join(dir, file), "utf8"), { merge: true });
+    return docs.some(doc => {
+      if (!isMap(doc.contents)) return false;
+      if (doc.has("services")) return true;
+      // Resolve indirect keys only when this root mapping contains one.
+      const indirect = doc.contents.items.some(({ key }) => isAlias(key) || key?.source === "<<");
+      return indirect && Object.hasOwn(toData(doc), "services");
+    });
   });
 }
 
