@@ -93,11 +93,6 @@ pub(crate) fn validate(request: &ChatRequest, class: ProviderClass) -> Result<()
         return refuse("strict");
     }
     if class != ProviderClass::Anthropic {
-        // Error-marked results cannot be represented faithfully by shared text
-        // results. Native Anthropic retains the original boolean, including false.
-        if options.error_results {
-            return Err(InferenceError::Unsupported);
-        }
         if !options.history_thinking.is_empty()
             && request
                 .messages

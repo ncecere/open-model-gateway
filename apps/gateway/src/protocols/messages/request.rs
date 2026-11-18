@@ -351,6 +351,7 @@ fn wire_message(
         content: None,
         tool_calls: vec![],
         tool_call_id: None,
+        tool_result_is_error: false,
     };
     for block in blocks {
         content_block(block, &mut turn, options, messages)?;
@@ -438,9 +439,11 @@ fn tool_result(
     if id.is_empty() {
         return Err(invalid("tool_result.tool_use_id"));
     }
-    if let Some(flag) = block.get("is_error") {
-        options.error_results |= flag.as_bool().ok_or(InferenceError::InvalidRequest)?;
-    }
+    let is_error = block
+        .get("is_error")
+        .map(|flag| flag.as_bool().ok_or(InferenceError::InvalidRequest))
+        .transpose()?
+        .unwrap_or(false);
     let content = block
         .get("content")
         .map(|v| text_blocks(v, options, true).map(|v| v.concat()))
@@ -456,6 +459,7 @@ fn tool_result(
         role: Role::Tool,
         content: Some(content),
         tool_call_id: Some(id),
+        tool_result_is_error: is_error,
         tool_calls: vec![],
     });
     Ok(())
@@ -577,6 +581,7 @@ impl Request {
                 content: None,
                 tool_calls: vec![],
                 tool_call_id: None,
+                tool_result_is_error: false,
             });
         }
         let tools = self

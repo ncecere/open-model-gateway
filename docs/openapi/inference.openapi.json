@@ -10029,12 +10029,6 @@
           {
             "code": null,
             "envelope": "AnthropicErrorEnvelope",
-            "status": 501,
-            "trigger": "tool_result.is_error:true on translated routes"
-          },
-          {
-            "code": null,
-            "envelope": "AnthropicErrorEnvelope",
             "status": 400,
             "trigger": "strict tools, output_config.format, disable_parallel_tool_use, hosted/server tools, remote image sources or denied beta prefixes"
           },

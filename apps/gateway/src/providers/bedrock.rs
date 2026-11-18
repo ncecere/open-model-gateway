@@ -437,6 +437,11 @@ impl Turns {
             aws::ToolResultBlock::builder()
                 .tool_use_id(id)
                 .content(aws::ToolResultContentBlock::Text(text.clone()))
+                .set_status(
+                    message
+                        .tool_result_is_error
+                        .then_some(aws::ToolResultStatus::Error),
+                )
                 .build()
                 .map_err(|_| invalid())?,
         ));

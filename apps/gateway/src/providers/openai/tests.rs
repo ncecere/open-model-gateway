@@ -19,7 +19,7 @@ struct Resolver {
 }
 impl SecretResolver for Resolver {
     fn resolve(&self, reference: &str) -> Result<Secret> {
-        assert_eq!(reference, "test-key-reference");
+        assert_eq!(reference, "env:FIXTURE_ONLY");
         self.calls.fetch_add(1, Ordering::SeqCst);
         Secret::new("local-mock-key".into())
     }
@@ -115,7 +115,7 @@ fn target() -> Deployment {
         id: uuid::Uuid::new_v4(),
         provider: "openai".into(),
         upstream_model: "private-upstream-model".into(),
-        credential_ref: "test-key-reference".into(),
+        credential_ref: "env:FIXTURE_ONLY".into(),
         endpoint: None,
         region: None,
         supported_protocols: vec![
@@ -135,6 +135,7 @@ fn request(stream: bool) -> ChatRequest {
             content: Some("Hello".into()),
             tool_calls: vec![],
             tool_call_id: None,
+            tool_result_is_error: false,
         }],
         tools: vec![],
         tool_choice: None,
@@ -416,12 +417,14 @@ async fn translates_payload_and_owns_authentication() {
             content: Some("system".into()),
             tool_calls: vec![],
             tool_call_id: None,
+            tool_result_is_error: false,
         },
         Message {
             role: Role::Developer,
             content: Some("developer".into()),
             tool_calls: vec![],
             tool_call_id: None,
+            tool_result_is_error: false,
         },
         req.messages[0].clone(),
         Message {
@@ -433,12 +436,14 @@ async fn translates_payload_and_owns_authentication() {
                 arguments: "{ \"city\": \"NYC\" }".into(),
             }],
             tool_call_id: None,
+            tool_result_is_error: false,
         },
         Message {
             role: Role::Tool,
             content: Some("sunny".into()),
             tool_calls: vec![],
             tool_call_id: Some("call-1".into()),
+            tool_result_is_error: false,
         },
     ];
     req.tools = vec![FunctionTool {
@@ -1064,4 +1069,33 @@ async fn invalid_chat_body_preserves_validated_usage_as_evidence() {
     let (result, observed) = capture(async { decode_complete_profile(&bad, Some("vllm")) }).await;
     assert!(result.is_err());
     assert_eq!(observed.unwrap().input_tokens, Some(9));
+}
+
+#[tokio::test]
+async fn error_tool_results_use_explicit_openai_marker() {
+    let mock = Mock::json(complete()).await;
+    for (request, error, text) in super::super::contract::error_tool_result_requests() {
+        mock.adapter().execute(&target(), request).await.unwrap();
+        let capture = mock.requests.lock().unwrap();
+        super::super::contract::assert_error_tool_chat_wire(
+            &capture.last().unwrap().body,
+            error,
+            &text,
+        );
+    }
+}
+
+#[cfg(feature = "integration-tests")]
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn error_tool_sdk_openai(pool: sqlx::PgPool) {
+    let mock = Mock::json(complete()).await;
+    super::super::contract::assert_error_tool_sdk(pool, Arc::new(mock.adapter()), target()).await;
+    let capture = mock.requests.lock().unwrap();
+    assert_eq!(capture.len(), 6);
+    for (captured, (_, error, text)) in capture
+        .iter()
+        .zip(super::super::contract::error_tool_result_requests())
+    {
+        super::super::contract::assert_error_tool_chat_wire(&captured.body, error, &text);
+    }
 }

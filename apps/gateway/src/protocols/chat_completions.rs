@@ -162,6 +162,7 @@ fn message(message: WireMessage) -> Result<Message, InferenceError> {
         content: message.content,
         tool_calls,
         tool_call_id: message.tool_call_id,
+        tool_result_is_error: false,
     })
 }
 

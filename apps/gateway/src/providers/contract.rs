@@ -244,3 +244,117 @@ pub async fn assert_text_chat_contract(
         "streamed telemetry"
     );
 }
+
+/// Mixed results prove the error status belongs to the correlated result only.
+pub fn error_tool_result_requests() -> Vec<(ChatRequest, bool, String)> {
+    let mut cases = vec![];
+    for flag in [None, Some(false), Some(true)] {
+        for text in ["", "failed\n東京"] {
+            let mut body = serde_json::json!({"model":"public","max_tokens":32,
+                "messages":[{"role":"user","content":"ping"},
+                {"role":"assistant","content":[
+                    {"type":"tool_use","id":"first-call","name":"ping","input":{}},
+                    {"type":"tool_use","id":"second-call","name":"ping","input":{}}]},
+                {"role":"user","content":[
+                    {"type":"tool_result","tool_use_id":"second-call","content":text},
+                    {"type":"tool_result","tool_use_id":"first-call","content":"unchanged"}]}],
+                "tools":[{"name":"ping","input_schema":{"type":"object"}}]});
+            if let Some(flag) = flag {
+                body["messages"][2]["content"][0]["is_error"] = serde_json::json!(flag);
+            }
+            cases.push((
+                crate::protocols::messages::batch_request(body).unwrap(),
+                flag == Some(true),
+                text.to_owned(),
+            ));
+        }
+    }
+    cases
+}
+
+pub fn assert_error_tool_chat_wire(body: &serde_json::Value, error: bool, text: &str) {
+    assert_eq!(body["messages"][2]["tool_call_id"], "second-call");
+    assert_eq!(
+        body["messages"][2]["content"],
+        if error {
+            format!("[tool_error]\n{text}")
+        } else {
+            text.to_owned()
+        }
+    );
+    assert!(body["messages"][2].get("is_error").is_none());
+    assert_eq!(body["messages"][3]["tool_call_id"], "first-call");
+    assert_eq!(body["messages"][3]["content"], "unchanged");
+}
+
+/// Official SDK -> listening gateway -> production adapter -> controlled upstream.
+#[cfg(feature = "integration-tests")]
+pub async fn assert_error_tool_sdk(
+    pool: sqlx::PgPool,
+    adapter: std::sync::Arc<dyn ProviderAdapter>,
+    target: Deployment,
+) {
+    use crate::{
+        bootstrap,
+        config::Environment,
+        http,
+        inference::{Engine, EngineLimits},
+        store::Store,
+    };
+    use std::sync::Arc;
+    let store = Store::new(pool.clone());
+    let keys = bootstrap::seed(&store, Environment::Development)
+        .await
+        .unwrap()
+        .unwrap();
+    sqlx::query("UPDATE provider_connections SET provider=$1,enabled=true,credential_ref=$2,endpoint=$3,region=$4")
+        .bind(adapter.id()).bind(&target.credential_ref).bind(&target.endpoint).bind(&target.region).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE models SET supported_protocols=ARRAY['messages']")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE deployments SET enabled=true,upstream_model=$1")
+        .bind(&target.upstream_model)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut registry = crate::providers::ProviderRegistry::default();
+    registry.register(adapter).unwrap();
+    let engine = Engine::new(Arc::new(store.clone()), registry, EngineLimits::default()).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, http::router_with_engine(store, None, engine))
+            .await
+            .unwrap()
+    });
+    let script =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/tool-result-errors.mjs");
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        tokio::process::Command::new("node")
+            .arg(script)
+            .env("SDK_TEST_BASE_URL", format!("http://{address}"))
+            .env("SDK_TEST_API_KEY", &keys.personal_key.token)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await;
+    server.abort();
+    let output = result
+        .expect("SDK deadline")
+        .expect("node and npm ci required");
+    assert!(
+        output.status.success(),
+        "SDK tool-result contracts: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let attempts: i64 = sqlx::query_scalar("SELECT count(*) FROM inference_executions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        attempts, 6,
+        "invalid flags and unknown fields never dispatch"
+    );
+}

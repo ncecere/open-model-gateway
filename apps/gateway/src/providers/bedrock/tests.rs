@@ -166,6 +166,7 @@ fn message(role: Role, text: &str) -> Message {
         content: Some(text.into()),
         tool_calls: Vec::new(),
         tool_call_id: None,
+        tool_result_is_error: false,
     }
 }
 fn request() -> ChatRequest {
@@ -539,6 +540,7 @@ async fn tool_history_preserves_json_input_and_result_text() {
         role: Role::Assistant,
         content: None,
         tool_call_id: None,
+        tool_result_is_error: false,
         tool_calls: vec![
             ToolCall {
                 id: "call_1".into(),
@@ -558,6 +560,7 @@ async fn tool_history_preserves_json_input_and_result_text() {
             content: Some("{ \"temp\": 20 }".into()),
             tool_calls: Vec::new(),
             tool_call_id: Some(id.into()),
+            tool_result_is_error: false,
         });
     }
     mock.adapter()
@@ -1022,4 +1025,46 @@ async fn a_stream_corrupt_at_its_first_frame_fails_in_the_stream_without_done() 
         events_seen.push(event.is_ok());
     }
     assert_eq!(events_seen, [false], "one error, no content and no Done");
+}
+
+#[tokio::test]
+async fn error_tool_results_use_converse_status_without_changing_text() {
+    let mock = Mock::serve(complete(false), wire(events(false)), 200).await;
+    for (request, error, text) in super::super::contract::error_tool_result_requests() {
+        mock.adapter().execute(&target(), request).await.unwrap();
+        let capture = mock.requests.lock().unwrap();
+        let results = &capture.last().unwrap().body["messages"][2]["content"];
+        assert_eq!(results[0]["toolResult"]["toolUseId"], "second-call");
+        assert_eq!(results[0]["toolResult"]["content"], json!([{"text":text}]));
+        assert_eq!(
+            results[0]["toolResult"].get("status"),
+            error.then_some(&json!("error"))
+        );
+        assert_eq!(
+            results[1]["toolResult"],
+            json!({"toolUseId":"first-call","content":[{"text":"unchanged"}]})
+        );
+    }
+}
+
+#[cfg(feature = "integration-tests")]
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn error_tool_sdk_bedrock(pool: sqlx::PgPool) {
+    let mock = Mock::serve(complete(false), wire(events(false)), 200).await;
+    super::super::contract::assert_error_tool_sdk(pool, Arc::new(mock.adapter()), target()).await;
+    let capture = mock.requests.lock().unwrap();
+    assert_eq!(capture.len(), 6);
+    for (captured, (_, error, text)) in capture
+        .iter()
+        .zip(super::super::contract::error_tool_result_requests())
+    {
+        let results = &captured.body["messages"][2]["content"];
+        assert_eq!(results[0]["toolResult"]["toolUseId"], "second-call");
+        assert_eq!(results[0]["toolResult"]["content"], json!([{"text":text}]));
+        assert_eq!(
+            results[0]["toolResult"].get("status"),
+            error.then_some(&json!("error"))
+        );
+        assert!(results[1]["toolResult"].get("status").is_none());
+    }
 }

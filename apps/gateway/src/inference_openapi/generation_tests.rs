@@ -114,16 +114,14 @@ fn inference_openapi_generation_operations_are_complete() {
     }
 }
 #[test]
-fn inference_openapi_generation_translated_error_results_are_refused() {
+fn inference_openapi_generation_error_results_are_not_a_capability_refusal() {
     let doc = generated();
     let rows = doc["paths"]["/v1/messages"]["post"]["x-omg-refusals"]
         .as_array()
         .expect("missing Messages refusal rows");
     assert!(
-        rows.iter().any(|row| row["status"] == 501
-            && row["trigger"] == "tool_result.is_error:true on translated routes"
-            && row["envelope"] == "AnthropicErrorEnvelope"),
-        "missing translated error-result refusal"
+        rows.iter()
+            .all(|row| !row["trigger"].as_str().unwrap().contains("is_error"))
     );
 }
 

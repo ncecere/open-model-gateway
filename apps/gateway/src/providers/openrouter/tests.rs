@@ -138,6 +138,7 @@ fn chat(stream: bool) -> ChatRequest {
             content: Some("Do not log this prompt".into()),
             tool_calls: vec![],
             tool_call_id: None,
+            tool_result_is_error: false,
         }],
         tools: vec![],
         tool_choice: None,
@@ -1126,4 +1127,39 @@ fn registry_protocols() {
 #[test]
 fn management_profile_and_adapter_share_the_fixed_origin() {
     assert_eq!(crate::management::resources::OPENROUTER_BASE, BASE);
+}
+
+#[tokio::test]
+async fn error_tool_results_use_explicit_openrouter_marker() {
+    let mock = Mock::json(glm_complete()).await;
+    for (request, error, text) in super::super::contract::error_tool_result_requests() {
+        mock.adapter()
+            .execute(&target("private"), request)
+            .await
+            .unwrap();
+        super::super::contract::assert_error_tool_chat_wire(&mock.last().2, error, &text);
+    }
+}
+
+#[cfg(feature = "integration-tests")]
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn error_tool_sdk_openrouter(pool: sqlx::PgPool) {
+    let mut reply = glm_complete();
+    reply["choices"][0]["finish_reason"] = json!("stop");
+    reply["choices"][0]["native_finish_reason"] = json!("stop");
+    let mock = Mock::json(reply).await;
+    super::super::contract::assert_error_tool_sdk(
+        pool,
+        Arc::new(mock.adapter()),
+        target("private"),
+    )
+    .await;
+    let capture = mock.requests.lock().unwrap();
+    assert_eq!(capture.len(), 6);
+    for (captured, (_, error, text)) in capture
+        .iter()
+        .zip(super::super::contract::error_tool_result_requests())
+    {
+        super::super::contract::assert_error_tool_chat_wire(&captured.body, error, &text);
+    }
 }

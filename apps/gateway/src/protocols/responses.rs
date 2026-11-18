@@ -91,6 +91,7 @@ pub(super) fn message(role: Role, text: String) -> Message {
         content: Some(text),
         tool_calls: vec![],
         tool_call_id: None,
+        tool_result_is_error: false,
     }
 }
 pub(super) fn validate(request: ChatRequest) -> Result<ChatRequest> {
@@ -227,6 +228,7 @@ fn function_call_item(item: &Value, messages: &mut Vec<Message>) -> Result<()> {
         role: Role::Assistant,
         content: None,
         tool_call_id: None,
+        tool_result_is_error: false,
         tool_calls: vec![ToolCall {
             id,
             name: n,
@@ -247,6 +249,7 @@ fn function_call_output_item(item: &Value, messages: &mut Vec<Message>) -> Resul
         content: Some(string(&item["output"])?),
         tool_calls: vec![],
         tool_call_id: Some(id),
+        tool_result_is_error: false,
     });
     Ok(())
 }

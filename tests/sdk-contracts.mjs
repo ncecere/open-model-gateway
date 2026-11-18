@@ -222,7 +222,7 @@ for (const block of [
 ]) {
   await assert.rejects(ordinaryAnthropic.messages.create(nativeFollowup(block)), (e) => e.status === 400);
 }
-await assert.rejects(ordinaryAnthropic.messages.create(nativeFollowup({ type: "tool_result", tool_use_id: "ping-call", is_error: true })), (e) => e.status === 501);
+
 // #70 delivery 2: beta/cache/thinking are accepted grammar, no SDK-side stripping.
 // This fixture is translated; exact native Anthropic wire is covered by Rust HTTP contracts.
 for (const stream of [false, true]) {
@@ -298,3 +298,13 @@ await assert.rejects(
   (e) => e.status === 400 && e.code === "invalid_batch_input",
 );
 console.log("Files API and Batch API SDK contracts passed");
+
+// Failed results work with ordinary SDK retry defaults, including an empty result.
+for (const stream of [false, true]) {
+  const reply = await ordinaryAnthropic.messages.create({ ...nativeFollowup({ type: "tool_result", tool_use_id: "ping-call", is_error: true }), stream });
+  if (stream) {
+    let result = "";
+    for await (const event of reply) if (event.type === "content_block_delta") result += event.delta.text ?? "";
+    assert.equal(result, "Tool result received");
+  } else assert.equal(reply.content[0].text, "Tool result received");
+}
