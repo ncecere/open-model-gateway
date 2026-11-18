@@ -8,7 +8,11 @@ async function main() {
   const group = process.argv[2];
   const { discoverTargets, parseListing, targetArgs, validateRun, runCargo } =
     await import(pathToFileURL(resolve(".github/scripts/rust-shards.mjs")));
+  const metadata = JSON.parse(await runCargo(["metadata", "--no-deps", "--all-features", "--format-version", "1", "--locked"]));
   if (group === "runtime" || group === "runtime-ignored") {
+    const gateway = metadata.packages.find(pkg => pkg.name === "open-model-gateway" && metadata.workspace_members.includes(pkg.id));
+    const runtime = gateway?.targets.find(t => t.name === "runtime_privileges" && t.kind.includes("test"));
+    assert.ok(runtime?.src_path?.endsWith("/tests/runtime_privileges.rs"), "unexpected runtime_privileges source path");
     const args = ["test", "-p", "open-model-gateway", "--all-features", "--test", "runtime_privileges", "--"];
     const entries = parseListing(await runCargo([...args, "--list", "--format", "terse"]));
     const ignored = parseListing(await runCargo([...args, "--list", "--ignored", "--format", "terse"]));
@@ -26,7 +30,6 @@ async function main() {
     return;
   }
   assert.ok(["gateway", "workspace"].includes(group), "unknown integration test group");
-  const metadata = JSON.parse(await runCargo(["metadata", "--no-deps", "--all-features", "--format-version", "1", "--locked"]));
   // Bulk test compilation can overlap large gateway links at the 10 GiB pod
   // limit. Serialize it independently of the slot's ordinary build job count.
   const artifacts = await runCargo(["test", "--workspace", "--all-features", "--no-run", "--message-format=json", "--jobs", "1"]);

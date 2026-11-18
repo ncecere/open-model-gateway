@@ -334,6 +334,16 @@ class Integration(Pod):
         self.assertTrue(any("--list --ignored" in c for c in calls))
         self.assertFalse(any("--list" not in c for c in calls))
 
+    def test_runtime_selection_checks_its_source_before_running_ignored_probes(self):
+        data = json.loads(self.metadata.read_text())
+        runtime = next(t for t in data["packages"][0]["targets"] if t["name"] == "runtime_privileges")
+        runtime["src_path"] = "/fixture/tests/provider_live.rs"
+        self.metadata.write_text(json.dumps(data))
+        result = self.run_script(OMG_SUITE="integration")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertGreaterEqual(result.stdout.count("unexpected runtime_privileges source path"), 2)
+        self.assertFalse(any("--test runtime_privileges" in c for c in self.stub_calls()))
+
     def test_runtime_probe_must_be_present_and_ignored(self):
         result = self.run_script(OMG_SUITE="integration", STUB_MISSING_PROBE="1", timeout=120)
         self.assertNotEqual(result.returncode, 0)
