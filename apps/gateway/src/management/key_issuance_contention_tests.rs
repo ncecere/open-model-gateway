@@ -553,7 +553,7 @@ async fn key_issuance_contention_measurement(owner: PgPool) {
             .execute(&mut *lock)
             .await,
     );
-    checked(sqlx::raw_sql("DO $$ BEGIN IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='gateway_runtime') THEN CREATE ROLE gateway_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; END IF; END $$; REVOKE CONNECT ON DATABASE postgres FROM PUBLIC,gateway_runtime; REVOKE CONNECT ON DATABASE template1 FROM PUBLIC,gateway_runtime;")
+    checked(sqlx::raw_sql(concat!(include_str!("../../tests/common/ensure_runtime_role.sql"), "REVOKE CONNECT ON DATABASE postgres FROM PUBLIC,gateway_runtime; REVOKE CONNECT ON DATABASE template1 FROM PUBLIC,gateway_runtime;"))
         .execute(&mut *lock).await);
     let database: String = checked(
         sqlx::query_scalar("SELECT current_database()")

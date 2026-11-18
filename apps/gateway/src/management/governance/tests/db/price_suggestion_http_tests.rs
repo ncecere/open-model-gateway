@@ -32,11 +32,11 @@ async fn session(pool: &PgPool, id: Uuid, email: &str) -> String {
 async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPool) {
     let f = fixture(pool).await;
     let calls = Arc::new(AtomicUsize::new(0));
+    let all_requests = Arc::new(AtomicUsize::new(0));
+    let observed_requests = all_requests.clone();
     let c = calls.clone();
     let catalog = axum::Router::new()
-        .route("/models", axum::routing::get(move |headers: axum::http::HeaderMap| {
-            assert!(headers.get("authorization").is_none());
-            assert!(headers.get("cookie").is_none());
+        .route("/models", axum::routing::get(move || {
             let c = c.clone();
             async move {
                 // A corrected upstream response must be fetched immediately.
@@ -47,18 +47,23 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
                 ([("content-type", "application/json")], json!({"data":[
                     {"id":"v/m","context_length":4096,"top_provider":{"max_completion_tokens":100},"pricing":{"prompt":"3","completion":"3","input_cache_write":"1e400","overrides":[{"min_prompt_tokens":1,"input_cache_write":"0"}]}},
                     {"id":"v/large","context_length":4096,"top_provider":{"max_completion_tokens":100},"pricing":{"prompt":"1","overrides":tiers}},
+                    {"id":"v/cold","pricing":{"prompt":"1"}},
                     {"id":"v/tiers","context_length":4096,"top_provider":{"max_completion_tokens":100},"pricing":{"prompt":"1","overrides":&tiers[..64]}}
                 ]}).to_string())
             }
         }))
-        .route("/models/v/m/endpoints", axum::routing::get(|headers: axum::http::HeaderMap| async move {
-            assert!(headers.get("authorization").is_none());
-            assert!(headers.get("cookie").is_none());
+        .route("/models/v/m/endpoints", axum::routing::get(|| async {
             axum::Json(json!({"endpoints":[
                 {"provider_name":"Incomplete","status":0,"pricing":{"prompt":"0"}},
                 {"provider_name":"Unknown","status":null,"pricing":{"prompt":"0","completion":"0","request":"0"}},
                 {"provider_name":"C\u{202e}lean","status":0,"context_length":0,"max_completion_tokens":0,"pricing":{"prompt":"3","completion":"3","request":"0","input_cache_write":"1e400"}}
             ]}))
+        }))
+        .layer(axum::middleware::from_fn(move |req: axum::extract::Request, next: axum::middleware::Next| {
+            observed_requests.fetch_add(1, Ordering::SeqCst);
+            assert!(req.headers().get("authorization").is_none());
+            assert!(req.headers().get("cookie").is_none());
+            async move { next.run(req).await }
         }));
     let (catalog_url, catalog_task) = mock(catalog).await;
     let _catalog_server = Server(catalog_task);
@@ -66,7 +71,8 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
         catalog_url,
         std::time::Duration::from_secs(2),
     ));
-    let (connection, model, deployment, large, tiered) = (
+    let (connection, model, deployment, large, tiered, cold) = (
+        Uuid::new_v4(),
         Uuid::new_v4(),
         Uuid::new_v4(),
         Uuid::new_v4(),
@@ -75,7 +81,7 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
     );
     sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref,endpoint,enabled) VALUES($1,'Preview','openrouter','env:NOT_USED','https://openrouter.ai/api/v1',false)").bind(connection).execute(&f.store.pool).await.unwrap();
     sqlx::query("INSERT INTO models(id,public_name,supported_protocols) VALUES($1,'preview',ARRAY['chat_completions'])").bind(model).execute(&f.store.pool).await.unwrap();
-    sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model) VALUES($1,$3,$4,'v/m'),($2,$3,$4,'v/large'),($5,$3,$4,'v/tiers')").bind(deployment).bind(large).bind(model).bind(connection).bind(tiered).execute(&f.store.pool).await.unwrap();
+    sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model) VALUES($1,$3,$4,'v/m'),($2,$3,$4,'v/large'),($5,$3,$4,'v/tiers'),($6,$3,$4,'v/cold')").bind(deployment).bind(large).bind(model).bind(connection).bind(tiered).bind(cold).execute(&f.store.pool).await.unwrap();
     // Create an actual immutable price first. Preview is read-only even when
     // parsing fails or refuses a hostile entry.
     let admin = user(f.owner, true);
@@ -100,8 +106,12 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
     let admin_cookie = session(&f.store.pool, f.owner, "owner@test.invalid").await;
     let member_cookie = session(&f.store.pool, f.other, "member@test.invalid").await;
     // The allowlist and SET ROLE match the runtime HTTP acceptance fixtures.
-    sqlx::raw_sql("DO $$ BEGIN IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='gateway_runtime') THEN CREATE ROLE gateway_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; END IF; END $$;")
-        .execute(&f.store.pool).await.unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../../tests/common/ensure_runtime_role.sql"
+    ))
+    .execute(&f.store.pool)
+    .await
+    .unwrap();
     f.store.apply_runtime_grants().await.unwrap();
     let runtime = PgPoolOptions::new()
         .max_connections(5)
@@ -184,7 +194,7 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(
-        calls.load(Ordering::SeqCst),
+        all_requests.load(Ordering::SeqCst),
         0,
         "refused principals cannot fetch the catalog"
     );
@@ -230,6 +240,16 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
             .any(|p| p["meter"] == "cache_write_tokens" && p["min_prompt_tokens"] == 1)
     );
     assert_eq!(out["needs_review"], true);
+    let fetched = all_requests.load(Ordering::SeqCst);
+    let repeated = client
+        .get(&url)
+        .header("cookie", &admin_cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(repeated.status(), StatusCode::OK);
+    assert_eq!(repeated.json::<Value>().await.unwrap(), out);
+    assert_eq!(all_requests.load(Ordering::SeqCst), fetched);
     for refused in [large, tiered] {
         let r = client
             .get(format!(
@@ -276,6 +296,8 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
         .await
         .unwrap();
     assert_eq!(r.status(), StatusCode::NOT_FOUND);
+    let uncached_url = format!("{gateway_url}/api/v1/platform/deployments/{cold}/price-suggestion");
+    let before_denials = all_requests.load(Ordering::SeqCst);
     // A stale browser session cannot retain admin authority after revocation.
     sqlx::query(
         "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role='admin'",
@@ -290,7 +312,7 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
         .await
         .unwrap();
     let r = client
-        .get(&url)
+        .get(&uncached_url)
         .header("cookie", &admin_cookie)
         .send()
         .await
@@ -304,13 +326,14 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
     .await
     .unwrap();
     let r = client
-        .get(&url)
+        .get(&uncached_url)
         .header("cookie", &member_cookie)
         .send()
         .await
         .unwrap();
     assert_eq!(r.status(), StatusCode::FORBIDDEN);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(all_requests.load(Ordering::SeqCst), before_denials);
     let after: Vec<Value> =
         sqlx::query_scalar("SELECT to_jsonb(p) FROM deployment_prices p ORDER BY id")
             .fetch_all(&f.store.pool)

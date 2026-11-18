@@ -111,7 +111,12 @@ async fn terminal_fidelity_official_sdks_and_priced_http_evidence(pool: sqlx::Pg
         .await
         .unwrap();
     // Actual runtime ACL, not owner credentials, on every changed inference path.
-    sqlx::raw_sql("DO $$ BEGIN IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='gateway_runtime') THEN CREATE ROLE gateway_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; END IF; END $$;").execute(&pool).await.unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../tests/common/ensure_runtime_role.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::raw_sql("REVOKE CONNECT ON DATABASE postgres,template1 FROM PUBLIC,gateway_runtime")
         .execute(&pool)
         .await

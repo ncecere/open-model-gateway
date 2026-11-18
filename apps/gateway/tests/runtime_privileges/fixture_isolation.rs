@@ -19,17 +19,12 @@ pub(super) async fn run(pool: PgPool, personal: bool, scim: bool) {
         .unwrap();
     let result = AssertUnwindSafe(async {
         sqlx::raw_sql(
-            "DO $$ BEGIN
-               IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='gateway_runtime') THEN
-                CREATE ROLE gateway_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-               END IF;
-             END $$;
-             REVOKE CONNECT ON DATABASE postgres FROM PUBLIC,gateway_runtime;
+            concat!(include_str!("../common/ensure_runtime_role.sql"), "REVOKE CONNECT ON DATABASE postgres FROM PUBLIC,gateway_runtime;
              REVOKE CONNECT ON DATABASE template1 FROM PUBLIC,gateway_runtime;
              DO $$ BEGIN
                EXECUTE format('REVOKE ALL ON DATABASE %I FROM PUBLIC,gateway_runtime',current_database());
                EXECUTE format('GRANT CONNECT ON DATABASE %I TO gateway_runtime',current_database());
-             END $$;",
+             END $$;"),
         )
         .execute(&pool)
         .await
