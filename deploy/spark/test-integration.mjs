@@ -35,6 +35,9 @@ async function main() {
     : target.packageName !== "open-model-gateway");
   assert.ok(targets.length, "no integration test targets selected");
   if (group === "gateway") assert.ok(targets.some(t => t.kind === "test"), "no gateway integration test targets selected");
+  // The selected source ref supplies discoverTargets. Older versions of that
+  // helper do not expose source paths, so use Cargo metadata for this check.
+  const packages = new Map(metadata.packages.map(pkg => [pkg.id, pkg]));
   let failed = false;
   for (const target of targets) {
     try {
@@ -43,6 +46,14 @@ async function main() {
       assert.deepEqual(entries, parseListing(await runCargo([...args, "--", "--list", "--format", "pretty", "--color", "never"]), true));
       const ignored = parseListing(await runCargo([...args, "--", "--list", "--ignored", "--format", "terse", "--color", "never"]));
       assert.ok(ignored.every(e => entries.some(t => t.name === e.name && t.kind === e.kind)), "ignored tests absent from inventory");
+      if (target.kind === "test") {
+        const source = packages.get(target.packageId).targets.find(t => t.name === target.name && t.kind.includes("test")).src_path;
+        assert.ok(typeof source === "string" && source.length, "missing Cargo test source path");
+        if (/\/tests\/[^/]*_live\.rs$/.test(source)) {
+          const enabled = entries.filter(e => !ignored.some(i => i.name === e.name && i.kind === e.kind));
+          assert.ok(!enabled.length, `${source}: live cases must be ignored: ${enabled.map(e => e.name).join(", ")}`);
+        }
+      }
       console.log(`integration-target ${target.key}: listed=${entries.length} default-ignored=${ignored.length}`);
       // Whole targets with zero tests are legitimate and must still report zero.
       // A nonempty named target reporting zero cannot satisfy validateRun.

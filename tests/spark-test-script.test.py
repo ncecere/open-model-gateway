@@ -113,7 +113,7 @@ esac
 
 def metadata(tests):
     def target(kind, name):
-        return {"kind": [kind], "name": name, "test": True}
+        return {"kind": [kind], "name": name, "test": True, "src_path": f"/fixture/tests/{name}.rs"}
     packages = [
         {"id": "open-model-gateway", "name": "open-model-gateway", "targets": [target("test", name) for name in tests] + [target("lib", "open_model_gateway"), target("bin", "empty_gateway")]},
         {"id": "fixture-tools", "name": "fixture-tools", "targets": [target("lib", "fixture_tools"), target("bin", "empty_tool")]},
@@ -313,6 +313,26 @@ class Integration(Pod):
                 for build in builds:
                     self.assertIn("--jobs 1", build)
                     self.assertIn("--workspace --all-features --no-run", build)
+
+    def test_live_inventory_refuses_enabled_case_before_execution(self):
+        data = json.loads(self.metadata.read_text())
+        data["packages"][0]["targets"][0]["src_path"] = "/fixture/tests/provider_live.rs"
+        self.metadata.write_text(json.dumps(data))
+        # The renamed live target has one active case and one ignored case.
+        stub = self.noderoot / "bin" / "cargo"
+        stub.write_text(stub.read_text().replace('  *"--list"*)', '''  *"--test alpha -- --list"*)
+    echo "fixture::opted_in: test"
+    n=1
+    if [[ "$args" != *"--ignored"* ]]; then echo "fixture::test: test"; n=2; fi
+    if [[ "$args" == *"--format pretty"* ]]; then printf "\\n%s tests, 0 benchmarks\\n" "$n"; fi
+    exit 0 ;;
+  *"--list"*)'''))
+        result = self.run_script(OMG_SUITE="integration", timeout=120)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("provider_live.rs: live cases must be ignored: fixture::test", result.stdout)
+        calls = [c for c in self.stub_calls() if "--test alpha " in c]
+        self.assertTrue(any("--list --ignored" in c for c in calls))
+        self.assertFalse(any("--list" not in c for c in calls))
 
     def test_runtime_probe_must_be_present_and_ignored(self):
         result = self.run_script(OMG_SUITE="integration", STUB_MISSING_PROBE="1", timeout=120)
