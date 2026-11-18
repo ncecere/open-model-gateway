@@ -55,11 +55,7 @@ governance/settlement.rs :: finish_with_acceptance :: metrics call :: METRICS . 
 governance/settlement.rs :: finish_with_acceptance :: metrics call :: METRICS . observe_settlement (if settled { Settlement :: Settled } else { Settlement :: Unknown })
 governance/settlement.rs :: finish_with_acceptance :: metrics call :: METRICS . observe_settlement_phases (timer , match & result { Ok (Finished :: Replay) => "replay" , Ok (Finished :: Conflict) => "conflict" , Ok (Finished :: Committed { settled : true , .. }) => "settled" , Ok (Finished :: Committed { settled : false , .. }) => "unknown" , Err (_) => "error" , } ,)
 history.rs :: run_job :: metrics call :: crate :: metrics :: METRICS . set_history_findings (report . finding_count)
-http.rs :: request_context :: binding :: method = request . method () . clone ()
-http.rs :: request_context :: binding :: mut response = next . run (request) . await
-http.rs :: request_context :: binding :: route = request . extensions () . get :: < MatchedPath > () . map_or ("unmatched" , | path | path . as_str ()) . to_owned ()
-http.rs :: request_context :: binding :: started = Instant :: now ()
-http.rs :: request_context :: metrics call :: crate :: metrics :: METRICS . observe_http (& method , & route , response . status () . as_u16 () , started . elapsed () ,)
+http.rs :: request_context :: metrics call :: crate :: metrics :: METRICS . observe_http (& method , & route , response . status () . as_u16 () , started . elapsed () ,) :: method from method = request . method () . clone () :: response from mut response = next . run (request) . await :: route from route = request . extensions () . get :: < MatchedPath > () . map_or ("unmatched" , | path | path . as_str ()) . to_owned () :: started from started = Instant :: now ()
 identity/login.rs :: throttled :: metrics call :: crate :: metrics :: METRICS . auth_throttled (endpoint , reason)
 identity/session.rs :: authenticate_admin_token_request :: metrics call :: crate :: metrics :: METRICS . auth_throttled ("admin_token" , reason)
 inference/attempt.rs :: impl ExecutionGuard::settle_to_completion :: metrics call :: crate :: metrics :: METRICS . observe_settlement (crate :: metrics :: Settlement :: Held)
@@ -106,16 +102,13 @@ metrics.rs :: capacity_denied :: metrics call :: METRICS . observe_capacity_deni
 metrics.rs :: denial_scope :: statement 1 :: use crate :: inference :: error :: LimitScope ;
 metrics.rs :: denial_scope :: statement 2 :: let scope = | s : LimitScope | match s { LimitScope :: Workspace => "workspace" , LimitScope :: ApiKey => "api_key" , } ;
 metrics.rs :: denial_scope :: statement 3 :: match error { InferenceError :: Busy => Some ("policy") , InferenceError :: BudgetExceeded (s) | InferenceError :: UnresolvedUsage (s) | InferenceError :: TokenReservationExceedsLimit (s) | InferenceError :: JobLimitExceeded (s) => Some (scope (s)) , _ => None , }
-metrics.rs :: impl PhaseTimer::observe :: binding :: (phase , elapsed) = self . spans . into_iter () . chain (std :: iter :: once (("total" , total)))
-metrics.rs :: impl PhaseTimer::observe :: family :: family . get_or_create (& [("phase" , phase . to_owned ()) , ("outcome" , outcome . to_owned ())])
-metrics.rs :: impl ScopeLockWait::drop :: binding :: path = [("path" , self . path . to_owned ())]
+metrics.rs :: impl PhaseTimer::observe :: family :: family . get_or_create (& [("phase" , phase . to_owned ()) , ("outcome" , outcome . to_owned ())]) :: phase from (phase , elapsed) = self . spans . into_iter () . chain (std :: iter :: once (("total" , total)))
 metrics.rs :: impl ScopeLockWait::drop :: family :: self . metrics . scope_lock_wait . get_or_create (& [("lock" , self . lock . to_owned ()) , ("path" , self . path . to_owned ()) ,])
-metrics.rs :: impl ScopeLockWait::drop :: family :: self . metrics . scope_lock_waiting . get_or_create (& path)
+metrics.rs :: impl ScopeLockWait::drop :: family :: self . metrics . scope_lock_waiting . get_or_create (& path) :: path from path = [("path" , self . path . to_owned ())]
 metrics.rs :: observe_admission :: metrics call :: METRICS . observe_admission_error (* error)
 metrics.rs :: router :: metrics call :: METRICS . render (Some (& store))
 metrics/admission.rs :: impl Metrics::observe_accounting_failure :: family :: self . accounting_failures . get_or_create (& [("stage" , stage . as_str () . to_owned ()) , ("cause" , cause . as_str () . to_owned ()) ,])
-metrics/admission.rs :: impl Metrics::observe_admission_error :: binding :: Some (scope) = denial_scope (error)
-metrics/admission.rs :: impl Metrics::observe_admission_error :: family :: self . denials . get_or_create (& [("code" , error . code () . to_owned ()) , ("scope" , scope . to_owned ()) ,])
+metrics/admission.rs :: impl Metrics::observe_admission_error :: family :: self . denials . get_or_create (& [("code" , error . code () . to_owned ()) , ("scope" , scope . to_owned ()) ,]) :: scope from Some (scope) = denial_scope (error)
 metrics/admission.rs :: impl Metrics::observe_capacity_denial :: family :: self . denials . get_or_create (& [("code" , InferenceError :: Busy . code () . to_owned ()) , ("scope" , "gateway_capacity" . to_owned ()) ,])
 metrics/admission.rs :: impl Metrics::observe_deadlock_retry :: family :: self . deadlock_retries . get_or_create (& [("path" , path . to_owned ())])
 metrics/admission.rs :: impl Metrics::observe_settlement :: family :: self . settlements . get_or_create (& [("outcome" , settlement . as_str () . to_owned ())])
@@ -124,39 +117,32 @@ metrics/alerts.rs :: impl Metrics::observe_aged_hold_alerts :: family :: self . 
 metrics/alerts.rs :: impl Metrics::observe_alert_delivery :: family :: self . alert_delivery_attempts . get_or_create (& [("outcome" , outcome . to_owned ())])
 metrics/alerts.rs :: impl Metrics::observe_alert_run :: family :: self . alert_runs . get_or_create (& [("result" , result . to_owned ())])
 metrics/alerts.rs :: impl Metrics::observe_alert_webhook :: family :: self . alert_webhook_attempts . get_or_create (& [("outcome" , outcome . to_owned ())])
-metrics/collection.rs :: impl Metrics::collect_alert_email :: binding :: (state , count) = [("retrying" , retrying) , ("exhausted" , exhausted) , ("failed" , failed) , ("suppressed" , suppressed) ,]
-metrics/collection.rs :: impl Metrics::collect_alert_email :: family :: self . alert_delivery_queue . get_or_create (& [("state" , state . to_owned ())])
+metrics/collection.rs :: impl Metrics::collect_alert_email :: collection error label :: self . collection_error ("alert_email")
+metrics/collection.rs :: impl Metrics::collect_alert_email :: family :: self . alert_delivery_queue . get_or_create (& [("state" , state . to_owned ())]) :: state from (state , count) = [("retrying" , retrying) , ("exhausted" , exhausted) , ("failed" , failed) , ("suppressed" , suppressed) ,]
 metrics/collection.rs :: impl Metrics::collect_alert_email :: family :: self . alert_oldest_pending_age . get_or_create (& [])
 metrics/collection.rs :: impl Metrics::collect_alert_email :: family :: self . alert_pending_buckets . get_or_create (& [])
-metrics/collection.rs :: impl Metrics::collect_alert_webhook :: binding :: (state , count , age) = rows
+metrics/collection.rs :: impl Metrics::collect_alert_webhook :: collection error label :: self . collection_error ("alert_webhook")
 metrics/collection.rs :: impl Metrics::collect_alert_webhook :: family :: self . alert_webhook_oldest . get_or_create (& [])
-metrics/collection.rs :: impl Metrics::collect_alert_webhook :: family :: self . alert_webhook_queue . get_or_create (& [("state" , state)])
-metrics/collection.rs :: impl Metrics::collect_report_email :: binding :: state = ["waiting" , "leased" , "sent" , "failed" , "ineligible" , "exhausted" , "not_configured"]
-metrics/collection.rs :: impl Metrics::collect_report_email :: family :: self . report_delivery_queue . get_or_create (& [("state" , state . to_owned ())])
-metrics/collection.rs :: impl Metrics::collect_reservations :: binding :: (state , n) = [("pending" , pending) , ("unknown" , unknown)]
-metrics/collection.rs :: impl Metrics::collect_reservations :: family :: self . reservations . get_or_create (& [("state" , state . to_owned ())])
+metrics/collection.rs :: impl Metrics::collect_alert_webhook :: family :: self . alert_webhook_queue . get_or_create (& [("state" , state)]) :: state from (state , count , age) = rows
+metrics/collection.rs :: impl Metrics::collect_report_email :: collection error label :: self . collection_error ("report_email")
+metrics/collection.rs :: impl Metrics::collect_report_email :: family :: self . report_delivery_queue . get_or_create (& [("state" , state . to_owned ())]) :: state from state = ["waiting" , "leased" , "sent" , "failed" , "ineligible" , "exhausted" , "not_configured"]
+metrics/collection.rs :: impl Metrics::collect_reservations :: collection error label :: self . collection_error ("reservations")
+metrics/collection.rs :: impl Metrics::collect_reservations :: family :: self . reservations . get_or_create (& [("state" , state . to_owned ())]) :: state from (state , n) = [("pending" , pending) , ("unknown" , unknown)]
 metrics/collection.rs :: impl Metrics::collection_error :: family :: self . collection_errors . get_or_create (& [("collector" , collector . to_owned ())])
+metrics/collection.rs :: impl Metrics::observe_collection_error :: collection error label :: self . collection_error (collector)
 metrics/collection.rs :: impl Metrics::pool_gauges :: family :: self . pool_connections . get_or_create (& [("state" , "idle" . to_owned ())])
 metrics/collection.rs :: impl Metrics::pool_gauges :: family :: self . pool_connections . get_or_create (& [("state" , "in_use" . to_owned ())])
 metrics/jobs.rs :: impl Metrics::observe_batch_created :: family :: self . batches . get_or_create (& [("mode" , mode . to_owned ()) , ("event" , "created" . to_owned ())])
 metrics/jobs.rs :: impl Metrics::observe_batch_finished :: family :: self . batches . get_or_create (& [("mode" , mode . to_owned ()) , ("event" , state . to_owned ())])
-metrics/jobs.rs :: impl Metrics::observe_batch_lines :: binding :: (outcome , n) = [("completed" , completed) , ("failed" , failed)]
-metrics/jobs.rs :: impl Metrics::observe_batch_lines :: binding :: provider = bounded (& self . providers , provider)
-metrics/jobs.rs :: impl Metrics::observe_batch_lines :: family :: self . batch_lines . get_or_create (& [("mode" , mode . to_owned ()) , ("provider" , provider . clone ()) , ("outcome" , outcome . to_owned ()) ,])
+metrics/jobs.rs :: impl Metrics::observe_batch_lines :: family :: self . batch_lines . get_or_create (& [("mode" , mode . to_owned ()) , ("provider" , provider . clone ()) , ("outcome" , outcome . to_owned ()) ,]) :: outcome from (outcome , n) = [("completed" , completed) , ("failed" , failed)] :: provider from provider = bounded (& self . providers , provider)
 metrics/jobs.rs :: impl Metrics::observe_batch_route_pause :: family :: self . batch_route_pauses . get_or_create (& [("reason" , reason . to_owned ())])
 metrics/jobs.rs :: impl Metrics::observe_batch_submitted :: family :: self . batches . get_or_create (& [("mode" , "native" . to_owned ()) , ("event" , "submitted" . to_owned ()) ,])
 metrics/jobs.rs :: impl Metrics::observe_file_store :: family :: self . file_store_ops . get_or_create (& [("backend" , backend . to_owned ()) , ("op" , op . to_owned ()) , ("outcome" , error . unwrap_or ("ok") . to_owned ()) ,])
 metrics/jobs.rs :: impl Metrics::observe_file_store_bytes :: family :: self . file_store_bytes . get_or_create (& [("backend" , backend . to_owned ()) , ("op" , op . to_owned ())])
-metrics/jobs.rs :: impl Metrics::set_batch_paused_routes :: binding :: reason = ["outside_window" , "live_traffic" , "server_busy" , "metrics_unavailable" , "concurrency" , "fair_share" , "workers" , "rate_limited" ,]
-metrics/jobs.rs :: impl Metrics::set_batch_paused_routes :: family :: self . batch_paused_routes . get_or_create (& [("reason" , reason . to_owned ())])
+metrics/jobs.rs :: impl Metrics::set_batch_paused_routes :: family :: self . batch_paused_routes . get_or_create (& [("reason" , reason . to_owned ())]) :: reason from reason = ["outside_window" , "live_traffic" , "server_busy" , "metrics_unavailable" , "concurrency" , "fair_share" , "workers" , "rate_limited" ,]
 metrics/jobs.rs :: impl Metrics::set_batch_queue :: family :: self . batch_queue . get_or_create (& [("mode" , mode . to_owned ())])
-metrics/jobs.rs :: impl Metrics::set_batch_route_lines :: binding :: (provider , waiting , running) = rows
-metrics/jobs.rs :: impl Metrics::set_batch_route_lines :: binding :: (state , n) = [("waiting" , waiting) , ("running" , running)]
-metrics/jobs.rs :: impl Metrics::set_batch_route_lines :: binding :: provider = bounded (& self . providers , provider)
-metrics/jobs.rs :: impl Metrics::set_batch_route_lines :: binding :: provider = seen . iter ()
-metrics/jobs.rs :: impl Metrics::set_batch_route_lines :: binding :: state = ["waiting" , "running"]
-metrics/jobs.rs :: impl Metrics::set_batch_route_lines :: family :: self . batch_route_lines . get_or_create (& [("provider" , provider . clone ()) , ("state" , state . to_owned ())])
-metrics/jobs.rs :: impl Metrics::set_batch_route_lines :: family :: self . batch_route_lines . get_or_create (& [("provider" , provider . clone ()) , ("state" , state . to_owned ())])
+metrics/jobs.rs :: impl Metrics::set_batch_route_lines :: family :: self . batch_route_lines . get_or_create (& [("provider" , provider . clone ()) , ("state" , state . to_owned ())]) :: provider from provider = bounded (& self . providers , provider) [(provider , waiting , running) = rows] :: state from (state , n) = [("waiting" , waiting) , ("running" , running)]
+metrics/jobs.rs :: impl Metrics::set_batch_route_lines :: family :: self . batch_route_lines . get_or_create (& [("provider" , provider . clone ()) , ("state" , state . to_owned ())]) :: provider from provider = seen . iter () :: state from state = ["waiting" , "running"]
 metrics/jobs.rs :: impl Metrics::set_batch_workers :: family :: self . batch_workers . get_or_create (& [("state" , "busy" . to_owned ())])
 metrics/jobs.rs :: impl Metrics::set_batch_workers :: family :: self . batch_workers . get_or_create (& [("state" , "capacity" . to_owned ())])
 metrics/operations.rs :: impl Metrics::audit_export_delivery :: family :: self . audit_export_deliveries . get_or_create (& [("outcome" , outcome . to_owned ())])
@@ -181,8 +167,7 @@ metrics/operations.rs :: impl Metrics::set_report_queue :: family :: self . repo
 metrics/operations.rs :: impl Metrics::set_report_queue :: family :: self . report_backlog_capped . get_or_create (& [])
 metrics/operations.rs :: impl Metrics::set_report_queue :: family :: self . report_oldest_due_lag . get_or_create (& [])
 metrics/operations.rs :: impl Metrics::upstream_connection_lost :: family :: self . upstream_connection_lost . get_or_create (& [("client" , client . to_owned ())])
-metrics/registry.rs :: impl Metrics::register_reports_and_history :: binding :: category = crate :: scheduled_reports :: Outcome :: ALL
-metrics/registry.rs :: impl Metrics::register_reports_and_history :: family :: self . report_outcomes . get_or_create (& [("category" , category . as_str () . to_owned ())])
+metrics/registry.rs :: impl Metrics::register_reports_and_history :: family :: self . report_outcomes . get_or_create (& [("category" , category . as_str () . to_owned ())]) :: category from category = crate :: scheduled_reports :: Outcome :: ALL
 metrics/registry.rs :: impl Metrics::register_requests :: family :: build . get_or_create (& [("version" , env ! ("CARGO_PKG_VERSION") . to_owned ())])
 metrics/registry.rs :: impl Metrics::unregistered :: precreated labels :: series (& families . logs_drops , "reason" , | i | { crate :: ops_log :: DropReason :: ALL [i] . as_str () . to_owned () })
 metrics/registry.rs :: impl Metrics::unregistered :: precreated labels :: series (& families . logs_pushes , "outcome" , | i | { crate :: otlp :: Delivery :: ALL [i] . as_str () . to_owned () })
@@ -191,22 +176,18 @@ metrics/registry.rs :: impl Metrics::unregistered :: precreated labels :: series
 metrics/registry.rs :: impl Metrics::unregistered :: precreated labels :: series (& families . metric_pushes , "outcome" , | i | { crate :: otlp :: Delivery :: ALL [i] . as_str () . to_owned () })
 metrics/registry.rs :: impl Metrics::unregistered :: precreated labels :: series (& families . trace_drops , "reason" , | i | { crate :: telemetry :: DropReason :: ALL [i] . as_str () . to_owned () })
 metrics/registry.rs :: impl Metrics::unregistered :: precreated labels :: series (& families . trace_exchanges , "outcome" , | i | { crate :: telemetry :: Delivery :: ALL [i] . as_str () . to_owned () })
-metrics/registry.rs :: series :: family :: family . get_or_create (& [(label , value (i))])
+metrics/registry.rs :: series :: family :: family . get_or_create (& [(label , value (i))]) :: i from i
 metrics/requests.rs :: impl Metrics::labels :: statement 1 :: AttemptLabels { provider : bounded (& self . providers , provider) , model : bounded (& self . models , model) , }
-metrics/requests.rs :: impl Metrics::observe_attempt :: binding :: (direction , n) = [("input" , a . input_tokens) , ("output" , a . output_tokens)]
-metrics/requests.rs :: impl Metrics::observe_attempt :: binding :: (provider , model) = (a . labels . provider . clone () , a . labels . model . clone ())
-metrics/requests.rs :: impl Metrics::observe_attempt :: binding :: Some (error) = a . error
-metrics/requests.rs :: impl Metrics::observe_attempt :: binding :: pm = [("provider" , provider . clone ()) , ("model" , model . clone ())]
-metrics/requests.rs :: impl Metrics::observe_attempt :: family :: self . attempt_errors . get_or_create (& [("provider" , provider . clone ()) , ("code" , error . code () . to_owned ()) ,])
-metrics/requests.rs :: impl Metrics::observe_attempt :: family :: self . attempts . get_or_create (& [("provider" , provider . clone ()) , ("model" , model . clone ()) , ("outcome" , a . outcome . to_owned ()) ,])
-metrics/requests.rs :: impl Metrics::observe_attempt :: family :: self . time_to_first_token . get_or_create (& pm)
-metrics/requests.rs :: impl Metrics::observe_attempt :: family :: self . tokens . get_or_create (& [("provider" , provider . clone ()) , ("model" , model . clone ()) , ("direction" , direction . to_owned ()) ,])
-metrics/requests.rs :: impl Metrics::observe_attempt :: family :: self . upstream_latency . get_or_create (& pm)
-metrics/requests.rs :: impl Metrics::observe_http :: binding :: method = method_label (method) . to_owned ()
-metrics/requests.rs :: impl Metrics::observe_http :: family :: self . http_duration . get_or_create (& [("method" , method) , ("route" , route . to_owned ())])
-metrics/requests.rs :: impl Metrics::observe_http :: family :: self . http_requests . get_or_create (& [("method" , method . clone ()) , ("route" , route . to_owned ()) , ("status" , status . to_string ()) ,])
+metrics/requests.rs :: impl Metrics::observe_attempt :: family :: self . attempt_errors . get_or_create (& [("provider" , provider . clone ()) , ("code" , error . code () . to_owned ()) ,]) :: error from Some (error) = a . error :: provider from (provider , model) = (a . labels . provider . clone () , a . labels . model . clone ())
+metrics/requests.rs :: impl Metrics::observe_attempt :: family :: self . attempts . get_or_create (& [("provider" , provider . clone ()) , ("model" , model . clone ()) , ("outcome" , a . outcome . to_owned ()) ,]) :: model from (provider , model) = (a . labels . provider . clone () , a . labels . model . clone ()) :: provider from (provider , model) = (a . labels . provider . clone () , a . labels . model . clone ())
+metrics/requests.rs :: impl Metrics::observe_attempt :: family :: self . time_to_first_token . get_or_create (& pm) :: pm from pm = [("provider" , provider . clone ()) , ("model" , model . clone ())]
+metrics/requests.rs :: impl Metrics::observe_attempt :: family :: self . tokens . get_or_create (& [("provider" , provider . clone ()) , ("model" , model . clone ()) , ("direction" , direction . to_owned ()) ,]) :: direction from (direction , n) = [("input" , a . input_tokens) , ("output" , a . output_tokens)] :: model from (provider , model) = (a . labels . provider . clone () , a . labels . model . clone ()) :: provider from (provider , model) = (a . labels . provider . clone () , a . labels . model . clone ())
+metrics/requests.rs :: impl Metrics::observe_attempt :: family :: self . upstream_latency . get_or_create (& pm) :: pm from pm = [("provider" , provider . clone ()) , ("model" , model . clone ())]
+metrics/requests.rs :: impl Metrics::observe_http :: family :: self . http_duration . get_or_create (& [("method" , method) , ("route" , route . to_owned ())]) :: method from method = method_label (method) . to_owned ()
+metrics/requests.rs :: impl Metrics::observe_http :: family :: self . http_requests . get_or_create (& [("method" , method . clone ()) , ("route" , route . to_owned ()) , ("status" , status . to_string ()) ,]) :: method from method = method_label (method) . to_owned ()
 metrics/requests.rs :: method_label :: statement 1 :: use axum :: http :: Method ;
 metrics/requests.rs :: method_label :: statement 2 :: match * method { Method :: GET => "GET" , Method :: HEAD => "HEAD" , Method :: POST => "POST" , Method :: PUT => "PUT" , Method :: PATCH => "PATCH" , Method :: DELETE => "DELETE" , Method :: OPTIONS => "OPTIONS" , _ => "other" , }
+metrics_export.rs :: <file> :: macro :: fixed_enum ! (DropReason { SeriesLimit => "series_limit" , BodyLimit => "body_limit" , Label => "label" , Unclassified => "unclassified" , InvalidValue => "invalid_value" })
 metrics_export.rs :: impl Encoder::encode_with_limit :: OTLP labels :: point ["attributes"] = json ! (labels . into_iter () . map (| (key , value) | json ! ({ "key" : key , "value" : { "stringValue" : value } })) . collect ::< Vec < _ >> ())
 metrics_export.rs :: impl Exporter::push :: event :: crate :: ops_log :: emit (crate :: ops_log :: OpsEvent :: ExporterDegraded { signal : crate :: ops_log :: Signal :: Metrics , failure , })
 metrics_export.rs :: impl Exporter::push :: event :: crate :: ops_log :: emit (crate :: ops_log :: OpsEvent :: ExporterRecovered { signal : crate :: ops_log :: Signal :: Metrics , })
@@ -261,6 +242,7 @@ ops_log.rs :: send_batch :: metrics call :: crate :: metrics :: METRICS . otlp_l
 ops_log.rs :: send_batch :: metrics call :: crate :: metrics :: METRICS . otlp_logs_push (outcome)
 ops_log.rs :: send_batch :: metrics call :: crate :: metrics :: METRICS . otlp_logs_rejected (rejected)
 ops_log.rs :: send_batch :: record inputs :: log_record (& queued . event , queued . at , queued . suppressed)
+otlp.rs :: <file> :: macro :: fixed_enum ! (Delivery { Accepted => "accepted" , HttpStatus => "http_status" , Transport => "transport" , Timeout => "timeout" , Acknowledgement => "acknowledgement" })
 otlp.rs :: endpoint :: metrics call :: crate :: metrics :: METRICS . egress_denied (crate :: egress :: Purpose :: Telemetry . as_str ())
 partitions.rs :: run_job :: metrics call :: crate :: metrics :: METRICS . set_partition_months (table , c . months_ahead)
 rollups.rs :: run_once :: metrics call :: crate :: metrics :: METRICS . observe_rollup_hours ("changed" , report . changed_hours)

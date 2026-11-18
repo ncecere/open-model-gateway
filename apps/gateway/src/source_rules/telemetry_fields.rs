@@ -8,13 +8,15 @@ use syn::visit::{self, Visit};
 
 use super::tree::{Scope, Source, flat, parse_fixture, production};
 
+type Reads = BTreeSet<(String, String)>;
+
 struct Finder<'a> {
     path: &'a str,
     scope: Scope,
     entries: Vec<String>,
+    reads: Vec<Reads>,
     // Local patterns and their initializers in the metric implementation.
     bindings: Vec<(String, BTreeSet<String>, String)>,
-    label_names: BTreeSet<(String, String)>,
 }
 
 // One physical line per entry, including when a literal spans source lines.
@@ -47,17 +49,57 @@ impl Finder<'_> {
         ));
     }
 
-    fn binding(&mut self, pat: &syn::Pat, value: &syn::Expr) {
-        if self.path == "metrics.rs"
+    fn scoped(&mut self, visit: impl FnOnce(&mut Self)) {
+        let depth = self.bindings.len();
+        visit(self);
+        self.bindings.truncate(depth);
+    }
+
+    fn tracks_bindings(&self) -> bool {
+        self.path == "metrics.rs"
             || self.path.starts_with("metrics/")
             || (self.path == "http.rs" && self.scope.path() == "request_context")
-        {
-            self.bindings.push((
-                self.scope.path(),
-                identifiers(pat),
-                format!("{} = {}", token_text(pat), token_text(value)),
-            ));
+    }
+
+    fn read_sources(&mut self, visit: impl FnOnce(&mut Self)) -> Reads {
+        self.reads.push(Reads::new());
+        visit(self);
+        self.reads.pop().unwrap()
+    }
+
+    fn binding(&mut self, pat: &syn::Pat, value: Option<&syn::Expr>, reads: Reads) {
+        if self.tracks_bindings() {
+            #[derive(Default)]
+            struct Names(BTreeSet<String>);
+            impl Visit<'_> for Names {
+                fn visit_pat_ident(&mut self, pat: &syn::PatIdent) {
+                    self.0.insert(pat.ident.to_string());
+                    visit::visit_pat_ident(self, pat);
+                }
+            }
+            let mut names = Names::default();
+            names.visit_pat(pat);
+            let mut source = token_text(pat);
+            if let Some(value) = value {
+                source.push_str(&format!(" = {}", token_text(value)));
+                // A shadowing initializer still reads the previous binding.
+                for (name, previous) in reads {
+                    if names.0.contains(&name) {
+                        source.push_str(&format!(" [{previous}]"));
+                    }
+                }
+            }
+            self.bindings.push((self.scope.path(), names.0, source));
         }
+    }
+
+    fn visible(&self, name: &str) -> Option<&str> {
+        let current = self.scope.path();
+        self.bindings
+            .iter()
+            .rev()
+            .find(|(scope, names, _)| *scope == current && names.contains(name))
+            .map(|(_, _, source)| source.as_str())
     }
 
     // Direct METRICS calls also occur in select!, stream! and macro_rules!.
@@ -67,67 +109,149 @@ impl Finder<'_> {
             if let TokenTree::Group(group) = token {
                 self.macro_calls(group.stream());
             }
+            if let [TokenTree::Ident(name), TokenTree::Group(args), ..] = &tokens[at..]
+                && name == "emit"
+                && args.delimiter() == Delimiter::Parenthesis
+                && !matches!(&tokens[..at], [.., TokenTree::Punct(dot)] if dot.as_char() == '.')
+                && !matches!(&tokens[..at], [.., TokenTree::Punct(a), TokenTree::Punct(b)] if a.as_char() == ':' && b.as_char() == ':')
+            {
+                self.record(
+                    "macro event",
+                    &tokens[at..at + 2].iter().cloned().collect::<TokenStream>(),
+                );
+            }
             if let [
                 TokenTree::Ident(receiver),
                 TokenTree::Punct(dot),
-                TokenTree::Ident(_),
+                TokenTree::Ident(method),
                 TokenTree::Group(args),
                 ..,
             ] = &tokens[at..]
-                && receiver == "METRICS"
+                && (receiver == "METRICS" || method == "phase")
                 && dot.as_char() == '.'
                 && args.delimiter() == Delimiter::Parenthesis
             {
                 self.record(
-                    "macro metrics call",
+                    if method == "phase" {
+                        "macro phase label"
+                    } else {
+                        "macro metrics call"
+                    },
                     &tokens[at..at + 4].iter().cloned().collect::<TokenStream>(),
                 );
             }
         }
     }
 
-    fn label_inputs(&mut self, args: &impl ToTokens) {
-        self.label_names.extend(
-            identifiers(args)
-                .into_iter()
-                .map(|name| (self.scope.path(), name)),
-        );
+    fn label_use(&mut self, kind: &str, call: &syn::ExprMethodCall) {
+        self.record(kind, call);
+        let entry = self.entries.len() - 1;
+        self.visit_expr(&call.receiver);
+        let reads = self.read_sources(|this| {
+            for arg in &call.args {
+                this.visit_expr(arg);
+            }
+        });
+        for (name, source) in reads {
+            self.entries[entry].push_str(&format!(" :: {name} from {source}"));
+        }
     }
 }
 
 impl<'ast> Visit<'ast> for Finder<'_> {
     track_scope!();
 
-    fn visit_local(&mut self, local: &'ast syn::Local) {
-        if let Some(init) = &local.init {
-            self.binding(&local.pat, &init.expr);
+    fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+        if !self.reads.is_empty()
+            && let Some(name) = path.path.get_ident()
+            && let Some(source) = self.visible(&name.to_string())
+        {
+            let read = (name.to_string(), source.to_owned());
+            for reads in &mut self.reads {
+                reads.insert(read.clone());
+            }
         }
-        visit::visit_local(self, local);
+        visit::visit_expr_path(self, path);
+    }
+
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        if !self.tracks_bindings() {
+            visit::visit_local(self, local);
+            return;
+        }
+        if let Some(init) = &local.init {
+            let reads = self.read_sources(|this| this.visit_expr(&init.expr));
+            if let Some((_, diverge)) = &init.diverge {
+                self.visit_expr(diverge);
+            }
+            self.binding(&local.pat, Some(&init.expr), reads);
+        } else {
+            self.binding(&local.pat, None, Reads::new());
+        }
     }
 
     fn visit_expr_let(&mut self, expr: &'ast syn::ExprLet) {
-        self.binding(&expr.pat, &expr.expr);
-        visit::visit_expr_let(self, expr);
+        let reads = self.read_sources(|this| this.visit_expr(&expr.expr));
+        self.binding(&expr.pat, Some(&expr.expr), reads);
+    }
+
+    fn visit_expr_if(&mut self, expr: &'ast syn::ExprIf) {
+        self.scoped(|this| {
+            this.visit_expr(&expr.cond);
+            this.visit_block(&expr.then_branch);
+        });
+        if let Some((_, branch)) = &expr.else_branch {
+            self.visit_expr(branch);
+        }
+    }
+
+    fn visit_expr_while(&mut self, expr: &'ast syn::ExprWhile) {
+        self.scoped(|this| visit::visit_expr_while(this, expr));
     }
 
     fn visit_expr_for_loop(&mut self, expr: &'ast syn::ExprForLoop) {
-        self.binding(&expr.pat, &expr.expr);
-        visit::visit_expr_for_loop(self, expr);
+        let reads = self.read_sources(|this| this.visit_expr(&expr.expr));
+        self.scoped(|this| {
+            this.binding(&expr.pat, Some(&expr.expr), reads);
+            this.visit_block(&expr.body);
+        });
+    }
+
+    fn visit_expr_closure(&mut self, expr: &'ast syn::ExprClosure) {
+        self.scoped(|this| {
+            for pat in &expr.inputs {
+                this.binding(pat, None, Reads::new());
+            }
+            this.visit_expr(&expr.body);
+        });
+    }
+
+    fn visit_arm(&mut self, arm: &'ast syn::Arm) {
+        self.scoped(|this| {
+            this.binding(&arm.pat, None, Reads::new());
+            visit::visit_arm(this, arm);
+        });
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         if call.method == "get_or_create" || call.method == "get_or_create_owned" {
-            self.record("family", call);
-            self.label_inputs(&call.args);
+            self.label_use("family", call);
+            return;
+        } else if call.method == "collection_error"
+            && self.scope.path().starts_with("impl Metrics::")
+            && matches!(&*call.receiver, syn::Expr::Path(p) if p.path.is_ident("self"))
+        {
+            self.record("collection error label", call);
         } else if call.method == "phase" {
             self.record("phase label", call);
         } else if let syn::Expr::Path(p) = &*call.receiver
             && p.path.segments.last().is_some_and(|s| s.ident == "METRICS")
         {
-            self.record("metrics call", call);
             if call.method == "observe_http" {
-                self.label_inputs(&call.args);
+                self.label_use("metrics call", call);
+                return;
             }
+            self.record("metrics call", call);
         }
         visit::visit_expr_method_call(self, call);
     }
@@ -174,15 +298,41 @@ impl<'ast> Visit<'ast> for Finder<'_> {
         // syn leaves macro bodies opaque. Pin the tokens of a macro containing
         // a producer or family access rather than silently omitting that site.
         self.macro_calls(mac.tokens.clone());
-        if (self.path == "ops_log.rs" && mac.path.is_ident("fixed_enum"))
-            || identifiers(&mac.tokens).iter().any(|id| {
-                matches!(
-                    id.as_str(),
-                    "OpsEvent" | "ops_log" | "get_or_create" | "get_or_create_owned"
-                )
-            })
-        {
+        let fixed_values = mac.path.is_ident("fixed_enum")
+            && match self.path {
+                "ops_log.rs" => true,
+                "otlp.rs" | "metrics_export.rs" => {
+                    let expected = if self.path == "otlp.rs" {
+                        "Delivery"
+                    } else {
+                        "DropReason"
+                    };
+                    matches!(mac.tokens.clone().into_iter().next(), Some(TokenTree::Ident(name)) if name == expected)
+                }
+                _ => false,
+            };
+        let names = identifiers(&mac.tokens);
+        let family = names.contains("get_or_create") || names.contains("get_or_create_owned");
+        if fixed_values || family || names.contains("OpsEvent") || names.contains("ops_log") {
             self.record("macro", mac);
+        }
+        // Macro syntax is opaque. Alongside a family macro's complete tokens,
+        // retain candidate inputs visible at its invocation. A macro in a
+        // regular family argument can also read an enclosing binding.
+        if family || !self.reads.is_empty() {
+            for name in names {
+                if let Some(source) = self.visible(&name).map(str::to_owned) {
+                    if family {
+                        self.entries
+                            .last_mut()
+                            .unwrap()
+                            .push_str(&format!(" :: {name} from {source}"));
+                    }
+                    for reads in &mut self.reads {
+                        reads.insert((name.clone(), source.clone()));
+                    }
+                }
+            }
         }
     }
 
@@ -232,7 +382,7 @@ impl<'ast> Visit<'ast> for Finder<'_> {
             }
             return;
         }
-        visit::visit_block(self, block);
+        self.scoped(|this| visit::visit_block(this, block));
     }
 }
 
@@ -242,20 +392,9 @@ fn inventory(source: &Source) -> Vec<String> {
         scope: Scope::default(),
         entries: Vec::new(),
         bindings: Vec::new(),
-        label_names: BTreeSet::new(),
+        reads: Vec::new(),
     };
     finder.visit_file(&source.file);
-    for (scope, names, binding) in finder.bindings {
-        if names
-            .into_iter()
-            .any(|name| finder.label_names.contains(&(scope.clone(), name)))
-        {
-            finder.entries.push(format!(
-                "{} :: {scope} :: binding :: {binding}",
-                source.path
-            ));
-        }
-    }
     finder.entries
 }
 
@@ -277,75 +416,4 @@ fn fields_match_reviewed_snapshot() {
     );
 }
 
-#[test]
-fn additions_and_source_substitutions_change_the_inventory() {
-    for (path, source, from, to) in [
-        (
-            "ops_log.rs",
-            "enum OpsEvent { Demo { kind: Kind } }",
-            "kind: Kind",
-            "kind: Kind, mode: Mode",
-        ),
-        (
-            "worker.rs",
-            "fn run() { ops_log::emit(OpsEvent::Demo { kind: first }); }",
-            "first",
-            "second",
-        ),
-        (
-            "ops_log.rs",
-            r#"impl OpsEvent { fn attributes(&self) -> Labels { vec![("kind", self.first())] } }"#,
-            "first",
-            "second",
-        ),
-        (
-            "ops_log.rs",
-            r#"fn log_record() { record["traceId"] = json!(first); }"#,
-            "first",
-            "second",
-        ),
-        (
-            "metrics.rs",
-            r#"fn count() { family.get_or_create(&[("kind", first)]); }"#,
-            "first)",
-            "first), (\"mode\", second)",
-        ),
-        (
-            "metrics.rs",
-            r#"fn count() { family.get_or_create(&[("kind", first)]); }"#,
-            "first",
-            "second",
-        ),
-        (
-            "metrics.rs",
-            r#"fn count() { let labels = [("kind", first)]; family.get_or_create(&labels); }"#,
-            "first",
-            "second",
-        ),
-        (
-            "metrics/registry.rs",
-            r#"fn create() { series(&family, "kind", |i| first[i]); }"#,
-            "first",
-            "second",
-        ),
-        (
-            "worker.rs",
-            r#"fn run() { select! { _ = tick() => METRICS.observe_cache("one two", "ok") } }"#,
-            "one two",
-            "onetwo",
-        ),
-    ] {
-        let before = inventory(&parse_fixture(path, source));
-        let after = inventory(&parse_fixture(path, &source.replace(from, to)));
-        assert_ne!(before, after, "{path}: {from} -> {to}");
-    }
-}
-
-#[test]
-fn test_only_producers_are_excluded() {
-    let source = parse_fixture(
-        "metrics.rs",
-        r#"#[cfg(test)] fn count() { family.get_or_create(&[("kind", "demo")]); }"#,
-    );
-    assert!(inventory(&source).is_empty());
-}
+mod tests;
