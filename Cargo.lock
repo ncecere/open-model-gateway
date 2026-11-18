@@ -2593,6 +2593,7 @@ dependencies = [
  "proptest",
  "quote",
  "rand 0.10.3",
+ "regex",
  "reqwest",
  "rustls",
  "serde",
