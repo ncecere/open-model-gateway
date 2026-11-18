@@ -5,15 +5,32 @@ import { posix } from "node:path";
 import ts from "typescript";
 import { shellCommands } from "./policy.mjs";
 
+// Leave parent components intact until the filesystem reader has checked each prefix.
+export function wrapperPath(dir, name) {
+  if (posix.isAbsolute(name) || posix.isAbsolute(dir)) return posix.resolve(dir, name);
+  return [...dir.split("/"), ...name.split("/")].filter(part => part && part !== ".").join("/") || ".";
+}
+
 export function indexedReader(root, files) {
   const base = realpathSync(root);
   const paths = new Set(files);
   const cache = new Map();
   return path => {
-    if (!paths.has(path)) return;
+    if (posix.isAbsolute(path)) return;
     if (!cache.has(path)) {
-      const full = posix.join(base, path);
-      assert.equal(realpathSync(full), full, `wrapper path contains a symlink: ${path}`);
+      let full = base;
+      for (const part of path.split("/")) {
+        if (!part || part === ".") continue;
+        if (full === base && part === "..") return;
+        full = posix.join(full, part);
+        const entry = lstatSync(full, { throwIfNoEntry: false });
+        assert.ok(!entry?.isSymbolicLink(), `wrapper path contains a symlink: ${path}`);
+        if (!entry) {
+          assert.ok(!paths.has(posix.relative(base, full)), `indexed wrapper path is missing: ${path}`);
+          return;
+        }
+      }
+      if (!paths.has(posix.relative(base, full))) return;
       assert.ok(lstatSync(full).isFile(), `wrapper must be a regular file: ${path}`);
       cache.set(path, readFileSync(full, "utf8"));
     }
@@ -36,6 +53,12 @@ function jsCommands(source) {
         if (["exec", "execSync"].includes(name)) commands.push(...shellCommands(program.text));
         if (["spawn", "spawnSync", "execFile", "execFileSync"].includes(name)) {
           const words = [program];
+          if (program.text === "npm" && args && ts.isArrayLiteralExpression(args)) {
+            const [verb, script] = args.elements;
+            if (verb && ts.isStringLiteralLike(verb) && verb.text === "run" && script && ts.isStringLiteralLike(script)) {
+              words.push(verb, script);
+            }
+          }
           if (/^(node|bash|sh|python3?)$/.test(program.text) && args && ts.isArrayLiteralExpression(args)) {
             // Follow the literal script operand of a normal interpreter call.
             for (const arg of args.elements) {
@@ -61,9 +84,14 @@ export function cargoScanner(read, shellSources) {
   // npm searches upward for the package. Only the root package's scripts are
   // in scope. An intervening manifest selects a different package.
   function selectsRootPackage(cwd) {
-    if (posix.isAbsolute(cwd) || cwd === ".." || cwd.startsWith("../") || cwd.includes("$")) return false;
-    for (let dir = cwd; dir !== "."; dir = posix.dirname(dir)) {
-      if (read(posix.join(dir, "package.json"))) return false;
+    const normalized = posix.relative(".", cwd) || ".";
+    if (posix.isAbsolute(cwd) || normalized === ".." || normalized.startsWith("../") || cwd.includes("$")) return false;
+    // The first lookup must see every literal component, including those before "..".
+    const currentManifest = read(wrapperPath(cwd, "package.json"));
+    if (normalized === ".") return true;
+    if (currentManifest) return false;
+    for (let dir = posix.dirname(normalized); dir !== "."; dir = posix.dirname(dir)) {
+      if (read(wrapperPath(dir, "package.json"))) return false;
     }
     return true;
   }
@@ -72,12 +100,14 @@ export function cargoScanner(read, shellSources) {
     if (!source) return false;
     const commands = kind === "js" ? jsCommands(source) : kind === "shell" ? shellCommands(source) : [];
     const words = kind === "other" ? source.split(/[^a-zA-Z0-9_./-]+/)
-      : commands.filter(command => !["echo", "printf"].includes(command[0].text)).flat().map(word => word.text);
+      : commands.filter(([program]) => !["echo", "printf"].includes(program.text))
+        .flatMap(command => command[0].text === "npm" ? [command[0]] : command)
+        .filter(word => !word.variable).map(word => word.text);
     let cargo = words.some(word => word === "cargo" || word.endsWith("/cargo"));
     for (const word of words) {
       if (posix.isAbsolute(word) || (!word.startsWith("./") && !/\.(?:sh|bash|m?js|cjs|py)$/.test(word)
           && !word.startsWith("scripts/"))) continue;
-      const path = posix.join(cwd, word);
+      const path = wrapperPath(cwd, word);
       const key = JSON.stringify([cwd, path]);
       if (seen.has(key)) continue;
       seen.add(key);
@@ -89,7 +119,7 @@ export function cargoScanner(read, shellSources) {
       if (scan(script, language, cwd)) cargo = true;
     }
     for (const [program, verb, name] of commands) {
-      if (program.text !== "npm" || verb?.text !== "run" || !name || !selectsRootPackage(cwd)) continue;
+      if (program.variable || program.text !== "npm" || verb?.variable || verb?.text !== "run" || !name || name.variable || !selectsRootPackage(cwd)) continue;
       const key = `npm:${name.text}`;
       if (seen.has(key)) continue;
       seen.add(key);

@@ -4,7 +4,8 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { posix } from "node:path";
 import { test } from "node:test";
-import { cargoScanner, indexedReader } from "./cargo-wrappers.mjs";
+import { git } from "./secret-scan-lib.mjs";
+import { cargoScanner, indexedReader, wrapperPath } from "./cargo-wrappers.mjs";
 import { shellCommands } from "./policy.mjs";
 import { parseStrict, repoFiles, root, sourceFiles, toData } from "./lib.mjs";
 
@@ -77,7 +78,7 @@ function checkInputs(data, file, docs = documents, read = repoScript) {
     const scan = cargoScanner(read, shellSources);
     let tests = false;
     for (const step of steps) {
-      const cwd = posix.join(step["working-directory"] ?? defaultDir, ".");
+      const cwd = step["working-directory"] ?? defaultDir;
       const source = action && step.run
         ? step.run.replace(/\$\{\{\s*github\.action_path\s*}}|\$\{GITHUB_ACTION_PATH}|\$GITHUB_ACTION_PATH\b/gi, posix.relative(cwd, posix.dirname(file)) || ".")
         : step.run;
@@ -85,7 +86,7 @@ function checkInputs(data, file, docs = documents, read = repoScript) {
     }
     if (action) {
       for (const key of ["pre", "main", "post"]) {
-        if (block[key] && scan(read(posix.join(posix.dirname(file), block[key])), "js", ".")) tests = true;
+        if (block[key] && scan(read(wrapperPath(posix.dirname(file), block[key])), "js", ".")) tests = true;
       }
     }
     for (const step of steps) {
@@ -326,6 +327,42 @@ test("an indexed wrapper cannot be read through a symlinked ancestor", t => {
   symlinkSync(temp, posix.join(checkout, "scripts"));
   const read = indexedReader(checkout, ["scripts/check.sh"]);
   assert.throws(() => read("scripts/check.sh"), /symlink/);
+});
+
+test("Git-inventoried symlinks are refused before wrapper paths are normalized", t => {
+  const checkout = mkdtempSync(posix.join(tmpdir(), "indexed-wrapper-"));
+  t.after(() => rmSync(checkout, { recursive: true, force: true }));
+  git(checkout, "init", "-q");
+  mkdirSync(posix.join(checkout, "wrappers"));
+  symlinkSync("wrappers", posix.join(checkout, "linked"));
+  git(checkout, "add", "linked");
+  const files = sourceFiles(checkout);
+  assert.deepEqual(files, ["linked"]);
+  const read = indexedReader(checkout, files);
+  for (const [dir, run] of [[".", "./linked/check.sh"], [".", "./linked/../check.sh"],
+    ["linked/..", "./check.sh"], ["linked/..", "npm run verify"]]) {
+    const job = credentialJob(run);
+    job.steps[0]["working-directory"] = dir;
+    assert.throws(() => checkInputs({ jobs: { job } }, "fixture.yml", new Map(), read), /symlink/);
+  }
+});
+
+test("JavaScript npm calls traverse lifecycle hooks", () => {
+  const scripts = { verify: "echo fixture", postverify: "cargo test" };
+  for (const api of ["spawn", "spawnSync", "execFile", "execFileSync"]) {
+    const files = new Map([["package.json", JSON.stringify({ scripts })],
+      ["check.js", `runner.${api}("npm", ["run", "verify"])`]]);
+    assert.throws(() => checkInputs({ jobs: { job: credentialJob("node check.js") } },
+      "fixture.yml", new Map(), path => files.get(path)), /live credential|env.TOKEN/);
+  }
+});
+
+test("computed shell words do not resolve to their literal fragments", () => {
+  const files = new Map([["check.sh", "cargo test"],
+    ["package.json", JSON.stringify({ scripts: { verify: "cargo test" } })]]);
+  for (const run of ["bash check$(printf other).sh", "npm run ver$(printf other)ify"]) {
+    checkInputs({ jobs: { job: credentialJob(run) } }, "fixture.yml", new Map(), path => files.get(path));
+  }
 });
 
 test("literal JavaScript process calls distinguish executable names from messages and arguments", () => {
