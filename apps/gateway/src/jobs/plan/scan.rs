@@ -27,20 +27,24 @@ impl Jobs {
         };
         let resolved = if let BatchRequest::Chat(request) = &line.request
             && requested.is_some()
-            && !resolved.legacy
+            && !matches!(&resolved, PreferredRoute::Ready(route) if route.legacy)
         {
             match self
                 .explicit_chat_route(scope, resolved, request, &mut state.route_memo)
-                .await?
+                .await
             {
-                Ok(route) => route,
-                Err(error) => {
+                Ok(Ok(route)) => route,
+                Err(JobError::Inference(InferenceError::ModelUnavailable)) => {
+                    return Ok(Err(LineError::ModelNotFound));
+                }
+                Err(error) => return Err(error.into()),
+                Ok(Err(error)) => {
                     state.deterministic_rejects.push((state.physical, error));
                     return Ok(Ok(None));
                 }
             }
         } else {
-            resolved
+            resolved.live()?
         };
         let (price_id, max) = match self
             .price_line(scope, state, &line.request, &resolved, requested)
@@ -88,14 +92,13 @@ impl Jobs {
     async fn resolve_once(
         &self,
         scope: ScanScope<'_>,
-        models: &mut HashMap<String, Result<Arc<Resolved>, LineError>>,
+        models: &mut HashMap<String, Result<PreferredRoute, LineError>>,
         model: &str,
-    ) -> Result<Result<Arc<Resolved>, LineError>, PlanError> {
+    ) -> Result<Result<PreferredRoute, LineError>, PlanError> {
         if let std::collections::hash_map::Entry::Vacant(slot) = models.entry(model.to_owned()) {
             slot.insert(
                 self.resolve(scope.principal, model, scope.endpoint, scope.request_id)
-                    .await?
-                    .map(Arc::new),
+                    .await?,
             );
         }
         Ok(models[model].clone())
@@ -173,9 +176,10 @@ impl ScanState {
         resolved: &Resolved,
     ) -> Result<bool, LineError> {
         // Can this line run natively, and can the engine run it?
-        let encodable = resolved
-            .adapter
-            .native_batch(&resolved.deployment, endpoint)
+        let encodable = !resolved.pricing_only
+            && resolved
+                .adapter
+                .native_batch(&resolved.deployment, endpoint)
             && resolved
                 .adapter
                 .encode_native_line(&resolved.deployment, endpoint, "l0", execution_request)

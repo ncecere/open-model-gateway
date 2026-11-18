@@ -15,6 +15,7 @@ use crate::{
     filestore::StoredFile,
     governance::batch::{LineGroup, LinePreview},
     inference::types::ChatRequest,
+    routing::BatchPriceRoutes,
 };
 
 mod scan;
@@ -60,6 +61,23 @@ struct Resolved {
     adapter: Arc<dyn ProviderAdapter>,
     /// A model set up as "Batch" (0016): native Chat Completions only.
     legacy: bool,
+    /// A cooling route can size a queued line. Gateway dispatch must replan it.
+    pricing_only: bool,
+}
+
+#[derive(Clone)]
+enum PreferredRoute {
+    Ready(Arc<Resolved>),
+    Cooling(u32),
+}
+
+impl PreferredRoute {
+    fn live(self) -> Result<Arc<Resolved>, InferenceError> {
+        match self {
+            Self::Ready(route) => Ok(route),
+            Self::Cooling(seconds) => Err(InferenceError::RouteCoolingDown(seconds)),
+        }
+    }
 }
 
 /// Database lookups during explicit-maximum route selection, counted across one scan.
@@ -70,13 +88,15 @@ pub(crate) struct PlanLookupCounts {
     pub(crate) route_plan: std::sync::atomic::AtomicUsize,
 }
 
+type PriceRouteLookup = Result<Arc<BatchPriceRoutes>, InferenceError>;
+
 /// One scan fixes the principal, endpoint and routing seed. Each line is
 /// validated separately, while equivalent candidate sets share a route plan.
 #[derive(Default)]
 struct RouteMemo {
     deployments: HashMap<String, Arc<Vec<Deployment>>>,
     /// Policy-ordered routes by model and candidate set, for selection or refusal classification.
-    usable: HashMap<(String, Vec<Uuid>), Arc<Vec<Uuid>>>,
+    usable: HashMap<(String, Vec<Uuid>), PriceRouteLookup>,
 }
 
 /// What [`Jobs::scan`] returns: the groups, the request count, the native
@@ -109,7 +129,7 @@ struct PendingGroup {
 struct ScanState {
     issues: Vec<Issue>,
     ids: HashSet<String>,
-    models: HashMap<String, Result<Arc<Resolved>, LineError>>,
+    models: HashMap<String, Result<PreferredRoute, LineError>>,
     // Cache TTL requirements are part of the memoization key: a clean
     // line must not authorize a later cached line at an incompatible price.
     previews: HashMap<(Uuid, Option<u32>, u8), LinePreview>,
@@ -138,13 +158,16 @@ impl Jobs {
         model: &str,
         endpoint: BatchEndpoint,
         request_id: Uuid,
-    ) -> Result<Result<Resolved, LineError>, JobError> {
+    ) -> Result<Result<PreferredRoute, LineError>, JobError> {
         let picked = self
             .select(principal, model, endpoint.protocol(), request_id, |_, _| {
                 true
             })
             .await;
         let picked = match picked {
+            Err(InferenceError::RouteCoolingDown(seconds)) => {
+                return Ok(Ok(PreferredRoute::Cooling(seconds)));
+            }
             Err(InferenceError::Unsupported) if endpoint == BatchEndpoint::ChatCompletions => self
                 .select(
                     principal,
@@ -158,11 +181,12 @@ impl Jobs {
             other => other.map(|(d, a)| (d, a, false)),
         };
         Ok(match picked {
-            Ok((deployment, adapter, legacy)) => Ok(Resolved {
+            Ok((deployment, adapter, legacy)) => Ok(PreferredRoute::Ready(Arc::new(Resolved {
                 deployment,
                 adapter,
                 legacy,
-            }),
+                pricing_only: false,
+            }))),
             Err(InferenceError::ModelUnavailable) => Err(LineError::ModelNotFound),
             Err(InferenceError::Unsupported) => Err(LineError::ModelUnsupported),
             Err(e) => return Err(e.into()),
@@ -175,7 +199,7 @@ impl Jobs {
     async fn explicit_chat_route(
         &self,
         scope: ScanScope<'_>,
-        preferred: Arc<Resolved>,
+        preferred: PreferredRoute,
         request: &ChatRequest,
         memo: &mut RouteMemo,
     ) -> Result<Result<Arc<Resolved>, InferenceError>, JobError> {
@@ -235,8 +259,18 @@ impl Jobs {
             }
         }
         if !candidates.is_empty() {
-            let usable = self.scan_route_ids(scope, model, &candidates, memo).await?;
-            let first = usable.first().ok_or(InferenceError::ModelUnavailable)?;
+            let usable = self
+                .scan_price_routes(scope, model, &candidates, memo)
+                .await?;
+            if let Some(seconds) = usable.retry_after
+                && matches!(preferred, PreferredRoute::Cooling(_))
+            {
+                return Err(InferenceError::RouteCoolingDown(seconds).into());
+            }
+            let first = usable
+                .deployment_ids
+                .first()
+                .ok_or(InferenceError::ModelUnavailable)?;
             let deployment = candidates
                 .into_iter()
                 .find(|d| d.id == *first)
@@ -249,52 +283,64 @@ impl Jobs {
                 deployment,
                 adapter,
                 legacy: false,
+                pricing_only: usable.retry_after.is_some(),
             })));
         }
         if refused.is_empty() {
             // No coarse engine candidate: the native-batch encoder and the
             // whole-file gateway capability check still judge the preferred route.
-            return Ok(Ok(preferred));
+            return Ok(Ok(preferred.live()?));
         }
         let deployments: Vec<_> = refused.iter().map(|(d, _)| d.clone()).collect();
         let usable = self
-            .scan_route_ids(scope, model, &deployments, memo)
+            .scan_price_routes(scope, model, &deployments, memo)
             .await?;
+        if let Some(seconds) = usable.retry_after {
+            return Err(InferenceError::RouteCoolingDown(seconds).into());
+        }
         let invalid = refused.iter().find(|(d, error)| {
             matches!(
                 error,
                 InferenceError::InvalidRequest | InferenceError::InvalidField(_)
-            ) && usable.contains(&d.id)
+            ) && usable.deployment_ids.contains(&d.id)
         });
         Ok(Err(invalid.map_or(InferenceError::Unsupported, |(_, e)| *e)))
     }
 
     /// Each line has its own wire verdicts. Within one scan, identical
     /// candidate sets share their routing-policy order and request seed.
-    async fn scan_route_ids(
+    async fn scan_price_routes(
         &self,
         scope: ScanScope<'_>,
         model: &str,
         deployments: &[Deployment],
         memo: &mut RouteMemo,
-    ) -> Result<Arc<Vec<Uuid>>, JobError> {
+    ) -> Result<Arc<BatchPriceRoutes>, JobError> {
         let mut ids: Vec<_> = deployments.iter().map(|d| d.id).collect();
         ids.sort_unstable();
         let key = (model.to_owned(), ids);
         if let Some(cached) = memo.usable.get(&key) {
-            return Ok(cached.clone());
+            return Ok(cached.clone()?);
         }
         #[cfg(test)]
         self.plan_lookup_counts
             .route_plan
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let plan = self
-            .store
-            .route_plan(scope.principal, model, deployments, scope.request_id)
-            .await?;
-        let usable = Arc::new(plan.deployment_ids);
-        memo.usable.insert(key, usable.clone());
-        Ok(usable)
+        let routes = crate::routing::batch_price_routes(
+            &self.store,
+            scope.principal,
+            model,
+            deployments,
+            scope.request_id,
+        )
+        .await
+        .map(Arc::new);
+        // A scan can report many unavailable lines. Reuse the same lookup
+        // for their candidate set; transient database errors abort the scan.
+        if routes.is_ok() || matches!(routes, Err(InferenceError::ModelUnavailable)) {
+            memo.usable.insert(key, routes.clone());
+        }
+        Ok(routes?)
     }
 
     /// Validate `input` (already opened) and copy it to the batch's private
