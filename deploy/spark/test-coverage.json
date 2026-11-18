@@ -7,7 +7,7 @@
     {"ci": "cargo clippy -p open-model-gateway --bins --lib --locked -- -D warnings", "suite": "checks", "script": "cargo clippy -p open-model-gateway --bins --lib --locked -- -D warnings"},
     {"ci": "npm ci", "suite": "lib integration web", "script": "npm ci $OMG_NPM_CI_FLAGS"},
     {"ci": "node .github/scripts/rust-shards.mjs --shard ${{ matrix.shard }} --count 4", "suite": "lib integration", "script": "'(NR - 1) % n == k'", "note": "the library by the same split; the other targets by name, in the steps below"},
-    {"ci": "cargo test -p open-model-gateway --all-features --test runtime_privileges", "suite": "integration", "script": "node \"$OMG_SCRIPTS/test-integration.mjs\" runtime ||"},
+    {"ci": "node deploy/spark/test-integration.mjs runtime", "suite": "integration", "script": "node \"$OMG_SCRIPTS/test-integration.mjs\" runtime ||"},
     {"ci": "node deploy/spark/test-integration.mjs runtime-ignored", "suite": "integration", "script": "node \"$OMG_SCRIPTS/test-integration.mjs\" runtime-ignored ||"},
     {"ci": "node deploy/spark/test-integration.mjs key-contention", "suite": "integration", "script": "node \"$OMG_SCRIPTS/test-integration.mjs\" key-contention ||"},
     {"ci": "node deploy/spark/test-integration.mjs terminal", "suite": "integration", "script": "node \"$OMG_SCRIPTS/test-integration.mjs\" terminal ||"},

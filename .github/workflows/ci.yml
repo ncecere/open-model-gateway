@@ -143,7 +143,7 @@ jobs:
           FILESTORE_REQUIRE_DOCKER: "1"
         run: cargo test -p open-model-gateway --all-features --test filestore_s3
       - name: Ordinary runtime privilege tests on disposable PostgreSQL
-        run: cargo test -p open-model-gateway --all-features --test runtime_privileges
+        run: node deploy/spark/test-integration.mjs runtime
       - name: Verify enterprise runtime ACLs on disposable PostgreSQL
         run: node deploy/spark/test-integration.mjs runtime-ignored
       - name: Measure key issuance contention on dedicated runtime-role PostgreSQL

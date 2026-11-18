@@ -54,7 +54,7 @@ case "$args" in
   *"--test runtime_privileges"*)
     probes=(enterprise_runtime_allowlist_and_rollback_probes controlled_lock_stall_recovers_on_runtime_http_path)
     probes+=(populated_verifier_both populated_verifier_personal populated_verifier_scim inert_unrelated)
-    if [ "${STUB_MISSING_PROBE:-}" = 1 ]; then unset 'probes[1]'; fi
+    if [[ "${STUB_MISSING_PROBE:-}" = 1 && "$args" == *"--ignored"* ]]; then unset 'probes[1]'; fi
     n=${#probes[@]}
     if [[ "$args" == *"--list"* ]]; then
       printf '%s: test\n' "${probes[@]}"
@@ -371,6 +371,7 @@ class Integration(Pod):
         result = self.run_script(OMG_SUITE="integration", STUB_MISSING_PROBE="1", timeout=120)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("missing ignored runtime probe: controlled_lock_stall_recovers_on_runtime_http_path", result.stdout)
+        self.assertFalse(any("--test runtime_privileges" in c and "--list" not in c for c in self.stub_calls()))
 
 
     def test_each_dedicated_probe_runs_once_by_exact_name(self):

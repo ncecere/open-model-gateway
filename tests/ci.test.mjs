@@ -165,7 +165,7 @@ test("special probes retain sequential ACL, exact contention/terminal, Docker an
     "npm ci",
     "node .github/scripts/rust-shards.mjs --check-special-sources",
     "cargo test -p open-model-gateway --all-features --test filestore_s3",
-    "cargo test -p open-model-gateway --all-features --test runtime_privileges",
+    "node deploy/spark/test-integration.mjs runtime",
     "node deploy/spark/test-integration.mjs runtime-ignored",
     "node deploy/spark/test-integration.mjs key-contention",
     "node deploy/spark/test-integration.mjs terminal",

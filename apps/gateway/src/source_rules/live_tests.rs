@@ -42,6 +42,10 @@ impl Gates {
             if conditional {
                 conditions.pop();
             }
+        } else if single.as_ref().is_some_and(|name| name == "ignore") {
+            // Value imports do not shadow the built-in attribute. Rust rejects
+            // an ambiguous unqualified use of an attribute macro named ignore.
+            self.ignores.push(conditions.clone());
         } else if path
             .segments
             .last()
@@ -49,8 +53,6 @@ impl Gates {
             || aliases.matches(path)
         {
             self.tests.push(conditions.clone());
-        } else if single.as_ref().is_some_and(|name| name == "ignore") {
-            self.ignores.push(conditions.clone());
         }
     }
 
@@ -134,22 +136,42 @@ struct AliasScope {
 impl AliasScope {
     // A qualified attribute may reach an explicit re-export declared later.
     fn index(&mut self, items: &[syn::Item]) {
+        let mut edges = Vec::new();
+        Self::collect_imports(items, &mut self.module, &mut edges);
+        // Each explicit import contributes one possible destination. Resolving
+        // to a fixed point handles forward re-exports and terminates on cycles.
+        loop {
+            let count = self.declared.len();
+            for (source, target) in &edges {
+                if self.is_test_source(source) {
+                    self.declared.insert(target.clone());
+                }
+            }
+            if self.declared.len() == count {
+                break;
+            }
+        }
+    }
+
+    fn collect_imports(
+        items: &[syn::Item],
+        module: &mut Vec<String>,
+        edges: &mut Vec<(Vec<String>, Vec<String>)>,
+    ) {
         for item in items {
             match item {
                 syn::Item::Mod(m) => {
                     if let Some((_, nested)) = &m.content {
-                        self.module.push(m.ident.unraw().to_string());
-                        self.index(nested);
-                        self.module.pop();
+                        module.push(m.ident.unraw().to_string());
+                        Self::collect_imports(nested, module, edges);
+                        module.pop();
                     }
                 }
-                syn::Item::Use(u) => imports(&u.tree, self.module.clone(), &mut |path, binding| {
-                    if path.last().is_some_and(|s| s == "test")
-                        && let Some(binding) = binding
-                    {
-                        let mut name = self.module.clone();
-                        name.push(binding);
-                        self.declared.insert(name);
+                syn::Item::Use(u) => imports(&u.tree, module.clone(), &mut |path, binding| {
+                    if let Some(binding) = binding {
+                        let mut target = module.clone();
+                        target.push(binding);
+                        edges.push((path.to_owned(), target));
                     }
                 }),
                 _ => {}
@@ -157,11 +179,15 @@ impl AliasScope {
         }
     }
 
+    fn is_test_source(&self, path: &[String]) -> bool {
+        path.last().is_some_and(|name| name == "test") || self.declared.contains(path)
+    }
+
     fn import_item(&mut self, item: &syn::Item) {
         let syn::Item::Use(u) = item else { return };
         imports(&u.tree, self.module.clone(), &mut |path, binding| {
             let prefix: Vec<_> = binding.into_iter().collect();
-            if path.last().is_some_and(|s| s == "test") && !prefix.is_empty() {
+            if self.is_test_source(path) && !prefix.is_empty() {
                 self.local.insert(prefix.clone());
             }
             for name in &self.declared {
@@ -310,9 +336,15 @@ fn test_attribute_aliases_follow_the_case_ignore_conditions() {
         mod sibling {
             use super::helpers::test as ignore;
             fn calls_helper() { ignore(); }
+            #[test] #[ignore] fn safe_case() {}
         }
         mod other { use super::*; #[test] #[ignore] fn opted_in() {} }
         fn local() { use tokio::test as scoped; #[scoped] async fn block_case() {} }
+        #[cfg_attr(review_platform, chained::check)] async fn chained_case() {}
+        mod chained {
+            pub use intermediate as check;
+            use crate::exported::attribute as intermediate;
+        }
         mod exported { pub use tokio::test as attribute; }
         use exported as renamed;
         #[renamed::attribute] async fn qualified() {}
@@ -324,6 +356,7 @@ fn test_attribute_aliases_follow_the_case_ignore_conditions() {
             "missing",
             "mismatch",
             "block_case",
+            "chained_case",
             "qualified",
             "inherited"
         ]
