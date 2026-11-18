@@ -273,18 +273,19 @@ pub fn error_tool_result_requests() -> Vec<(ChatRequest, bool, String)> {
 }
 
 pub fn assert_error_tool_chat_wire(body: &serde_json::Value, error: bool, text: &str) {
-    assert_eq!(body["messages"][2]["tool_call_id"], "second-call");
+    let content = if error {
+        format!("[tool_error]\n{text}")
+    } else {
+        text.to_owned()
+    };
     assert_eq!(
-        body["messages"][2]["content"],
-        if error {
-            format!("[tool_error]\n{text}")
-        } else {
-            text.to_owned()
-        }
+        body["messages"][2],
+        serde_json::json!({"role":"tool","tool_call_id":"second-call","content":content})
     );
-    assert!(body["messages"][2].get("is_error").is_none());
-    assert_eq!(body["messages"][3]["tool_call_id"], "first-call");
-    assert_eq!(body["messages"][3]["content"], "unchanged");
+    assert_eq!(
+        body["messages"][3],
+        serde_json::json!({"role":"tool","tool_call_id":"first-call","content":"unchanged"})
+    );
 }
 
 /// Official SDK -> listening gateway -> production adapter -> controlled upstream.
