@@ -3,13 +3,12 @@
 // image is pinned, every container is locked down, nothing is exposed, everything listens on
 // loopback and three environments fit the shared CPU limit.
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import net from "node:net";
-import { promisify } from "node:util";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { parseStrict, root, toData } from "./lib.mjs";
+import { probeLoopback } from "../../deploy/spark/loopback-probe.mjs";
 
 const read = name => readFileSync(join(root, "deploy/spark", name), "utf8");
 const load = name => toData(parseStrict(read(name), name));
@@ -137,30 +136,23 @@ test("dependent native sidecars gate schema wait and gateway startup on loopback
     assert.ok(probe?.exec, `${name}: an in-container startup probe gates subsequent containers`);
     assert.equal(probe.tcpSocket, undefined, "kubelet TCP probes target the Pod IP, not pod loopback");
     assert.equal(probe.httpGet, undefined);
-    assert.deepEqual(probe.exec.command.slice(0, 2), ["node", "-e"]);
-    assert.match(probe.exec.command[2], new RegExp(`connect\\(${port}, ['"]127\\.0\\.0\\.1['"]`));
-    assert.match(probe.exec.command[2], /setTimeout/);
-    assert.match(probe.exec.command[2], /on\("error"/);
+    assert.deepEqual(probe.exec.command, ["node", "/scripts/loopback-probe.mjs", String(port)]);
     assert.ok(probe.timeoutSeconds > 0 && probe.failureThreshold > 0 && probe.periodSeconds > 0);
   }
 });
 
 
-test("sidecar probe commands succeed on a loopback listener and fail after it closes", async () => {
-  for (const sidecar of load("demo.yaml").spec.template.spec.initContainers.filter(c => c.restartPolicy === "Always")) {
-    const server = net.createServer(socket => socket.end());
-    await new Promise((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    // Keep the manifest's command, substituting only an OS-assigned test port.
-    const command = sidecar.startupProbe.exec.command.slice(1);
-    command[1] = command[1].replace(/connect\(\d+,/, `connect(${server.address().port},`);
-    try {
-      await promisify(execFile)(process.execPath, command, { timeout: 5000 });
-    } finally {
-      await new Promise(resolve => server.close(resolve));
-    }
-    await assert.rejects(promisify(execFile)(process.execPath, command, { timeout: 5000 }), { code: 1 });
+test("the shared sidecar probe succeeds on loopback and fails after the listener closes", async () => {
+  const server = net.createServer(socket => socket.end());
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const port = server.address().port;
+  try {
+    assert.equal(await probeLoopback(port), true);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
   }
+  assert.equal(await probeLoopback(port), false);
 });

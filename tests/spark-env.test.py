@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 import re
 import socket
+import signal
+import sys
 import subprocess
 import tempfile
 import unittest
@@ -135,6 +137,145 @@ class LoopbackPorts(unittest.TestCase):
                 self.assertFalse(spark.port_is_free(listener.getsockname()[1]))
 
 
+class ForwardLifecycle(unittest.TestCase):
+    # No kubectl or cluster: each wrapper owns one disposable Python listener.
+    CHILD = """
+import os, signal, socket, sys, time
+if sys.argv[2] == 'ignore':
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('127.0.0.1', int(sys.argv[1])))
+s.listen()
+print(str(os.getpid()) + " " + str(s.getsockname()[1]), flush=True)
+while True:
+    time.sleep(1)
+"""
+
+    def wrapper(self, port, mode="normal"):
+        code = f"""
+import contextlib, importlib.util, sys
+spec = importlib.util.spec_from_file_location('spark_env', {str(ROOT / 'scripts/spark-env.py')!r})
+spark = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(spark)
+env = spark.Spark('/unused')
+env.environment = lambda name: 'coder-03-omg-t599'
+env.forward_command = lambda name: [sys.executable, '-u', '-c', {self.CHILD!r}, {str(port)!r}, {mode!r}]
+spark.DEMO_PORTS = ({port},)
+with contextlib.redirect_stdout(sys.stderr):
+    env.forward('t599')
+"""
+        return subprocess.Popen([sys.executable, "-u", "-c", code], stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, start_new_session=True)
+
+    def ready(self, wrapper):
+        # select bounds the handshake even if the wrapper fails before spawning.
+        import select
+        self.assertTrue(select.select([wrapper.stdout], [], [], 5)[0], "child startup timed out")
+        line = wrapper.stdout.readline()
+        self.assertEqual(len(line.split()), 2, f"child did not start: {line!r}")
+        return tuple(map(int, line.split()))
+
+    def stop_wrapper(self, wrapper, child_fd=None):
+        if child_fd is not None:
+            try:
+                signal.pidfd_send_signal(child_fd, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            os.close(child_fd)
+        if wrapper.poll() is None:
+            wrapper.kill()
+        wrapper.communicate(timeout=5)
+
+    def test_parent_only_signals_reap_owned_child_and_allow_immediate_reforward(self):
+        for signum, mode in ((signal.SIGINT, "normal"), (signal.SIGTERM, "normal"), (signal.SIGTERM, "ignore")):
+            with self.subTest(signal=signum, mode=mode), socket.socket() as unrelated:
+                unrelated.bind(("127.0.0.1", 0))
+                unrelated.listen()
+                sentinel = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+                self.addCleanup(sentinel.wait, timeout=5)
+                self.addCleanup(sentinel.terminate)
+                wrapper = self.wrapper(0, mode)
+                child_fd = None
+                try:
+                    child_pid, port = self.ready(wrapper)
+                    child_fd = os.pidfd_open(child_pid)
+                    self.assertFalse(spark.port_is_free(port))
+                    wrapper.send_signal(signum)  # PID only, never its process group.
+                    if mode == "ignore":
+                        wrapper.send_signal(signum)
+                        wrapper.send_signal(signum)
+                    self.assertEqual(wrapper.wait(timeout=9), 128 + signum)
+                    with self.assertRaises(ProcessLookupError):
+                        os.kill(child_pid, 0)  # gone, including no unreaped zombie
+                    self.assertIsNone(sentinel.poll(), "an unrelated disposable process survives")
+                    self.assertFalse(spark.port_is_free(unrelated.getsockname()[1]))
+                    replacement = self.wrapper(port)
+                    replacement_fd = None
+                    try:
+                        replacement_pid, _ = self.ready(replacement)
+                        replacement_fd = os.pidfd_open(replacement_pid)
+                        replacement.send_signal(signal.SIGTERM)
+                        self.assertEqual(replacement.wait(timeout=9), 143)
+                    finally:
+                        self.stop_wrapper(replacement, replacement_fd)
+                finally:
+                    self.stop_wrapper(wrapper, child_fd)
+
+    def test_real_occupied_port_is_refused_before_any_child_starts(self):
+        with socket.socket() as listener:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            port = listener.getsockname()[1]
+            wrapper = self.wrapper(port)
+            try:
+                stdout, stderr = wrapper.communicate(timeout=5)
+                self.assertEqual(wrapper.returncode, 1)
+                self.assertEqual(stdout, "", "the disposable child did not start")
+                self.assertIn(f"local port {port} is already in use", stderr)
+                self.assertNotIn("Forwarding ", stderr)
+                self.assertFalse(spark.port_is_free(port))
+            finally:
+                self.stop_wrapper(wrapper)
+
+    def test_signal_during_spawn_still_reaps_the_child_and_restores_handlers(self):
+        real_popen = subprocess.Popen
+        owned = []
+        handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+
+        def spawn_then_signal(*args, **kwargs):
+            child = real_popen(*args, **kwargs)
+            owned.append(child)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return child
+
+        try:
+            with mock.patch.object(spark.subprocess, "Popen", side_effect=spawn_then_signal):
+                with self.assertRaises(SystemExit) as raised:
+                    spark.launch_forward([sys.executable, "-c", "import time; time.sleep(60)"])
+            self.assertEqual(raised.exception.code, 143)
+            self.assertIsNotNone(owned[0].returncode, "the child was waited on")
+            with self.assertRaises(ChildProcessError):
+                os.waitpid(owned[0].pid, os.WNOHANG)
+            self.assertEqual({sig: signal.getsignal(sig) for sig in handlers}, handlers)
+        finally:
+            for child in owned:
+                if child.poll() is None:
+                    child.kill()
+                child.wait(timeout=5)
+
+    def test_natural_exit_status_is_preserved_and_signal_handlers_are_restored(self):
+        handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+        for code in (0, 7):
+            result = spark.launch_forward([sys.executable, "-c", f"raise SystemExit({code})"])
+            self.assertEqual(result.returncode, code)
+        self.assertEqual({sig: signal.getsignal(sig) for sig in handlers}, handlers)
+        with self.assertRaises(FileNotFoundError):
+            spark.launch_forward(["/no-such-spark-forward-test-executable"])
+        self.assertEqual({sig: signal.getsignal(sig) for sig in handlers}, handlers)
+
+
 class Names(unittest.TestCase):
     def test_valid_and_invalid_names(self):
         for name in ("t599", "my-branch-1", "ab", "a" * 20):
@@ -234,7 +375,9 @@ class ChildProcesses(unittest.TestCase):
     def test_forward_uses_the_same_scrubbed_environment(self):
         recorder = Recorder(exists=True)
         env = spark.Spark(CONFIG, recorder, port_free=lambda port: True)
-        with mock.patch.dict(spark.os.environ, self.HOSTILE, clear=True), mock.patch.object(spark.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as started, contextlib.redirect_stdout(io.StringIO()):
+        with mock.patch.dict(spark.os.environ, self.HOSTILE, clear=True), mock.patch.object(spark.subprocess, "Popen") as started, contextlib.redirect_stdout(io.StringIO()):
+            started.return_value.wait.return_value = 0
+            started.return_value.poll.return_value = 0
             env.forward("t599")
         self.assertEqual(started.call_args.kwargs["env"], spark.child_environment(self.HOSTILE))
         self.assertNotIn("HELM_KUBEAPISERVER", started.call_args.kwargs["env"])
@@ -588,6 +731,17 @@ class Workflow(unittest.TestCase):
             self.assertIn("down t599", err.getvalue(), fail)
         self.assertFalse([c for c in Recorder(fail_on="install omg").commands() if "install" in c])
 
+    def test_rollout_timeout_points_to_scoped_sidecar_status_and_events(self):
+        recorder = Recorder(fail_on="rollout status")
+        self.patches()
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(spark.SparkError) as raised:
+            spark.Spark(CONFIG, recorder).up("t599", "v0.16.0")
+        message = str(raised.exception)
+        self.assertIn("init/sidecar startup status and pod events", message)
+        self.assertIn("kubectl --kubeconfig /k/spark.yaml -n coder-03-omg-t599 describe pods -l app.kubernetes.io/name=omg-demo", message)
+        self.assertIn("logs deployment/omg-demo --all-containers", message)
+        self.assertIn("--from-file=loopback-probe.mjs=", " ".join(recorder.commands()))
+
     def test_a_failure_before_the_namespace_says_nothing_is_left(self):
         recorder = Recorder()
         self.patches(lookup_image=mock.Mock(side_effect=spark.SparkError("no image")))
@@ -696,11 +850,11 @@ class Forward(unittest.TestCase):
         with self.assertRaisesRegex(spark.SparkError, "status 1"):
             self.forward(returncode=1)
 
-    def test_ctrl_c_is_a_normal_stop(self):
-        self.forward(interrupt=True)
+    def test_ctrl_c_reaches_the_cli_interrupt_exit(self):
+        with self.assertRaises(KeyboardInterrupt):
+            self.forward(interrupt=True)
 
     def test_the_port_probe_sees_a_listener(self):
-        import socket
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             listener.listen()

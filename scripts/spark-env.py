@@ -26,6 +26,8 @@ import os
 from pathlib import Path
 import re
 import secrets
+import signal
+import shlex
 import shutil
 import socket
 import subprocess
@@ -167,9 +169,54 @@ def helm_command(config, base, args, namespace):
 
 
 def launch(command, stdin=None, capture=False, pipe_stderr=False):
-    """The one place a child process starts, with the scrubbed environment."""
+    """Run a finite command with the scrubbed environment."""
     return subprocess.run(command, input=stdin, text=True, stdout=subprocess.PIPE if capture else None,
                           stderr=subprocess.PIPE if pipe_stderr else None, env=child_environment())
+
+
+def launch_forward(command):
+    """Own exactly one forward child; parent-only signals cannot leave its listener behind."""
+    received = None
+    child = None
+
+    def stopping(signum, _frame):
+        nonlocal received
+        if received is None:
+            received = signum
+
+    handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        # Record signals before spawning so a signal during Popen cannot lose the child handle.
+        for sig in handlers:
+            signal.signal(sig, stopping)
+        child = subprocess.Popen(command, env=child_environment(), start_new_session=True)
+        while received is None:
+            try:
+                code = child.wait(timeout=0.1)
+                break
+            except subprocess.TimeoutExpired:
+                continue
+        else:
+            code = None
+    finally:
+        try:
+            if child is not None and child.poll() is None:
+                # Signal the owned process handle only, never a PID search or a process group.
+                child.terminate()
+                try:
+                    child.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    try:
+                        child.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        raise SparkError("port-forward child did not exit after SIGKILL") from None
+        finally:
+            for sig, handler in handlers.items():
+                signal.signal(sig, handler)
+    if received is not None:
+        raise SystemExit(128 + received)
+    return subprocess.CompletedProcess(command, code)
 
 
 def describe(command):
@@ -386,7 +433,7 @@ class Spark:
     def __init__(self, config, runner=None, launcher=None, port_free=None):
         self.config = Path(config)
         self.runner = runner or run
-        self.launcher = launcher or launch
+        self.launcher = launcher or launch_forward
         self.port_free = port_free or port_is_free
         self._base = None
         self.touched = None
@@ -476,14 +523,18 @@ class Spark:
         self.helm(["install", "omg", f"{source}/deploy/helm/open-model-gateway", "-f", str(DEPLOY / "values.yaml"),
                    "--set", f"image.repository={image.split('@')[0]}", "--set", f"image.digest={digest}", "--wait", "--wait-for-jobs", "--timeout", "10m", "--hide-notes"], namespace)
         self.kubectl(["create", "configmap", "omg-demo-scripts", f"--from-file=demo-oidc.mjs={source}/scripts/demo-oidc.mjs",
-                      f"--from-file=pg-forward.mjs={DEPLOY / 'pg-forward.mjs'}"], namespace=namespace)
+                      f"--from-file=pg-forward.mjs={DEPLOY / 'pg-forward.mjs'}",
+                      f"--from-file=loopback-probe.mjs={DEPLOY / 'loopback-probe.mjs'}"], namespace=namespace)
         self.kubectl(["apply", "-f", "-"], namespace=namespace, stdin=job)
         self.wait_for_job(namespace, BOOTSTRAP_JOB)
         self.kubectl(["apply", "-f", "-"], namespace=namespace, stdin=demo)
         try:
             self.kubectl(["rollout", "status", "deployment/omg-demo", "--timeout=300s"], namespace=namespace)
         except SparkError as error:
-            raise SparkError(f"{error}; read the gateway's logs with: {self.logs_hint(namespace, 'deployment/omg-demo')}") from None
+            inspect = shlex.join(kubectl_command(self.config, self.base,
+                                 ["describe", "pods", "-l", "app.kubernetes.io/name=omg-demo"], namespace))
+            raise SparkError(f"{error}; inspect init/sidecar startup status and pod events with: {inspect}; "
+                             f"read container logs with: {self.logs_hint(namespace, 'deployment/omg-demo')}") from None
 
     def status(self, name=None):
         if name is None:
@@ -506,10 +557,7 @@ class Spark:
             if not self.port_free(port):
                 raise SparkError(f"local port {port} is already in use (only one environment can be forwarded at a time); stop what holds it and retry")
         print("Forwarding http://127.0.0.1:3000 (dashboard and API) and 127.0.0.1:18084 (demo issuer); Ctrl-C stops. Loopback only.")
-        try:
-            code = self.launcher(self.forward_command(name)).returncode
-        except KeyboardInterrupt:
-            return
+        code = self.launcher(self.forward_command(name)).returncode
         if code:
             raise SparkError(f"kubectl port-forward exited with status {code}")
 

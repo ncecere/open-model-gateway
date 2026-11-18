@@ -33,10 +33,7 @@ spec:
           # Native sidecar startup gates the next init container; probe inside its loopback network.
           startupProbe:
             exec:
-              command:
-                - node
-                - -e
-                - 'const s = require("node:net").connect(5432, "127.0.0.1", () => { s.destroy(); process.exit(0); }); s.setTimeout(2000, () => process.exit(1)); s.on("error", () => process.exit(1));'
+              command: [node, /scripts/loopback-probe.mjs, "5432"]
             periodSeconds: 1
             timeoutSeconds: 3
             failureThreshold: 60
@@ -57,10 +54,7 @@ spec:
           # Native sidecar startup gates the next init container; probe inside its loopback network.
           startupProbe:
             exec:
-              command:
-                - node
-                - -e
-                - 'const s = require("node:net").connect(18084, "127.0.0.1", () => { s.destroy(); process.exit(0); }); s.setTimeout(2000, () => process.exit(1)); s.on("error", () => process.exit(1));'
+              command: [node, /scripts/loopback-probe.mjs, "18084"]
             periodSeconds: 1
             timeoutSeconds: 3
             failureThreshold: 60
