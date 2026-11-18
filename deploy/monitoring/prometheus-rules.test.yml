@@ -241,3 +241,21 @@ tests:
       - eval_time: 25m
         alertname: GatewaySettlementAccountingFailures
         exp_alerts: []
+  - name: unchanged counters recover from a short scrape outage
+    interval: 1m
+    input_series:
+      - series: gateway_accounting_failures_total{stage="route_lookup",cause="deadline_in_database",instance="gateway-a"}
+        values: 1+0x19 stale _ _ _ _ _ 1+0x19
+      - series: gateway_accounting_failures_total{stage="explicit_settlement",cause="deadline_in_database",instance="gateway-a"}
+        values: 1+0x19 stale _ _ _ _ _ 1+0x19
+    alert_rule_test:
+      # Scrapes resume at 26m. At 30m the offset reaches the start of the gap.
+      - eval_time: 26m
+        alertname: GatewaySettlementAccountingFailures
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: GatewaySettlementAccountingFailures
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: GatewayAccountingFailures
+        exp_alerts: []
