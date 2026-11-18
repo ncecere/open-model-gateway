@@ -1,5 +1,6 @@
 """Check explicit PostgreSQL column declarations for names that need secret-storage review."""
 from collections import Counter
+from itertools import chain
 from pathlib import Path
 import re
 import tempfile
@@ -10,18 +11,18 @@ SENSITIVE = re.compile("secret|token|password|credential", re.I)
 
 
 # Match quoted tokens before punctuation so embedded commas and keywords stay opaque.
-LEXEME = re.compile(r"""\s+|--[^\n]*|/\*|\$(?:[a-zA-Z_]\w*)?\$|[eE]'(?:\\.|''|[^'\\])*'|'(?:''|[^'])*'|"(?:""|[^"])*"|[^\W\d][\w$]*|.""", re.S)
+LEXEME = re.compile(r"""[ \t\n\r\f\v]+|--[^\n]*|/\*|\$(?:[a-zA-Z_\x80-\U0010ffff][a-zA-Z_0-9\x80-\U0010ffff]*)?\$|[eE]'(?:\\.|''|[^'\\])*'|'(?:''|[^'])*'|"(?:""|[^"])*"|[a-zA-Z_\x80-\U0010ffff][a-zA-Z_0-9$\x80-\U0010ffff]*|.""", re.S)
 BLOCK = re.compile(r"/\*|\*/")
 
 
 def sql_tokens(sql):
     pos = 0
-    previous = None
+    lower_ascii = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
     while pos < len(sql):
         match = LEXEME.match(sql, pos)
         word = match[0]
         pos = match.end()
-        if word.isspace() or word.startswith("--"):
+        if word[0] in " \t\n\r\f\v" or word.startswith("--"):
             continue
         if word == "/*":
             depth = 1
@@ -35,19 +36,54 @@ def sql_tokens(sql):
             continue
         if word.startswith("$") and word.endswith("$") and len(word) >= 2:
             end = sql.index(word, pos)
-            # Migrations also contain literal DDL inside DO and function bodies.
-            if previous in ("do", "as"):
-                yield ";"
-                yield from sql_tokens(sql[pos:end])
-                yield ";"
-            else:
-                yield "'literal'"
+            yield sql[match.start():end + len(word)]
             pos = end + len(word)
         elif word.startswith('"'):
             yield word
         else:
-            yield word.lower()
-        previous = word.lower()
+            yield word.translate(lower_ascii)
+
+
+def routine_body(statement):
+    """Read only a dollar-quoted SQL or PL/pgSQL body in a DO or routine definition."""
+    is_do = statement[:1] == ["do"]
+    header = 3 if statement[:3] == ["create", "or", "replace"] else 1
+    if not is_do and not (statement[:1] == ["create"] and
+                          statement[header:header + 1] in (["function"], ["procedure"])):
+        return None
+    language = "plpgsql" if is_do else None
+    body = None
+    depth = 0
+    for i, word in enumerate(statement):
+        if word == "(":
+            depth += 1
+        elif word == ")":
+            depth -= 1
+        elif depth == 0:
+            if word == "language" and i + 1 < len(statement):
+                language = statement[i + 1].strip("'\"")
+            elif len(word) > 1 and word.startswith("$") and (is_do or statement[i - 1] == "as"):
+                body = word
+    if body and language in ("plpgsql", "sql"):
+        tag_end = body.index("$", 1) + 1
+        return body[tag_end:-tag_end]
+    return None
+
+
+def ddl_tokens(sql):
+    statement = []
+    for word in chain(sql_tokens(sql), (";",)):
+        if word != ";":
+            statement.append(word)
+            continue
+        yield from statement
+        yield ";"
+        body = routine_body(statement)
+        if body is not None:
+            yield from sql_tokens(body)
+            yield ";"
+        statement.clear()
+
 
 
 # Each item starts at the first table element or ALTER action, or after a
@@ -69,7 +105,7 @@ def items(words, start):
 
 def columns(sql):
     # A terminator for lookahead also handles a final statement without a semicolon.
-    words = list(sql_tokens(sql)) + [";"] * 3
+    words = list(ddl_tokens(sql)) + [";"] * 3
     for start, verb in enumerate(words):
         if verb not in ("create", "alter"):
             continue
@@ -79,7 +115,10 @@ def columns(sql):
         if words[i] != "table":
             continue
         i += 1
-        while words[i] in ("if", "not", "exists", "only"):
+        clause = ["if", "not", "exists"] if verb == "create" else ["if", "exists"]
+        if words[i:i + len(clause)] == clause:
+            i += len(clause)
+        if verb == "alter" and words[i] == "only":
             i += 1
         table = words[i]
         i += 1
@@ -108,7 +147,7 @@ def columns(sql):
                 yield table, words[j], words[j + 1]
 
 
-# Each exception identifies one declaration in one migration and its leading type name.
+# Each exception identifies a declaration and its first type token, or a rename.
 REVIEWED = (
     # Lookup digests for inference keys, browser sessions, invitations and admin tokens.
     ("0001_enterprise.sql", "api_keys", "secret_hash", "bytea"),
@@ -212,6 +251,35 @@ class MigrationColumns(unittest.TestCase):
             self.assertEqual(problems(root, stale), [
                 "stale: 9000_fixture.sql public.fixture example_token_ref text",
             ])
+
+
+    def test_explicit_clauses_preserve_names_and_body_language(self):
+        sql = """
+            CREATE TABLE if (é_password text);
+            ALTER TABLE if ADD COLUMN new_token text;
+            DO LANGUAGE plpgsql $code$ BEGIN ALTER TABLE if ADD inner_secret text; END $code$;
+            CREATE FUNCTION f() RETURNS void AS $$ BEGIN
+                ALTER TABLE if ADD inner_password text; END $$ LANGUAGE plpgsql;
+            CREATE FUNCTION g() RETURNS void AS $$ # ALTER TABLE ordinary ADD bogus_password text;
+            $$ LANGUAGE plpython3u;
+        """
+        self.assertCountEqual(columns(sql), [
+            ("if", "é_password", "text"), ("if", "new_token", "text"),
+            ("if", "inner_secret", "text"), ("if", "inner_password", "text"),
+        ])
+
+    def test_exception_binds_table_and_first_type_token(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            file = root / "9000_fixture.sql"
+            expected = [(file.name, "original", "token_hash", "bytea")]
+            for table, kind in [("renamed", "bytea"), ("original", "text")]:
+                with self.subTest(table=table, kind=kind):
+                    file.write_text(f"CREATE TABLE {table} (token_hash {kind})")
+                    self.assertEqual(problems(root, expected), [
+                        f"unreviewed: {file.name} {table} token_hash {kind}",
+                        f"stale: {file.name} original token_hash bytea",
+                    ])
 
 
 if __name__ == "__main__":
