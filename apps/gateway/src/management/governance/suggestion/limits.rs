@@ -130,15 +130,18 @@ pub(super) fn mapping_value(v: &Value) -> bool {
 /// No prefix rates survive a complexity refusal, including request fees and
 /// not-applicable assertions. The operator must enter and review all rates.
 pub(super) fn refused(model: &Value, workload: WorkloadKind) -> Value {
-    let mut out = map(&json!({}), workload, None);
+    // Keep the normal workload ceiling rules without traversing the refused
+    // pricing data. Only bounded scalar metadata can reach the mapper here.
+    let metadata = json!({
+        "id": model["id"].as_str().filter(|s| s.len() <= 200),
+        "context_length": model["context_length"].as_u64(),
+        "top_provider": {"max_completion_tokens": model["top_provider"]["max_completion_tokens"].as_u64()},
+    });
+    let mut out = map(&metadata, workload, None);
     let unknown: Vec<_> = Meter::ALL
         .iter()
         .map(|m| json!({"meter":m.as_str(),"unknown":true}))
         .collect();
-    out["catalog_model_id"] = model["id"]
-        .as_str()
-        .filter(|s| s.len() <= 200)
-        .map_or(Value::Null, |s| json!(s));
     out["lines"] = json!(Meter::ALL.iter().map(|m| json!({"meter":m.as_str(),"microusd_per_batch":null,"needs_review":true,"source":"manual"})).collect::<Vec<_>>());
     out["draft"]["price_lines"] = json!(unknown);
     out["display_lines"] = Value::Null;
