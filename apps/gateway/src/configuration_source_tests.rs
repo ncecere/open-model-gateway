@@ -132,6 +132,51 @@ fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
     }
 }
 
+fn expr_attrs(expr: &syn::Expr) -> &[syn::Attribute] {
+    match expr {
+        syn::Expr::Array(e) => &e.attrs,
+        syn::Expr::Assign(e) => &e.attrs,
+        syn::Expr::Async(e) => &e.attrs,
+        syn::Expr::Await(e) => &e.attrs,
+        syn::Expr::Binary(e) => &e.attrs,
+        syn::Expr::Block(e) => &e.attrs,
+        syn::Expr::Break(e) => &e.attrs,
+        syn::Expr::Call(e) => &e.attrs,
+        syn::Expr::Cast(e) => &e.attrs,
+        syn::Expr::Closure(e) => &e.attrs,
+        syn::Expr::Const(e) => &e.attrs,
+        syn::Expr::Continue(e) => &e.attrs,
+        syn::Expr::Field(e) => &e.attrs,
+        syn::Expr::ForLoop(e) => &e.attrs,
+        syn::Expr::Group(e) => &e.attrs,
+        syn::Expr::If(e) => &e.attrs,
+        syn::Expr::Index(e) => &e.attrs,
+        syn::Expr::Infer(e) => &e.attrs,
+        syn::Expr::Let(e) => &e.attrs,
+        syn::Expr::Lit(e) => &e.attrs,
+        syn::Expr::Loop(e) => &e.attrs,
+        syn::Expr::Macro(e) => &e.attrs,
+        syn::Expr::Match(e) => &e.attrs,
+        syn::Expr::MethodCall(e) => &e.attrs,
+        syn::Expr::Paren(e) => &e.attrs,
+        syn::Expr::Path(e) => &e.attrs,
+        syn::Expr::Range(e) => &e.attrs,
+        syn::Expr::RawAddr(e) => &e.attrs,
+        syn::Expr::Reference(e) => &e.attrs,
+        syn::Expr::Repeat(e) => &e.attrs,
+        syn::Expr::Return(e) => &e.attrs,
+        syn::Expr::Struct(e) => &e.attrs,
+        syn::Expr::Try(e) => &e.attrs,
+        syn::Expr::TryBlock(e) => &e.attrs,
+        syn::Expr::Tuple(e) => &e.attrs,
+        syn::Expr::Unary(e) => &e.attrs,
+        syn::Expr::Unsafe(e) => &e.attrs,
+        syn::Expr::While(e) => &e.attrs,
+        syn::Expr::Yield(e) => &e.attrs,
+        _ => &[],
+    }
+}
+
 fn named(path: &syn::Path, name: &str) -> bool {
     path.get_ident().is_some_and(|i| i.unraw() == name)
 }
@@ -203,26 +248,46 @@ fn check_macro_tokens(stream: TokenStream) {
     }
 }
 
+impl ModuleVisitor<'_> {
+    fn under_attrs(&mut self, attrs: &[syn::Attribute], visit: impl FnOnce(&mut Self)) {
+        let outer = self.gated;
+        self.gated |= test_only(attrs);
+        visit(self);
+        self.gated = outer;
+    }
+}
+
 impl<'ast> Visit<'ast> for ModuleVisitor<'_> {
     fn visit_item(&mut self, item: &'ast syn::Item) {
-        let before = self.gated;
-        self.gated |= test_only(item_attrs(item));
-        visit::visit_item(self, item);
-        self.gated = before;
+        self.under_attrs(item_attrs(item), |v| visit::visit_item(v, item));
     }
 
     fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
-        let before = self.gated;
-        self.gated |= test_only(&item.attrs);
-        visit::visit_impl_item_fn(self, item);
-        self.gated = before;
+        self.under_attrs(&item.attrs, |v| visit::visit_impl_item_fn(v, item));
     }
 
     fn visit_trait_item_fn(&mut self, item: &'ast syn::TraitItemFn) {
-        let before = self.gated;
-        self.gated |= test_only(&item.attrs);
-        visit::visit_trait_item_fn(self, item);
-        self.gated = before;
+        self.under_attrs(&item.attrs, |v| visit::visit_trait_item_fn(v, item));
+    }
+
+    fn visit_expr(&mut self, expr: &'ast syn::Expr) {
+        self.under_attrs(expr_attrs(expr), |v| visit::visit_expr(v, expr));
+    }
+
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        self.under_attrs(&local.attrs, |v| visit::visit_local(v, local));
+    }
+
+    fn visit_stmt_macro(&mut self, stmt: &'ast syn::StmtMacro) {
+        self.under_attrs(&stmt.attrs, |v| visit::visit_stmt_macro(v, stmt));
+    }
+
+    fn visit_arm(&mut self, arm: &'ast syn::Arm) {
+        self.under_attrs(&arm.attrs, |v| visit::visit_arm(v, arm));
+    }
+
+    fn visit_field_value(&mut self, field: &'ast syn::FieldValue) {
+        self.under_attrs(&field.attrs, |v| visit::visit_field_value(v, field));
     }
 
     fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
@@ -470,6 +535,30 @@ mod coverage {
                 ("inline/ordinary.rs", "fn ordinary() {}"),
             ]);
             refused(dir.path(), "cfg_attr");
+        }
+    }
+
+    #[test]
+    fn test_only_body_gates_apply_only_to_their_own_scope() {
+        for layout in [
+            r#"GATE { include!("helper.inc"); }"#,
+            r#"GATE let () = include!("helper.inc");"#,
+            r#"GATE include!("helper.inc");"#,
+            r#"GATE if true { include!("helper.inc"); }"#,
+            r#"match true { GATE true => include!("helper.inc"), _ => () }"#,
+            r#"let _ = Value { GATE field: include!("helper.inc"), ..fallback };"#,
+        ] {
+            let dir = fixture(&[("helper.inc", "()")]);
+            let entry = dir.path().join("lib.rs");
+            let gated = layout.replace("GATE", "#[cfg(test)]");
+            let live = layout.replace("GATE", "");
+            let definition = "struct Value { field: () } fn live(fallback: Value)";
+            std::fs::write(&entry, format!("{definition} {{ {gated} }}")).unwrap();
+            assert_eq!(sources_at(dir.path()).len(), 1);
+
+            // The identical layout following its gated sibling is production.
+            std::fs::write(&entry, format!("{definition} {{ {gated} {live} }}")).unwrap();
+            refused(dir.path(), "include!");
         }
     }
 

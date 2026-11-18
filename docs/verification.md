@@ -32,8 +32,9 @@ CI (`.github/workflows/ci.yml`) runs all of these; the `browser` job uses a Post
 ### Shared configuration source inventory
 
 `configuration_source_tests::production_sources` supplies the configuration,
-unsafe-site and entropy guards. It follows `lib.rs` and `main.rs`, ordinary file
-and inline modules, and unconditional literal `#[path]` attributes. A file reached
+unsafe-site and entropy guards, as well as the management JSON write matrix.
+It follows `lib.rs` and `main.rs`, ordinary file and inline modules, and
+unconditional literal `#[path]` attributes. A file reached
 by production and test declarations stays production; filenames alone never
 exclude it. Unreferenced `.rs` files are conservatively scanned too. The existing
 test-gate predicate and the consumers' policy exceptions are unchanged.
@@ -56,11 +57,13 @@ Ordinary item macros, strings, comments and test-gated helper includes remain
 supported. Benign fixtures in `configuration_source_tests::coverage` exercise
 these refusals and the supported layouts through `sources_at`.
 
-Run the real consumers with:
+Run the source guards and the management matrix with the commands below.
+The matrix requires a disposable PostgreSQL test instance with database creation privileges.
 
 ```sh
 cargo test -p open-model-gateway --lib configuration_
 cargo test -p open-model-gateway --lib entropy::tests::only_this_module_draws_randomness
+cargo test -p open-model-gateway --all-features --lib every_json_management_write_rejects_unknown_fields_after_valid_control
 ```
 
 This is source-inventory coverage, not Rust macro expansion or a sandbox:
