@@ -33,7 +33,8 @@ CI (`.github/workflows/ci.yml`) runs all of these; the `browser` job uses a Post
 
 `configuration_source_tests::production_sources` supplies the configuration,
 unsafe-site and entropy guards, as well as the management JSON write matrix.
-It follows `lib.rs` and `main.rs`, ordinary file and inline modules, and
+It follows `lib.rs`, `main.rs`, both conventional Cargo binary layouts
+(`bin/name.rs` and `bin/name/main.rs`), ordinary file and inline modules, and
 unconditional literal `#[path]` attributes. A file reached
 by production and test declarations stays production; filenames alone never
 exclude it. Unreferenced `.rs` files are conservatively scanned too. The existing

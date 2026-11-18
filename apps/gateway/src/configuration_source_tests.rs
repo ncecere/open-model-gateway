@@ -6,9 +6,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use proc_macro2::{TokenStream, TokenTree};
+use proc_macro2::{Span, TokenStream, TokenTree};
 use syn::{
     ext::IdentExt,
+    spanned::Spanned,
     visit::{self, Visit},
 };
 
@@ -181,7 +182,17 @@ fn named(path: &syn::Path, name: &str) -> bool {
     path.get_ident().is_some_and(|i| i.unraw() == name)
 }
 
-fn conditional_path(meta: &syn::Meta) -> bool {
+fn reject(from: &Path, span: Span, reason: &str) -> ! {
+    let start = span.start();
+    panic!(
+        "{}:{}:{}: {reason}",
+        from.display(),
+        start.line,
+        start.column + 1
+    );
+}
+
+fn conditional_path(from: &Path, meta: &syn::Meta) -> bool {
     let syn::Meta::List(list) = meta else {
         return false;
     };
@@ -190,58 +201,72 @@ fn conditional_path(meta: &syn::Meta) -> bool {
     }
     let args = list
         .parse_args_with(syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated)
-        .expect("unreadable cfg_attr in source inventory");
+        .unwrap_or_else(|e| reject(from, e.span(), "unreadable cfg_attr in source inventory"));
     args.iter()
         .skip(1)
-        .any(|m| named(m.path(), "path") || conditional_path(m))
+        .any(|m| named(m.path(), "path") || conditional_path(from, m))
 }
 
-fn explicit_path(attrs: &[syn::Attribute]) -> Option<String> {
+fn explicit_path(from: &Path, attrs: &[syn::Attribute]) -> Option<String> {
     let mut found = None;
     for attr in attrs {
-        assert!(
-            !conditional_path(&attr.meta),
-            "cfg_attr module path is unsupported: use an unconditional #[path] or ordinary mod declaration"
-        );
+        if conditional_path(from, &attr.meta) {
+            reject(
+                from,
+                attr.span(),
+                "cfg_attr module path is unsupported: use an unconditional #[path] or ordinary mod declaration",
+            );
+        }
         if !named(attr.path(), "path") {
             continue;
         }
         let syn::Meta::NameValue(value) = &attr.meta else {
-            panic!("invalid module path");
+            reject(from, attr.span(), "invalid module path");
         };
         let syn::Expr::Lit(value) = &value.value else {
-            panic!("nonliteral module path");
+            reject(from, attr.span(), "nonliteral module path");
         };
         let syn::Lit::Str(value) = &value.lit else {
-            panic!("nonstring module path");
+            reject(from, attr.span(), "nonstring module path");
         };
-        assert!(
-            found.replace(value.value()).is_none(),
-            "duplicate module path"
-        );
+        if found.replace(value.value()).is_some() {
+            reject(from, attr.span(), "duplicate module path");
+        }
     }
     found
 }
 
 /// Opaque macro tokens cannot select files. Inline item macros without file
 /// selection tokens remain supported; strings and comments are data, not code.
-fn check_macro_tokens(stream: TokenStream) {
+fn check_macro_tokens(from: &Path, stream: TokenStream) {
     let tokens: Vec<_> = stream.into_iter().collect();
     for (at, token) in tokens.iter().enumerate() {
         match token {
             TokenTree::Ident(i) if i.unraw() == "include" => {
-                panic!("include! inside a macro cannot be resolved by the source inventory");
+                reject(
+                    from,
+                    token.span(),
+                    "include! inside a macro cannot be resolved by the source inventory",
+                );
             }
             TokenTree::Ident(i) if i.unraw() == "mod" => {
-                panic!("module tokens inside a macro are unsupported by the source inventory");
+                reject(
+                    from,
+                    token.span(),
+                    "module tokens inside a macro are unsupported by the source inventory",
+                );
             }
-            TokenTree::Group(g) => check_macro_tokens(g.stream()),
+            TokenTree::Group(g) => check_macro_tokens(from, g.stream()),
             TokenTree::Punct(p)
                 if p.as_char() == '$'
                     && matches!(tokens.get(at + 1), Some(TokenTree::Ident(_)))
                     && matches!(tokens.get(at + 2), Some(TokenTree::Punct(p)) if p.as_char() == '!') =>
             {
-                panic!("computed macro call is unsupported by the source inventory");
+                reject(
+                    from,
+                    token.span(),
+                    "computed macro call is unsupported by the source inventory",
+                );
             }
             _ => {}
         }
@@ -270,6 +295,14 @@ impl<'ast> Visit<'ast> for ModuleVisitor<'_> {
         self.under_attrs(&item.attrs, |v| visit::visit_trait_item_fn(v, item));
     }
 
+    fn visit_impl_item_const(&mut self, item: &'ast syn::ImplItemConst) {
+        self.under_attrs(&item.attrs, |v| visit::visit_impl_item_const(v, item));
+    }
+
+    fn visit_trait_item_const(&mut self, item: &'ast syn::TraitItemConst) {
+        self.under_attrs(&item.attrs, |v| visit::visit_trait_item_const(v, item));
+    }
+
     fn visit_expr(&mut self, expr: &'ast syn::Expr) {
         self.under_attrs(expr_attrs(expr), |v| visit::visit_expr(v, expr));
     }
@@ -292,7 +325,7 @@ impl<'ast> Visit<'ast> for ModuleVisitor<'_> {
 
     fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
         let name = module.ident.unraw().to_string();
-        let explicit = explicit_path(&module.attrs);
+        let explicit = explicit_path(&self.from, &module.attrs);
         if let Some((_, items)) = &module.content {
             let dir = explicit.map_or_else(
                 || self.module_dir.join(&name),
@@ -339,9 +372,10 @@ impl<'ast> Visit<'ast> for ModuleVisitor<'_> {
             .is_some_and(|s| s.ident.unraw() == "include")
         {
             let target = syn::parse2::<syn::LitStr>(mac.tokens.clone()).unwrap_or_else(|_| {
-                panic!(
-                    "{}: include! requires a literal scanned .rs path",
-                    self.from.display()
+                reject(
+                    &self.from,
+                    mac.span(),
+                    "include! requires a literal scanned .rs path",
                 )
             });
             let target = self.modules.source_path(
@@ -350,7 +384,7 @@ impl<'ast> Visit<'ast> for ModuleVisitor<'_> {
             );
             self.modules.includes.push((self.from.clone(), target));
         } else {
-            check_macro_tokens(mac.tokens.clone());
+            check_macro_tokens(&self.from, mac.tokens.clone());
         }
     }
 
@@ -363,10 +397,13 @@ impl<'ast> Visit<'ast> for ModuleVisitor<'_> {
             syn::UseTree::Rename(n) => Some(&n.ident),
             _ => None,
         };
-        assert!(
-            !ident.is_some_and(|i| i.unraw() == "include"),
-            "include! import/alias is unsupported by the source inventory"
-        );
+        if let Some(name) = ident.filter(|i| i.unraw() == "include") {
+            reject(
+                &self.from,
+                name.span(),
+                "include! import/alias is unsupported by the source inventory",
+            );
+        }
         visit::visit_use_tree(self, tree);
     }
 }
@@ -403,6 +440,18 @@ pub(crate) fn sources_at(root: &Path) -> Vec<Source> {
     let mut all = Vec::new();
     files(&root, &mut all);
     all.sort();
+    // Cargo treats bin/name.rs and bin/name/main.rs as crate roots. Resolve
+    // their children in that context even if a test also references the file.
+    let bin = root.join("bin");
+    for path in &all {
+        let parent = path.parent();
+        if parent == Some(bin.as_path())
+            || (path.file_name().is_some_and(|name| name == "main.rs")
+                && parent.and_then(Path::parent) == Some(bin.as_path()))
+        {
+            modules.load(path, false, true);
+        }
+    }
     // Unreferenced .rs files are conservatively production too. Inspect their
     // declarations and macros before trusting the same coverage on them.
     for path in &all {
@@ -559,6 +608,66 @@ mod coverage {
             // The identical layout following its gated sibling is production.
             std::fs::write(&entry, format!("{definition} {{ {gated} {live} }}")).unwrap();
             refused(dir.path(), "include!");
+        }
+    }
+
+    #[test]
+    fn test_only_associated_constants_keep_their_gate() {
+        for declaration in [
+            r#"struct Owner; impl Owner { GATE const VALUE: () = include!("helper.inc"); }"#,
+            r#"trait Owner { GATE const VALUE: () = include!("helper.inc"); }"#,
+        ] {
+            let dir = fixture(&[("helper.inc", "()")]);
+            let entry = dir.path().join("lib.rs");
+            std::fs::write(&entry, declaration.replace("GATE", "#[cfg(test)]")).unwrap();
+            assert_eq!(sources_at(dir.path()).len(), 1);
+            std::fs::write(&entry, declaration.replace("GATE", "")).unwrap();
+            refused(dir.path(), "include!");
+        }
+    }
+
+    #[test]
+    fn conventional_cargo_binaries_resolve_children_from_the_crate_root() {
+        let dir = fixture(&[
+            (
+                "lib.rs",
+                r#"#[cfg(test)] #[path = "bin/tool/helper.rs"] mod test_copy;"#,
+            ),
+            ("bin/tool/main.rs", "mod helper; fn main() {}"),
+            ("bin/tool/helper.rs", "fn marker() {}"),
+            ("bin/flat.rs", "mod shared; fn main() {}"),
+            ("bin/shared/mod.rs", "fn marker() {}"),
+        ]);
+        let names: BTreeSet<_> = sources_at(dir.path()).into_iter().map(|s| s.name).collect();
+        assert_eq!(
+            names,
+            BTreeSet::from([
+                "lib.rs".into(),
+                "bin/tool/main.rs".into(),
+                "bin/tool/helper.rs".into(),
+                "bin/flat.rs".into(),
+                "bin/shared/mod.rs".into(),
+            ])
+        );
+    }
+
+    #[test]
+    fn unsupported_constructs_report_the_source_line_and_column() {
+        for (declaration, diagnostic) in [
+            (
+                "    #[cfg_attr(unix, path = \"other.rs\")] mod ordinary;",
+                "helper.rs:3:5: cfg_attr",
+            ),
+            (
+                "    macro_rules! modules { () => { mod helper; } }",
+                "helper.rs:3:36: module tokens",
+            ),
+        ] {
+            let dir = fixture(&[
+                ("lib.rs", "mod helper;"),
+                ("helper.rs", &format!("// header\n\n{declaration}")),
+            ]);
+            refused(dir.path(), diagnostic);
         }
     }
 
