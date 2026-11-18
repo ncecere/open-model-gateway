@@ -1,0 +1,44 @@
+{
+  "comment": "What scripts/spark-test.py runs of .github/workflows/ci.yml and what it does not. tests/supply-chain/spark-test-coverage.test.mjs compares both lists with the run commands of the CI jobs gateway-lint, gateway-tests, gateway-special and web, so a step added to CI fails that test until it is listed here and, if covered, present in deploy/spark/test-run.sh.",
+  "ci_jobs": ["gateway-lint", "gateway-tests", "gateway-special", "web"],
+  "covered": [
+    {"ci": "cargo fmt --all -- --check", "suite": "checks", "script": "cargo fmt --all -- --check"},
+    {"ci": "cargo clippy --workspace --all-targets --all-features -- -D warnings", "suite": "checks", "script": "cargo clippy --workspace --all-targets --all-features -- -D warnings"},
+    {"ci": "cargo clippy -p open-model-gateway --bins --lib --locked -- -D warnings", "suite": "checks", "script": "cargo clippy -p open-model-gateway --bins --lib --locked -- -D warnings"},
+    {"ci": "npm ci", "suite": "lib integration web", "script": "npm ci $OMG_NPM_CI_FLAGS"},
+    {"ci": "node .github/scripts/rust-shards.mjs --shard ${{ matrix.shard }} --count 4", "suite": "lib integration", "script": "'(NR - 1) % n == k'", "note": "the library by the same split; the other targets by name, in the steps below"},
+    {"ci": "cargo test -p open-model-gateway --all-features --test runtime_privileges", "suite": "integration", "script": "node \"$OMG_SCRIPTS/test-integration.mjs\" runtime ||"},
+    {"ci": "cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored --test-threads=1", "suite": "integration", "script": "node \"$OMG_SCRIPTS/test-integration.mjs\" runtime-ignored ||"},
+    {"ci": "cargo test -p open-model-gateway --all-features --lib management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement -- --ignored --exact", "suite": "integration", "script": "cargo test -p open-model-gateway --all-features --lib management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement -- --ignored --exact"},
+    {"ci": "cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact", "suite": "integration", "script": "cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact"},
+    {"ci": "npm run typecheck:web", "suite": "web", "script": "npm run typecheck:web"},
+    {"ci": "npm run test:web", "suite": "web", "script": "npm run test --workspace @omg/web -- --maxWorkers"}
+  ],
+  "uncovered": [
+    {"ci": "cargo test -p open-model-gateway --all-features --test filestore_s3", "why": "filestore_s3 starts MinIO and RustFS containers; a pod has no Docker", "suites": ["integration", "all"]},
+    {"ci": "cargo build -p open-model-gateway --all-features --bin open-model-gateway", "why": "the backup/restore drill's binary build (the drill needs Docker and age)", "suites": ["integration", "all"]},
+    {"ci": "python3 tests/backup.test.py", "why": "the backup/restore drill (Docker, age)", "suites": ["integration", "all"]},
+    {"ci": "npm run test:sdk-bases", "why": "another npm script of CI's web job", "suites": ["web", "all"]},
+    {"ci": "npm run test:demo", "why": "another npm script of CI's web job", "suites": ["web", "all"]},
+    {"ci": "npm run test:supply-chain", "why": "another npm script of CI's web job", "suites": ["web", "all"]},
+    {"ci": "node --test tests/oci-tool.test.mjs", "why": "another test of CI's web job", "suites": ["web", "all"]},
+    {"ci": "python3 -B -m unittest discover -s tests -p 'oci_*test.py' -v", "why": "another test of CI's web job", "suites": ["web", "all"]},
+    {"ci": "npm run test:ci", "why": "another npm script of CI's web job", "suites": ["web", "all"]},
+    {"ci": "npm run test:conflict-markers", "why": "another npm script of CI's web job", "suites": ["web", "all"]},
+    {"ci": "npm run test:structure", "why": "another npm script of CI's web job", "suites": ["web", "all"]},
+    {"ci": "npm run test:rules", "why": "another npm script of CI's web job", "suites": ["web", "all"]},
+    {"ci": "npm run test:monitoring", "why": "another npm script of CI's web job", "suites": ["web", "all"]},
+    {"ci": "npm run test:staging", "why": "another npm script of CI's web job (staging helpers; needs age)", "suites": ["web", "all"]},
+    {"ci": "npm run build:web", "why": "the production build of CI's web job", "suites": ["web", "all"]}
+  ],
+  "always": [
+    "amd64: this is an arm64 run, GitHub CI is the amd64 gate",
+    "the browser suite (npm run test:browser)",
+    "the sdk-compat CI matrices: vendored OAuth2 and OpenID Connect formatting, default/all-feature tests, examples, doctests and Clippy",
+    "the container and staging image tests, and the image, scan and signature jobs",
+    "cargo deny, the vendored advisories, npm audit, secret scanning and the Helm job",
+    "Node 22.23.4 here (the Dockerfile's image), CI's setup-node installs another 22.x patch release",
+    "Python 3.11 in the pod (CI's runner has another)",
+    "npm ci runs with --ignore-scripts here (CI runs it plain; the only package with an install script is the macOS-only fsevents)"
+  ]
+}

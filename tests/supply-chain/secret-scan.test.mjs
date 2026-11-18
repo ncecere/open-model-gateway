@@ -562,4 +562,6 @@ test("no test file runs git with the inherited GIT_* environment", () => {
   assert.deepEqual(bare, READ_ONLY, "git calls without env: gitEnv() (listed read-only calls excepted)");
   assert.match(readLocalFromRepo("tests/vendored-advisories.test.mjs"), /filter\(\(\[key\]\) => !key\.startsWith\("GIT_"\)\)/, "the vendored-advisories fixture drops inherited GIT_* variables");
   assert.match(readLocalFromRepo("tests/spark-env.test.py"), /for _name in \[name for name in os\.environ if name\.startswith\("GIT_"\)\]:\n    del os\.environ\[_name\]/, "the spark-env tests drop inherited GIT_* variables");
+  assert.match(readLocalFromRepo("tests/spark-test.test.py"), /for _name in \[name for name in os\.environ if name\.startswith\("GIT_"\)\]:\n    del os\.environ\[_name\]/, "the spark-test tests drop inherited GIT_* variables");
+  assert.match(readLocalFromRepo("tests/spark-test-script.test.py"), /for _name in \[name for name in os\.environ if name\.startswith\("GIT_"\)\]:\n    del os\.environ\[_name\]/, "the spark-test script tests drop inherited GIT_* variables");
 });
