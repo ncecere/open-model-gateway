@@ -209,7 +209,7 @@ test("aggregate executable accepts only the exact dependency set with every resu
 });
 
 // Synthetic Cargo/libtest output only: these tests must never build or run Rust.
-const target = (name, kind = ["test"]) => ({ name, kind, test: true });
+const target = (name, kind = ["test"]) => ({ name, kind, test: true, src_path: `/repo/tests/${name}.rs` });
 const gateway = "path+file:///repo/apps/gateway#open-model-gateway@0.9.0";
 const fixtures = () => ({
   workspace_members: [gateway, "path+file:///repo/tools/new#new@0.1.0"],
@@ -319,8 +319,11 @@ test("Cargo target invocations preserve package identity, exact multiple filters
   assert.deepEqual(validateRun("running 1 test\ntest result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s\n", { entries: [entry("live")], ignored: ["live"], total: 1 }), { passed: 0, ignored: 1, measured: 0 });
 });
 
-function syntheticCargo({ corrupt = "", failAt = -1, probe = "", probeMutation = "" } = {}) {
+function syntheticCargo({ liveIgnored, corrupt = "", failAt = -1, probe = "", probeMutation = "" } = {}) {
   const meta = fixtures();
+  if (liveIgnored !== undefined) {
+    meta.packages[0].targets.push({ ...target("custom_name"), src_path: "/repo/apps/gateway/tests/future_live.rs" });
+  }
   const calls = [];
   const run = async args => {
     calls.push(args);
@@ -335,6 +338,7 @@ function syntheticCargo({ corrupt = "", failAt = -1, probe = "", probeMutation =
     let entries = name === "open_model_gateway" ? Array.from({ length: 12 }, (_, i) => entry(i === 11 ? terminal : i === 10 ? keyContention : `m::test_${i}`))
       : name === "runtime_privileges" ? runtimeProbes.map(name => entry(name)) : [entry("normal"), entry("live")];
     let ignored = entries.filter(e => e.name === "live" || e.name === terminal || e.name === keyContention || (name === "runtime_privileges" && runtimeProbes.includes(e.name)));
+    if (name === "custom_name" && liveIgnored) ignored = entries;
     if (name === "open_model_gateway" || name === "runtime_privileges") {
       const mutate = items => items.flatMap(e => e.name !== probe ? [e]
         : probeMutation === "remove" ? []
@@ -378,6 +382,14 @@ test("orchestrator runs selected lib names once after -- --exact, runs doctests 
   for (const [index, count] of [[-1, 4], [4, 4], [0, 0], [0.5, 4], [0, 1.5], ["0", 4]]) {
     await assert.rejects(() => runShard(index, count, async () => { throw new Error("must not run"); }, () => {}), /shard/i);
   }
+});
+
+test("live source targets require every discovered case to be ignored before shard execution", async () => {
+  const { runShard } = await shards();
+  const bad = syntheticCargo({ liveIgnored: false });
+  await assert.rejects(runShard(0, 4, bad.run, () => {}), /future_live\.rs.*normal/);
+  assert.ok(bad.calls.every(args => !args.includes("--exact") && !args.includes("--doc")));
+  await runShard(0, 4, syntheticCargo({ liveIgnored: true }).run, () => {});
 });
 
 test("orchestrator rejects each missing, renamed, unignored or non-test dedicated probe before executing tests", async () => {

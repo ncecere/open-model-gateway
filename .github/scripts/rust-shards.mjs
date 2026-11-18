@@ -35,6 +35,10 @@ export function discoverTargets(metadata, output) {
       if (typeof target.test !== "boolean") fail("Missing Cargo target.test flag");
       if (!target.test) continue;
       const item = { ...identity(id, target), packageName: packages[0].name };
+      if (item.kind === "test") {
+        if (typeof target.src_path !== "string" || !target.src_path) fail("Missing Cargo test source path");
+        if (/\/tests\/[^/]*_live\.rs$/.test(target.src_path)) item.liveSource = target.src_path;
+      }
       if (expected.has(item.key)) fail(`Duplicate metadata target: ${item.key}`);
       expected.set(item.key, item);
     }
@@ -157,6 +161,10 @@ export async function runShard(index, count, run = runCargo, log = console.log) 
     const ignored = parseListing(await run([...args, "--", "--list", "--ignored", "--format", "terse", "--color", "never"]));
     if (ignored.some(e => !target.entries.some(t => t.name === e.name && t.kind === e.kind))) fail("Ignored listing is not a subset of complete inventory");
     target.ignored = ignored.map(e => e.name);
+    if (target.liveSource) {
+      const enabled = target.entries.filter(e => !target.ignored.includes(e.name));
+      if (enabled.length) fail(`${target.liveSource}: live cases must be ignored: ${enabled.map(e => e.name).join(", ")}`);
+    }
     log(`inventory ${target.key}: listed=${target.entries.length} default-ignored=${target.ignored.length}`);
   }
   for (const target of targets.filter(t => t.packageName === "open-model-gateway" && t.kind === "lib")) {
