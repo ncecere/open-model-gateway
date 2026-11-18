@@ -1,10 +1,12 @@
 // Check credential inputs before any step can relay them through a wrapper, action or GITHUB_ENV.
 import assert from "node:assert/strict";
-import { lstatSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { posix } from "node:path";
 import { test } from "node:test";
+import { cargoScanner, indexedReader } from "./cargo-wrappers.mjs";
 import { shellCommands } from "./policy.mjs";
-import { parseStrict, readLocalFromRepo, repoFiles, root, sourceFiles, toData } from "./lib.mjs";
+import { parseStrict, repoFiles, root, sourceFiles, toData } from "./lib.mjs";
 
 // GitHub secrets have arbitrary names. Check the source of a value, including
 // whole-context and dynamic lookups, instead of guessing provider variable names.
@@ -53,54 +55,10 @@ function readsSecret(value, condition) {
   return false;
 }
 
-// Only resolve literal repository paths. The index bounds reads, including when a
-// candidate workflow contains absolute paths or references outside the checkout.
-const paths = new Set(sourceFiles());
-const scripts = new Map();
-function repoScript(path) {
-  if (!paths.has(path)) return;
-  if (!scripts.has(path)) {
-    assert.ok(lstatSync(posix.join(root, path)).isFile(), `wrapper must be a regular file: ${path}`);
-    scripts.set(path, readLocalFromRepo(path));
-  }
-  return scripts.get(path);
-}
-
+const repoScript = indexedReader(root, sourceFiles());
 const documents = new Map(repoFiles().map(({ file, text }) => [file, toData(parseStrict(text, file))]));
 const liveNames = new Set(["OPENAI_KEY", "OPEN_ROUTER"]);
 const fixtureValues = new Set(["", "fixture", "test-only"]);
-
-function runsCargo(source, read, seen, shellSources, shell) {
-  if (!source) return false;
-  // Wrappers can assemble Cargo arguments in code (as rust-shards.mjs does).
-  // Treat a literal Cargo executable as sufficient, regardless of subcommand.
-  const commands = shell ? shellCommands(source) : [];
-  const words = shell
-    ? commands.filter(command => !["echo", "printf"].includes(command[0].text)).flat().map(word => word.text)
-    : source.split(/[^a-zA-Z0-9_./-]+/);
-  let cargo = words.some(word => word === "cargo" || word.endsWith("/cargo"));
-  for (const word of words) {
-    const path = word.replace(/^\.\//, "");
-    if ((!word.startsWith("./") && !/\.(?:sh|bash|m?js|cjs|py)$/.test(path) && !path.startsWith("scripts/"))
-        || seen.has(path)) continue;
-    seen.add(path);
-    const script = read(path);
-    if (!script) continue;
-    const isShell = /\.(?:sh|bash)$/.test(path) || /^#![^\n]*\b(?:ba)?sh\b/.test(script);
-    if (isShell) shellSources.set(path, script);
-    if (runsCargo(script, read, seen, shellSources, isShell)) cargo = true;
-  }
-  for (const [program, verb, name] of commands) {
-    if (program.text !== "npm" || verb?.text !== "run" || !name || seen.has(`npm:${name.text}`)) continue;
-    seen.add(`npm:${name.text}`);
-    const manifest = read("package.json");
-    const script = manifest && JSON.parse(manifest).scripts?.[name.text];
-    if (typeof script !== "string") continue;
-    shellSources.set(`npm:${name.text}`, script);
-    if (runsCargo(script, read, seen, shellSources, true)) cargo = true;
-  }
-  return cargo;
-}
 
 function checkInputs(data, file, docs = documents, read = repoScript) {
   function local(ref, ancestors) {
@@ -111,23 +69,23 @@ function checkInputs(data, file, docs = documents, read = repoScript) {
     return { node: docs.get(file), file, ancestors: new Set([...ancestors, file]) };
   }
 
-  function runner(block, file, ancestors, action) {
+  function runner(block, file, ancestors, action, defaultDir = ".") {
     const steps = block.steps ?? [];
     const conditions = new Set([block, ...steps]);
     const checks = [() => inspect(action ?? block, file, conditions, action?.runs)];
-    const seen = new Set();
     const shellSources = new Map();
-    const scan = (source, shell) => runsCargo(source, read, seen, shellSources, shell);
+    const scan = cargoScanner(read, shellSources);
     let tests = false;
     for (const step of steps) {
+      const cwd = posix.join(step["working-directory"] ?? defaultDir, ".");
       const source = action && step.run
-        ? step.run.replace(/\$\{\{\s*github\.action_path\s*}}|\$\{GITHUB_ACTION_PATH}|\$GITHUB_ACTION_PATH\b/gi, posix.dirname(file))
+        ? step.run.replace(/\$\{\{\s*github\.action_path\s*}}|\$\{GITHUB_ACTION_PATH}|\$GITHUB_ACTION_PATH\b/gi, posix.relative(cwd, posix.dirname(file)) || ".")
         : step.run;
-      if (scan(source, true)) tests = true;
+      if (scan(source, "shell", cwd)) tests = true;
     }
     if (action) {
       for (const key of ["pre", "main", "post"]) {
-        if (block[key] && scan(read(posix.join(posix.dirname(file), block[key])), false)) tests = true;
+        if (block[key] && scan(read(posix.join(posix.dirname(file), block[key])), "js", ".")) tests = true;
       }
     }
     for (const step of steps) {
@@ -151,7 +109,8 @@ function checkInputs(data, file, docs = documents, read = repoScript) {
         assert.notEqual(job.secrets, "inherit", `${path}: inheriting secrets in a test job`);
         inspect(job, path, new Set([job]));
       } else {
-        const result = runner(job, path, ancestors);
+        const defaultDir = job.defaults?.run?.["working-directory"] ?? node.defaults?.run?.["working-directory"];
+        const result = runner(job, path, ancestors, undefined, defaultDir);
         if (!result.tests) continue;
         // Actions in earlier steps can prepare the environment for later steps.
         result.checks.forEach(check => check());
@@ -221,7 +180,7 @@ test("provider secret references and inheritance are refused regardless of the c
   ]) assert.throws(() => checkInputs(data, "fixture.yml", new Map([
     [".github/workflows/tests.yml", { jobs: { leg: job } }],
     [".github/actions/test/action.yml", { runs: job }],
-  ]), path => path === "main.js" ? "cargo test" : undefined), /fixture\.yml.*(?:secret|live credential)/i, JSON.stringify(data));
+  ]), path => path === "main.js" ? 'spawn("cargo", ["test"])' : undefined), /fixture\.yml.*(?:secret|live credential)/i, JSON.stringify(data));
 
   checkInputs({ jobs: { prose: { steps: [{ run: "echo 'scan for secrets at ${{ github.sha }}'" }] },
     tests: job, publish: { env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" } } } }, "ok.yml");
@@ -320,4 +279,59 @@ test("only the root npm wrapper leading to Cargo restricts its job inputs", () =
   check();
   job.steps[0].run = "npm run verify";
   assert.throws(check, /fixture.yml.jobs.job.env.TOKEN: .*secrets/);
+});
+
+function credentialJob(run) {
+  return { env: { TOKEN: "${{ secrets.FIXTURE }}" }, steps: [{ run }] };
+}
+
+for (const hook of ["preverify", "postverify"]) {
+  test(`npm run follows ${hook} when the main script is benign`, () => {
+    const scripts = { verify: "echo fixture", [hook]: "bash check.sh" };
+    const files = new Map([["package.json", JSON.stringify({ scripts })], ["check.sh", "cargo test"]]);
+    const job = credentialJob("npm run verify");
+    job.steps[0]["working-directory"] = "suite";
+    assert.throws(() => checkInputs({ jobs: { job } }, "fixture.yml", new Map(), p => files.get(p)), /env.TOKEN/);
+  });
+}
+
+test("shell wrappers use the effective run directory at each step", () => {
+  const job = credentialJob("bash check.sh");
+  const workflow = { jobs: { job } };
+  const check = () => checkInputs(workflow, "fixture.yml", new Map(), path => files.get(path));
+  const files = new Map([["check.sh", "echo fixture"], ["suite/check.sh", "bash inner.sh"], ["suite/inner.sh", "cargo test"]]);
+  check();
+  workflow.defaults = { run: { "working-directory": "suite" } };
+  assert.throws(check, /env.TOKEN/);
+  job.defaults = { run: { "working-directory": "." } };
+  check();
+  job.steps.push({ run: "bash check.sh", "working-directory": "suite" });
+  assert.throws(check, /env.TOKEN/);
+});
+
+test("the container image denylist allows a notification input, the shard runner refuses it", () => {
+  const job = credentialJob("npm run test:container");
+  const check = () => checkInputs({ jobs: { job } }, "fixture.yml");
+  check();
+  job.steps[0].run = "node .github/scripts/rust-shards.mjs";
+  assert.throws(check, /env.TOKEN/);
+});
+
+test("an indexed wrapper cannot be read through a symlinked ancestor", t => {
+  const temp = mkdtempSync(posix.join(tmpdir(), "wrapper-"));
+  t.after(() => rmSync(temp, { recursive: true, force: true }));
+  const checkout = posix.join(temp, "repo");
+  mkdirSync(checkout);
+  writeFileSync(posix.join(temp, "check.sh"), "echo fixture");
+  symlinkSync(temp, posix.join(checkout, "scripts"));
+  const read = indexedReader(checkout, ["scripts/check.sh"]);
+  assert.throws(() => read("scripts/check.sh"), /symlink/);
+});
+
+test("literal JavaScript process calls distinguish executable names from messages and arguments", () => {
+  const job = credentialJob("node check.js");
+  const check = source => checkInputs({ jobs: { job } }, "fixture.yml", new Map(),
+    path => path === "check.js" ? source : undefined);
+  check('console.log("cargo"); runner.spawnSync("tar", ["cargo"]); // spawn("cargo")');
+  assert.throws(() => check('runner.execFileSync("cargo", args)'), /env.TOKEN/);
 });
