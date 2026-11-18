@@ -2,9 +2,10 @@
 // tests/supply-chain/*.test.mjs): the strict YAML reader, the repository's workflows and
 // local actions, the Dockerfile walker and the approved image references.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMap, parseDocument } from "yaml";
+import { gitFiles } from "../git.mjs";
 
 export const root = fileURLToPath(new URL("../..", import.meta.url));
 export const workflowsDir = join(root, ".github/workflows");
@@ -51,7 +52,9 @@ export const APPROVED_RUNTIME = "gcr.io/distroless/cc-debian13:nonroot@sha256:cb
 
 // Every Dockerfile anywhere in the repository (not a fixed list): a file named
 // `Dockerfile*`, `*.dockerfile` or `Containerfile*`, in any case (#488), the names Docker,
-// BuildKit and Podman look for or are commonly given. It skips the directories that are
+// BuildKit and Podman look for or are commonly given. Git lists tracked (even force-added)
+// and new untracked files, excluding ignored artifacts such as .local/ (#609).
+// It also skips the directories that are
 // not source: `.git` (Git's own objects),
 // `node_modules` (installed npm packages), `target*` (Cargo's build output, also
 // `target-<name>` directories of parallel builds), `dist` (the built SPA) and `.turbo`
@@ -62,17 +65,10 @@ export const DOCKERFILE_SKIP_DIRS = /^(\.git|node_modules|target.*|dist|\.turbo)
 // A `.dockerignore` named after its Dockerfile (`Dockerfile.dockerignore`) is not one.
 export const DOCKERFILE_NAME = /^(dockerfile.*|.*\.dockerfile|containerfile.*)$/i;
 export const isDockerfileName = name => DOCKERFILE_NAME.test(name) && !/\.dockerignore$/i.test(name);
+export const sourceFiles = (dir = root) => gitFiles(dir, { others: true })
+  .filter(file => !file.split("/").slice(0, -1).some(segment => DOCKERFILE_SKIP_DIRS.test(segment)));
 export function findDockerfiles(dir = root) {
-  const out = [];
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (e.isDirectory()) {
-      if (DOCKERFILE_SKIP_DIRS.test(e.name)) continue;
-      out.push(...findDockerfiles(join(dir, e.name)));
-    } else if (isDockerfileName(e.name)) {
-      out.push(join(dir, e.name));
-    }
-  }
-  return out;
+  return sourceFiles(dir).filter(file => isDockerfileName(posix.basename(file))).map(file => join(dir, file));
 }
 // Each file the walker finds must be a known Dockerfile; anything else fails here by name,
 // before a reader error about its contents (#488).
