@@ -12,13 +12,13 @@ import { admin, auditor, session, testClient } from "../lib/test-fixtures";
 const root = "/api/v1/platform", imports = `${root}/provider-cost-imports`, mappings = `${root}/provider-cost-mappings`;
 const report = { id: "import", account_id: "account", provider: "anthropic", period_start: "2026-10-01T00:00:00Z", period_end: "2026-10-02T00:00:00Z", supersedes: "previous", line_count: 2 };
 const binding = { provider_workspace_id: "already-mapped", connection_id: "connection", deployment_id: null, workspace_id: null, effective_start: report.period_start, effective_end: report.period_end, exclusive: false, non_omg_traffic: true, attested: true, evidence_reference: "old-proof", model_mappings: [] };
-function serve(options: { reports?: Promise<Response>; refusal?: number; conflict?: number; modelMappings?: { provider_model: string; upstream_model: string }[] } = {}) {
+function serve(options: { reports?: Promise<Response>; latestAfterSave?: string; refusal?: number; conflict?: number; modelMappings?: { provider_model: string; upstream_model: string }[] } = {}) {
   let latest = "mapping-old";
   const fetch = vi.fn().mockImplementation((url: string, init: RequestInit) => {
     if (init.method === "POST") {
       if (url === imports && options.refusal) return Promise.resolve(Response.json({ error: { message: '<script>parse refusal</script> Exact refusal.' } }, { status: options.refusal }));
       if (url === mappings && options.conflict) { latest = "mapping-concurrent"; return Promise.resolve(Response.json({ error: { message: "Overlapping coverage or invalid supersession; select the current exact revision" } }, { status: options.conflict })); }
-      if (url === mappings) latest = "mapping-new";
+      if (url === mappings) latest = options.latestAfterSave ?? "mapping-new";
       return Promise.resolve(Response.json({ id: url === imports ? "import" : url === mappings ? "mapping-new" : "frozen-new" }));
     }
     let data: unknown = { data: [] };
@@ -27,7 +27,7 @@ function serve(options: { reports?: Promise<Response>; refusal?: number; conflic
       { amount_microusd: "-9007199254740993", dimensions: { workspace_id: null, model: "claude" } },
       { amount_microusd: "-2", dimensions: { workspace_id: "already-mapped" } },
     ] };
-    if (url.startsWith(`${mappings}?`)) data = { data: [{ id: latest, account_id: "account", supersedes: latest === "mapping-concurrent" ? "mapping-old" : null }] };
+    if (url.startsWith(`${mappings}?`)) data = { data: [{ id: latest, account_id: "account", supersedes: latest === "mapping-later" ? "mapping-new" : latest === "mapping-concurrent" ? "mapping-old" : null }] };
     if (url === `${mappings}/${latest}`) data = { id: latest, account_id: "account", evidence_reference: "old-revision-proof", bindings: [{ ...binding, model_mappings: options.modelMappings ?? [], binding_number: 1 }] };
     if (url.startsWith(`${root}/providers?`)) data = { data: [{ id: "connection", name: "Anthropic connection", provider: "anthropic" }, { id: "other", name: "Other provider", provider: "openai" }] };
     return Promise.resolve(Response.json(data));
@@ -102,7 +102,10 @@ describe("Admin provider-cost writes", () => {
     const user = userEvent.setup({ applyAccept: false });
     const table = await screen.findByRole("table", { name: "Provider dimensions" });
     const panel = within(screen.getByRole("tabpanel", { name: "Mappings" }));
-    expect(table.textContent).toContain("Provider default / missing identifier"); expect(table.textContent).toContain("Unmapped"); expect(table.textContent).toContain("Mapped");
+    for (const [dimension, coverage] of [["Provider default / missing identifier", "Unmapped"], ["already-mapped", "Mapped"]]) {
+      const row = within(table).getByText(dimension, { selector: "th" }).closest("tr")!;
+      expect(within(row).getByText(coverage, { exact: true })).toBeTruthy();
+    }
     expect((panel.getByLabelText("Provider workspace dimension") as HTMLSelectElement).value).toBe("0");
     await user.selectOptions(panel.getByLabelText("Gateway connection"), "connection");
     expect(panel.queryByRole("option", { name: "Other provider" })).toBeNull();
@@ -125,7 +128,7 @@ describe("Admin provider-cost writes", () => {
   it("hands a newly saved mapping revision to freeze with exact import and mapping IDs", async () => {
     let releaseReports!: (response: Response) => void;
     const reports = new Promise<Response>(resolve => { releaseReports = resolve; });
-    const fetch = serve({ reports }), user = await open();
+    const fetch = serve({ reports, latestAfterSave: "mapping-later" }), user = await open();
     expect(screen.getByLabelText<HTMLSelectElement>("Existing import").disabled).toBe(true);
     const selecting = selectExistingImport(user);
     releaseReports(Response.json({ data: [report] }));
@@ -137,6 +140,8 @@ describe("Admin provider-cost writes", () => {
     await user.click(screen.getByRole("button", { name: "Save mapping revision" }));
     await screen.findByText("Saved mapping revision: mapping-new");
     expect(JSON.parse(fetch.mock.calls.find(([url, init]) => url === mappings && init.method === "POST")![1].body)).toEqual({ account_id: "account", supersedes: "mapping-old", evidence_reference: "finance:revision", bindings: [binding] });
+    await user.click(screen.getByRole("button", { name: "Reload latest mapping and discard draft" }));
+    await screen.findByText("Base mapping revision: mapping-later");
     await user.click(screen.getByRole("tab", { name: "Freeze snapshot" }));
     expect(screen.getByText(/Mapping revision: mapping-new/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Freeze reconciliation" }));
