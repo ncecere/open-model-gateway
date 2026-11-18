@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { APPROVED_RUST, OTHER_BASE, parseStrict, readLocalFromRepo, toData } from "./lib.mjs";
 import { buildChecks, checkedComposeFiles, composeBuildViolations, composeDotenvViolations, repoComposeFiles, withStep } from "./policy.mjs";
+import { git } from "./secret-scan-lib.mjs";
 
 const COMPOSE_FILE = "deploy/staging/compose.yaml";
 const staging = () => toData(parseStrict(readLocalFromRepo(COMPOSE_FILE), COMPOSE_FILE));
@@ -31,6 +32,7 @@ test("no tracked .env sits beside a checked Compose file", () => {
 test("every YAML file with Compose services is checked, wherever it is", () => {
   const dir = mkdtempSync(join(tmpdir(), "omg-compose-"));
   try {
+    git(dir, "init", "-q");
     mkdirSync(join(dir, "tools/x"), { recursive: true });
     writeFileSync(join(dir, "tools/x/stack.yml"), "services:\n  app:\n    build:\n      context: .\n      target: build\n");
     writeFileSync(join(dir, "notes.yml"), "title: not compose\n");
@@ -63,8 +65,8 @@ const REFUSED_COMPOSE_EDITS = [
   ["additional_contexts swapping the Rust base", d => { d.services.gateway.build.additional_contexts = { [APPROVED_RUST]: `docker-image://${OTHER_BASE}` }; }, /'additional_contexts' is not allowed/],
   ["args with BUILDKIT_SYNTAX", d => { d.services.gateway.build.args = { BUILDKIT_SYNTAX: "docker.io/docker/dockerfile:1" }; }, /'args' is not allowed/],
   ["an inline Dockerfile", d => { d.services.gateway.build.dockerfile_inline = `FROM ${OTHER_BASE}`; }, /'dockerfile_inline' is not allowed/],
-  ["an unknown Dockerfile.release", d => { d.services.gateway.build.dockerfile = "Dockerfile.release"; }, /dockerfile 'Dockerfile\.release' is not one of the known/],
-  ["a Containerfile", d => { d.services.gateway.build.dockerfile = "Containerfile"; }, /dockerfile 'Containerfile' is not one of the known/],
+  ["a missing Dockerfile.release", d => { d.services.gateway.build.dockerfile = "Dockerfile.release"; }, /dockerfile 'Dockerfile\.release' is outside the Git source inventory/],
+  ["a missing Containerfile", d => { d.services.gateway.build.dockerfile = "Containerfile"; }, /dockerfile 'Containerfile' is outside the Git source inventory/],
   ["a Dockerfile in dist", d => { d.services.gateway.build.dockerfile = "apps/web/dist/Dockerfile"; }, /in 'dist'/],
   ["a context in a skipped directory", d => { d.services.gateway.build.context = "../../target"; }, /context '\.\.\/\.\.\/target' is in 'target'/],
   ["a context outside the checkout", d => { d.services.gateway.build.context = "../../.."; }, /leaves the checkout/],
