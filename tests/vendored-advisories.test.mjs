@@ -1,6 +1,6 @@
 // Offline acceptance against the real pinned scanner, not a scanner stub.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./process.mjs";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,7 +52,7 @@ if (absent && (process.env.CI || process.env.CARGO_DENY)) throw new Error("cargo
 
 // Import inside tests so the initial test-first failure identifies the missing implementation.
 test("projection changes only registered identity and graph references; source input is untouched", async () => {
-  const { projectMetadata } = await import(script);
+  const { projectMetadata } = await import("../.github/scripts/vendored-advisories.mjs");
   const f = fixture();
   try {
     f.register();
@@ -72,7 +72,7 @@ test("projection changes only registered identity and graph references; source i
 });
 
 test("registration and graph validation fail closed", async t => {
-  const { projectMetadata } = await import(script);
+  const { projectMetadata } = await import("../.github/scripts/vendored-advisories.mjs");
   const f = fixture();
   try {
     f.register();
@@ -122,7 +122,7 @@ test("registration and graph validation fail closed", async t => {
 });
 
 test("explicit workspace list parsing is narrow, canonical and fail closed", async t => {
-  const { projectMetadata } = await import(script);
+  const { projectMetadata } = await import("../.github/scripts/vendored-advisories.mjs");
   const f = fixture(false);
   try {
     const metadata = f.metadata();
@@ -150,7 +150,7 @@ test("explicit workspace list parsing is narrow, canonical and fail closed", asy
 });
 
 test("real cargo-deny misses path identity, flags projection and unchanged registry identity", { skip: absent ? "cargo-deny 0.20.2 absent; install CI's pinned tool or set CARGO_DENY" : false }, async t => {
-  const { projectMetadata } = await import(script);
+  const { projectMetadata } = await import("../.github/scripts/vendored-advisories.mjs");
   const f = fixture();
   try {
     advisoryDb(f);
@@ -234,7 +234,7 @@ test("registered safe upstream version passes the actual CLI coverage guard", { 
 });
 
 test("registered packages pruned by the real scanner fail closed instead of claiming coverage", { skip: absent ? "cargo-deny 0.20.2 absent; install CI's pinned tool or set CARGO_DENY" : false }, async t => {
-  const { projectMetadata } = await import(script);
+  const { projectMetadata } = await import("../.github/scripts/vendored-advisories.mjs");
   for (const kind of ["impossible target", "policy exclusion"]) await t.test(kind, () => {
     const f = fixture();
     try {
@@ -261,7 +261,7 @@ test("registered packages pruned by the real scanner fail closed instead of clai
 });
 
 test("scanner coverage requires strict, complete graph diagnostic accounting", async t => {
-  const { validateScannerCoverage } = await import(script);
+  const { validateScannerCoverage } = await import("../.github/scripts/vendored-advisories.mjs");
   const metadata = {
     packages: [{ name: "fixture", version: "0.1.0" }, { ...registration }, { name: "other", version: "1.0.0" }],
     metadata: { vendored: { smallvec: registration } },
@@ -292,7 +292,7 @@ test("scanner coverage requires strict, complete graph diagnostic accounting", a
 });
 
 test("no-vendor control passes unchanged, including the actual CLI", { skip: absent ? "cargo-deny 0.20.2 absent; install CI's pinned tool or set CARGO_DENY" : false }, async () => {
-  const { projectMetadata } = await import(script);
+  const { projectMetadata } = await import("../.github/scripts/vendored-advisories.mjs");
   const f = fixture(false);
   try {
     advisoryDb(f);

@@ -13,11 +13,13 @@
 // matching `>>>>>>> `, so a future setext heading or divider that happens to be
 // exactly seven `=` characters on its own line still passes.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "./process.mjs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { gitEnv, gitFiles } from "./git.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
@@ -64,10 +66,7 @@ const EXCLUDED = /(^|\/)(node_modules|target)\//;
 // never needs this check. This runs in CI on what actually landed, so it does
 // not depend on the local `git grep` check that skipped unmerged paths.
 export function trackedTextFiles(cwd = root) {
-  const out = execFileSync("git", ["ls-files"], { cwd, encoding: "utf8" });
-  return out
-    .split("\n")
-    .filter(Boolean)
+  return gitFiles(cwd)
     .filter(f => !EXCLUDED.test(f))
     .filter(f => {
       let buf;
@@ -143,4 +142,43 @@ test("fixtures: node_modules and target paths are excluded from the tracked-file
   const files = ["src/lib.rs", "node_modules/pkg/index.js", "apps/web/node_modules/x.ts", "target/debug/build", "docs/readme.md"];
   const kept = files.filter(f => !/(^|\/)(node_modules|target)\//.test(f));
   assert.deepEqual(kept, ["src/lib.rs", "docs/readme.md"]);
+});
+
+test("tracked text discovery uses its own Git index and preserves literal filenames", t => {
+  const dir = mkdtempSync(join(tmpdir(), "omg-conflict-git-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const git = (...args) => execFileSync("git", args, { cwd: dir, env: gitEnv() });
+  git("init", "-q");
+  writeFileSync(join(dir, ".gitignore"), "ignored.txt\n");
+  for (const file of ["tracked.txt", "space name\nline.txt", "ignored.txt", "untracked.txt"]) writeFileSync(join(dir, file), "text\n");
+  git("add", ".gitignore", "tracked.txt", "space name\nline.txt");
+  git("add", "-f", "ignored.txt");
+  const expected = [".gitignore", "ignored.txt", "space name\nline.txt", "tracked.txt"];
+  assert.deepEqual(trackedTextFiles(dir), expected);
+  const before = process.env.GIT_INDEX_FILE;
+  process.env.GIT_INDEX_FILE = join(dir, "absent-index");
+  try {
+    assert.deepEqual(trackedTextFiles(dir), expected);
+  } finally {
+    if (before === undefined) delete process.env.GIT_INDEX_FILE; else process.env.GIT_INDEX_FILE = before;
+  }
+});
+
+test("tracked text discovery fails on Git invocation errors", t => {
+  const dir = mkdtempSync(join(tmpdir(), "omg-conflict-error-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  assert.throws(() => trackedTextFiles(dir), /git|Git/);
+  const bin = join(dir, "bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "git"), `#!${process.execPath}\nprocess.stdout.write("partial.txt\\0");\nprocess.stderr.write("fixture git failure");\nprocess.exitCode = 128;\n`);
+  chmodSync(join(bin, "git"), 0o755);
+  const before = process.env.PATH;
+  try {
+    process.env.PATH = bin;
+    assert.throws(() => trackedTextFiles(root), /fixture git failure/);
+    process.env.PATH = dir;
+    assert.throws(() => trackedTextFiles(root), /ENOENT/);
+  } finally {
+    process.env.PATH = before;
+  }
 });

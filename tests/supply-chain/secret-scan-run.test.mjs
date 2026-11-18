@@ -4,7 +4,7 @@
 // (always), or with the real pinned scanner when GITLEAKS_BIN names one (below). Secrets
 // are made up at run time.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "../process.mjs";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";

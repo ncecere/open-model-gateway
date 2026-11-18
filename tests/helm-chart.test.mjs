@@ -4,7 +4,7 @@
 // with plain text/regex checks (no new YAML-parsing dependency). Pairs with
 // `helm lint` (run separately; see docs/kubernetes.md#validation).
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./process.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
