@@ -412,7 +412,11 @@ def stack_facts(stack):
     except (subprocess.CalledProcessError, IndexError, ValueError):
         pass
     facts["host"] = f"{platform.system()} {platform.machine()}"
-    commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True, text=True)
+    # A Git hook's repository/index overrides must not change the recorded revision.
+    git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    git_env.update({"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"})
+    commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, env=git_env,
+                            capture_output=True, text=True, check=True)
     facts["git"] = commit.stdout.strip()
     try:
         facts["db_size_bytes"] = int(stack.psql(f"SELECT pg_database_size('{stack.db}')"))
