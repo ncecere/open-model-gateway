@@ -496,8 +496,9 @@ jobs:
           context: .
           load: true
           tags: open-model-gateway:staging
-          cache-from: type=gha,scope=staging
-          cache-to: type=gha,mode=max,scope=staging
+          # Cache scopes do not authenticate the job that supplied the layers.
+          # Rehearse a fresh build, just as the published images are built.
+          no-cache: true
       # The tag run's scan, before any tag exists (#475): v0.14.0 was tagged and
       # then refused for fixable HIGH findings in the runtime base. Same pinned,
       # checksum-verified Trivy 0.70.0 and the same policy as image.yml's verify

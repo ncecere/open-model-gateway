@@ -69,8 +69,8 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.name.outputs.sha }}
             org.opencontainers.image.licenses=MIT
-          cache-from: type=gha,scope=loadtest-linux-amd64
-          cache-to: type=gha,mode=max,scope=loadtest-linux-amd64
+          # Development images have the same cache trust boundary as releases.
+          no-cache: true
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: upload

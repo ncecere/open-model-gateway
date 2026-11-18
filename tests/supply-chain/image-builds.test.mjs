@@ -15,6 +15,45 @@ const withBuildInputs = (name, mutate) => {
   return buildChecks(name, data);
 };
 
+// Cache scopes are lookup keys, not job-level authorization boundaries (#570).
+// Even a read-only job has an Actions runtime token; image builds must not consume
+// layers supplied by another job. These fixtures never contact a cache service.
+for (const [name, job] of Object.entries(BUILD_JOBS)) {
+  test(`${name}: image builds ignore layer caches and have no cache import or export`, () => {
+    const inputs = stepOf(loadWorkflow(name).jobs[job], "docker/build-push-action").with;
+    assert.equal(inputs["no-cache"], true);
+    for (const key of ["cache-from", "cache-to", "no-cache-filters"]) assert.ok(!(key in inputs), key);
+  });
+
+  const mutations = [
+    ["an omitted no-cache input", w => { delete w["no-cache"]; }, /no-cache must be literal true/],
+    ["no-cache false", w => { w["no-cache"] = false; }, /no-cache must be literal true/],
+    ["a string false", w => { w["no-cache"] = "false"; }, /no-cache must be literal true/],
+    ["an expression controlling no-cache", w => { w["no-cache"] = "${{ matrix.no_cache }}"; }, /no-cache must be literal true/],
+    ["stage-only cache bypass", w => { delete w["no-cache"]; w["no-cache-filters"] = "build"; }, /no-cache-filters is not allowed/],
+    ["a same-ref GHA cache import", w => { w["cache-from"] = "type=gha,scope=image-linux-amd64"; }, /cache-from is not allowed/],
+    ["a workflow-named GHA cache import", w => { w["cache-from"] = "type=gha,scope=image-workflow-main-linux-amd64"; }, /cache-from is not allowed/],
+    ["a registry cache import", w => { w["cache-from"] = "type=registry,ref=ghcr.io/bitop-dev/open-model-gateway:cache"; }, /cache-from is not allowed/],
+    ["a local cache import", w => { w["cache-from"] = "type=local,src=/tmp/build-cache"; }, /cache-from is not allowed/],
+    ["a GHA cache export", w => { w["cache-to"] = "type=gha,mode=max,scope=image-linux-amd64"; }, /cache-to is not allowed/],
+    ["an empty cache import", w => { w["cache-from"] = ""; }, /cache-from is not allowed/],
+    ["an empty cache export", w => { w["cache-to"] = null; }, /cache-to is not allowed/],
+  ];
+  for (const [label, mutate, reason] of mutations) {
+    test(`${name}: cache policy refuses ${label}`, () => {
+      const found = withBuildInputs(name, w => {
+        // Start with the secure inputs, independently of the current workflow.
+        w["no-cache"] = true;
+        delete w["cache-from"];
+        delete w["cache-to"];
+        delete w["no-cache-filters"];
+        mutate(w);
+      });
+      assert.match(found.join("; "), reason);
+    });
+  }
+}
+
 test("every image build step builds a known Dockerfile, context and stage, in a pinned job", () => {
   assert.deepEqual(repoFiles().flatMap(({ file, text }) => imageBuildViolations(file, toData(parseStrict(text, file)))), []);
   assert.deepEqual(repoFiles().flatMap(({ file, text }) => unpinnedImageJobViolations(file, toData(parseStrict(text, file)))), []);
@@ -66,7 +105,7 @@ for (const [label, mutate] of REFUSED_EXPRESSIONS) {
 }
 
 test("a build input may use the job's own matrix and the runner's temporary directory", () => {
-  assert.doesNotMatch(withBuildInputs("image", w => { w.platforms = "${{ matrix.platform }}"; w["cache-from"] = "type=gha,scope=image-${{ matrix.pair }}"; w.outputs = "type=oci,dest=${{ runner.temp }}/image.tar"; }).join(), /is not a pinned value/);
+  assert.doesNotMatch(withBuildInputs("image", w => { w.platforms = "${{ matrix.platform }}"; w.outputs = "type=oci,dest=${{ runner.temp }}/image.tar"; }).join(), /is not a pinned value/);
 });
 
 test("an image build outside the pinned jobs is refused", () => {
