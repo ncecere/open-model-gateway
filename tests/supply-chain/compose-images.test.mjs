@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseStrict, readLocalFromRepo, toData } from "./lib.mjs";
-import { PINNED_IMAGE, STAGING_CANDIDATE_SERVICES, checkedComposeFiles } from "./policy.mjs";
+import { STAGING_CANDIDATE_SERVICES, checkedComposeFiles, isPinnedImage } from "./policy.mjs";
 
 const staging = "deploy/staging/compose.yaml";
 const loadtest = "deploy/loadtest/compose.yaml";
@@ -29,7 +29,7 @@ function violations(file, data) {
       const prefix = "${" + stagingOverrides.get(name) + ":-";
       if (image.startsWith(prefix) && image.endsWith("}")) image = image.slice(prefix.length, -1);
     }
-    if (typeof image !== "string" || !PINNED_IMAGE.test(image)) {
+    if (typeof image !== "string" || !isPinnedImage(image)) {
       found.push(`${file}: services.${name}.image must be pinned by digest or use its approved local build with pull_policy: never`);
     }
   }
@@ -70,4 +70,17 @@ test("fixtures distinguish pinned upstream defaults, local build outputs and ove
     ["compose.yml", "loadgen", { image: loadImage, pull_policy: "never" }],
     ["compose.yml", "postgres", { image: wrapped }],
   ]) assert.equal(check(file, name, service).length, 1, `${file} ${name} ${JSON.stringify(service)}`);
+});
+
+test("pinned image references limit the normalized repository path to 255 characters", () => {
+  const suffix = ":V1@sha256:" + "a".repeat(64);
+  // The registry is outside the path. Docker Hub expands familiar names under library/.
+  for (const [prefix, pathBudget] of [
+    ["registry.example:5000/", 255], ["localhost/", 255], ["UpperHost/", 255],
+    ["team/", 250], ["", 247], ["docker.io/", 247], ["index.docker.io/", 247],
+  ]) {
+    const reference = length => ({ services: { db: { image: prefix + "a".repeat(length) + suffix } } });
+    assert.deepEqual(violations("compose.yml", reference(pathBudget)), [], prefix);
+    assert.equal(violations("compose.yml", reference(pathBudget + 1)).length, 1, prefix);
+  }
 });

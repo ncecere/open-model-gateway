@@ -40,9 +40,10 @@ test("every YAML file with Compose services is checked, wherever it is", () => {
     writeFileSync(join(dir, "flow.yaml"), "{services: {app: {image: postgres:17}}}\n");
     writeFileSync(join(dir, "nested.yml"), "spec: {services: {app: {}}}\n");
     writeFileSync(join(dir, "inherited.yml"), "x-stack: &stack {services: {app: {}}}\n<<: *stack\n");
+    writeFileSync(join(dir, "alias.yaml"), "x-key: &key services\n*key : {db: {image: postgres:17}}\n");
     const multiple = "name: demo\n---\nservices: {db: {image: postgres:17}}\n";
     writeFileSync(join(dir, "later.yaml"), multiple);
-    assert.deepEqual(repoComposeFiles(dir), ["flow.yaml", "inherited.yml", "later.yaml", "quoted.yml", "tools/x/stack.yml"]);
+    assert.deepEqual(repoComposeFiles(dir), ["alias.yaml", "flow.yaml", "inherited.yml", "later.yaml", "quoted.yml", "tools/x/stack.yml"]);
     assert.throws(() => parseStrict(multiple, "later.yaml"), /later\.yaml:.*multiple documents/i);
   } finally {
     rmSync(dir, { recursive: true, force: true });

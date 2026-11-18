@@ -26,9 +26,23 @@ export const CONTAINER_IMAGE_EXPRESSIONS = new Map([]);
 const domainLabel = "[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?";
 const registry = `(?:${domainLabel}(?:\\.${domainLabel})*|\\[[a-fA-F0-9:]+\\])(?::[0-9]+)?`;
 const pathComponent = "[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*";
-const repository = `(?:${registry}/)?${pathComponent}(?:/${pathComponent})*`;
+const repositoryPath = `${pathComponent}(?:/${pathComponent})*`;
 const tag = "[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}";
-export const PINNED_IMAGE = new RegExp(`^${repository}(?::${tag})?@sha256:[0-9a-f]{64}$`);
+const pinnedImage = new RegExp(`^(?:(${registry})/)?(${repositoryPath})(?::${tag})?@sha256:[0-9a-f]{64}$`);
+
+export function isPinnedImage(image) {
+  const match = pinnedImage.exec(image);
+  if (!match) return false;
+  const [, first, path] = match;
+  // Docker treats a plain lowercase prefix as a Hub namespace, and expands
+  // single-component Hub repository names to library/<name> before the limit.
+  if (first && first !== "localhost" && !/[.:A-Z]/.test(first)) {
+    return first.length + 1 + path.length <= 255;
+  }
+  const hub = !first || first === "docker.io" || first === "index.docker.io";
+  const normalizedPath = hub && !path.includes("/") ? `library/${path}` : path;
+  return normalizedPath.length <= 255;
+}
 
 // Container `options:` that reach the host or replace what the image runs, refused unless
 // listed here as `<file>: <where>: <option>` with the reason. None is listed: today's options
@@ -60,7 +74,7 @@ export function containerPinViolations(file, data, allowed = CONTAINER_IMAGE_EXP
       out.push(`${key}: an expression ('${image}') cannot be checked; write the digest-pinned image or allowlist it with a reason`);
     } else if (typeof image !== "string") {
       out.push(`${key}: the image must be one literal string`);
-    } else if (!PINNED_IMAGE.test(image)) {
+    } else if (!isPinnedImage(image)) {
       out.push(`${key}: ${image} is not pinned by digest (<image>[:<tag>]@sha256:<64 hex>)`);
     }
   };
