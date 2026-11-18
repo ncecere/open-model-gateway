@@ -4,7 +4,9 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import { createBrowserHistory, createRootRoute, createRoute, createRouter, Link, Outlet, RouterProvider } from "@tanstack/react-router";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ProviderCostImportFlow, ProviderCostWorkflow } from "../pages/usage/provider-cost-manager";
 import { ProviderReconciliations } from "../pages/usage/provider-reconciliations";
+import { Tabs, TabsList, Tab } from "./ui/tabs/tabs";
 import { admin, auditor, session, testClient } from "../lib/test-fixtures";
 
 const root = "/api/v1/platform", imports = `${root}/provider-cost-imports`, mappings = `${root}/provider-cost-mappings`;
@@ -92,9 +94,12 @@ describe("Admin provider-cost writes", () => {
     expect(fetch.mock.calls.filter(([, init]) => init.method === "POST")).toHaveLength(1);
   });
   it("lists default/unmapped dimensions and attests a replacement preserving existing bindings", async () => {
-    const fetch = serve(), user = await open();
-    await selectExistingImport(user);
-    await user.click(screen.getByRole("tab", { name: "Mappings" }));
+    const fetch = serve();
+    document.cookie = "omg_csrf=test-csrf; path=/";
+    // Import selection and save-to-freeze continuity are covered below. Mount
+    // the selected import workflow with its real controller and query reads.
+    render(<QueryClientProvider client={testClient()}><ProviderCostWorkflow><Tabs defaultValue="mappings"><TabsList><Tab value="mappings">Mappings</Tab></TabsList><ProviderCostImportFlow report={report} onMapping={vi.fn()} onOpen={vi.fn()} /></Tabs></ProviderCostWorkflow></QueryClientProvider>);
+    const user = userEvent.setup({ applyAccept: false });
     const table = await screen.findByRole("table", { name: "Provider dimensions" });
     const panel = within(screen.getByRole("tabpanel", { name: "Mappings" }));
     expect(table.textContent).toContain("Provider default / missing identifier"); expect(table.textContent).toContain("Unmapped"); expect(table.textContent).toContain("Mapped");
@@ -105,11 +110,11 @@ describe("Admin provider-cost writes", () => {
     await user.paste("finance:attestation");
     const stage = panel.getByRole("button", { name: "Apply binding to draft" });
     expect(stage.hasAttribute("disabled")).toBe(true);
-    await user.click(panel.getByRole("checkbox", { name: "I attest this binding and its effective coverage" }));
+    await user.click(panel.getByLabelText("I attest this binding and its effective coverage", { selector: '[role="checkbox"]' }));
     await user.click(stage);
     await user.click(panel.getByLabelText("Mapping revision evidence reference"));
     await user.paste("finance:revision");
-    await user.click(panel.getByRole("checkbox", { name: "I confirm the whole replacement mapping revision" }));
+    await user.click(panel.getByLabelText("I confirm the whole replacement mapping revision", { selector: '[role="checkbox"]' }));
     await user.click(panel.getByRole("button", { name: "Save mapping revision" }));
     await screen.findByText("Saved mapping revision: mapping-new");
     const body = JSON.parse(fetch.mock.calls.find(([url, init]) => url === mappings && init.method === "POST")![1].body);
