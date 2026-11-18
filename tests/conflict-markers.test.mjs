@@ -73,7 +73,8 @@ export function trackedTextFiles(cwd = root) {
       try {
         buf = readFileSync(join(cwd, f));
       } catch (error) {
-        if (error.code === "ENOENT") return false; // Unstaged deletion or dangling symlink.
+        // A tracked path can disappear when an unstaged edit replaces its parent.
+        if (error.code === "ENOENT" || error.code === "ENOTDIR") return false;
         throw new Error(`Cannot inspect tracked file ${JSON.stringify(f)}: ${error.message}`, { cause: error });
       }
       return !looksBinary(buf);
@@ -166,14 +167,18 @@ test("tracked text discovery uses its own Git index and preserves literal filena
 
 test("tracked text discovery skips absent files, binary files and generated directories", t => {
   const { dir, git } = trackedFixture(t);
-  for (const name of ["target", "node_modules"]) {
-    mkdirSync(join(dir, name));
+  for (const name of ["target", "node_modules", "apps/web/node_modules"]) {
+    mkdirSync(join(dir, name), { recursive: true });
     writeFileSync(join(dir, name, "generated.txt"), "generated text");
   }
   writeFileSync(join(dir, "binary.bin"), Buffer.from([0, 1]));
+  mkdirSync(join(dir, "src"));
+  writeFileSync(join(dir, "src", "old.txt"), "removed with its parent");
   writeFileSync(join(dir, "absent.txt"), "removed after staging");
   writeFileSync(join(dir, "kept.txt"), "tracked text");
   git("add", "-f", ".");
+  rmSync(join(dir, "src"), { recursive: true });
+  writeFileSync(join(dir, "src"), "replacement file");
   rmSync(join(dir, "absent.txt"));
   assert.deepEqual(trackedTextFiles(dir), ["kept.txt"]);
 });
@@ -188,6 +193,7 @@ test("tracked text discovery reports the path and cause of unexpected read error
   assert.throws(() => trackedTextFiles(dir), error => {
     assert.match(error.message, /unreadable\.txt/);
     assert.match(error.message, /EISDIR/);
+    assert.equal(error.cause.code, "EISDIR");
     return true;
   });
 });
