@@ -235,6 +235,7 @@ impl Jobs {
         let mut candidates: Vec<Deployment> = Vec::new();
         let mut refused: Vec<(Deployment, InferenceError)> = Vec::new();
         let mut verdicts: HashMap<String, Result<(), InferenceError>> = HashMap::new();
+        let has_failed_result = request.has_failed_tool_result();
         for deployment in deployments.iter() {
             if !deployment
                 .supported_protocols
@@ -265,7 +266,9 @@ impl Jobs {
                         Err(InferenceError::Unsupported)
                     }
                 });
-            match verdict {
+            match verdict
+                .and_then(|()| adapter.validate_tool_result_target(deployment, has_failed_result))
+            {
                 Ok(()) => candidates.push(deployment.clone()),
                 Err(error) => refused.push((deployment.clone(), error)),
             }

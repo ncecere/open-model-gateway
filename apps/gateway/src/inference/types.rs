@@ -179,6 +179,12 @@ pub struct MessagesOptions {
     pub stop_sequences: Option<Vec<String>>,
 }
 impl ChatRequest {
+    pub(crate) fn has_failed_tool_result(&self) -> bool {
+        self.messages
+            .iter()
+            .any(|message| message.tool_result_is_error)
+    }
+
     pub fn response_limit(&self) -> usize {
         if self.messages_options.is_some() {
             16 * 1024 * 1024

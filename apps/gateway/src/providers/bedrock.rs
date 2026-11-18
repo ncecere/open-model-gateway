@@ -170,16 +170,25 @@ impl ProviderAdapter for BedrockAdapter {
     fn supports_protocol(&self, protocol: ApiProtocol) -> bool {
         super::capabilities::serves(self.id(), protocol)
     }
-    /// Dry-runs the real, pure `encode` and discards the converted input:
-    /// pre-admission validation can never drift from what `execute` would
-    /// actually reject, and this never resolves credentials or touches the
-    /// network (`execute` only calls `encode` before any of that).
+    /// Wire validation uses the same pure encoder as dispatch. Deployments
+    /// sharing this adapter can reuse its verdict across upstream model IDs.
     fn validate_chat_request(&self, request: &ChatRequest) -> Result<()> {
         encode(request).map(|_| ())
+    }
+    fn validate_tool_result_target(
+        &self,
+        target: &Deployment,
+        has_failed_result: bool,
+    ) -> Result<()> {
+        if has_failed_result && auth::model_refuses_tool_result_status(&target.upstream_model) {
+            return Err(InferenceError::Unsupported);
+        }
+        Ok(())
     }
     async fn execute(&self, target: &Deployment, request: ChatRequest) -> Result<ProviderOutput> {
         let plan = auth::Plan::new(target, &self.policy).ok_or(InferenceError::Configuration)?;
         let input = encode(&request)?; // Validate before any credential discovery/network work.
+        self.validate_tool_result_target(target, request.has_failed_tool_result())?;
         let client = self.client(&plan).await;
         if request.stream {
             let output = client

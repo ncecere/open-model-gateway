@@ -689,6 +689,8 @@ impl Runner {
         planned_deployment: Option<Uuid>,
     ) -> Result<Option<Deployment>, InferenceError> {
         let protocol = endpoint.protocol();
+        let has_failed_result =
+            matches!(request, BatchRequest::Chat(r) if r.has_failed_tool_result());
         let model = request.model();
         let store = &self.jobs.store;
         let candidates: Vec<Deployment> = store
@@ -701,7 +703,11 @@ impl Runner {
                     && self.jobs.registry.get(&d.provider).is_some_and(|a| {
                         a.supports_protocol(protocol)
                             && match request {
-                                BatchRequest::Chat(r) => a.supports_chat_request(r),
+                                BatchRequest::Chat(r) => {
+                                    a.supports_chat_request(r)
+                                        && a.validate_tool_result_target(d, has_failed_result)
+                                            .is_ok()
+                                }
                                 BatchRequest::Embeddings(r) => a.supports_embedding_target(d, r),
                             }
                     })

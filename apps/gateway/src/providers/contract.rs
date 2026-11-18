@@ -295,6 +295,16 @@ pub async fn assert_error_tool_sdk(
     adapter: std::sync::Arc<dyn ProviderAdapter>,
     target: Deployment,
 ) {
+    run_error_tool_sdk(pool, adapter, target, None).await;
+}
+
+#[cfg(feature = "integration-tests")]
+pub async fn run_error_tool_sdk(
+    pool: sqlx::PgPool,
+    adapter: std::sync::Arc<dyn ProviderAdapter>,
+    target: Deployment,
+    refusal: Option<(u16, crate::inference::error::InferenceError)>,
+) {
     use crate::{
         bootstrap,
         config::Environment,
@@ -331,10 +341,14 @@ pub async fn assert_error_tool_sdk(
     });
     let script =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/tool-result-errors.mjs");
+    let mut command = tokio::process::Command::new("node");
+    command.arg(script);
+    if let Some((status, error)) = refusal {
+        command.arg(status.to_string()).arg(error.message());
+    }
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        tokio::process::Command::new("node")
-            .arg(script)
+        command
             .env("SDK_TEST_BASE_URL", format!("http://{address}"))
             .env("SDK_TEST_API_KEY", &keys.personal_key.token)
             .kill_on_drop(true)
@@ -354,8 +368,10 @@ pub async fn assert_error_tool_sdk(
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(
-        attempts, 6,
-        "invalid flags and unknown fields never dispatch"
-    );
+    let expected = match refusal {
+        Some((_, crate::inference::error::InferenceError::Unsupported)) => 0,
+        Some(_) => 2,
+        None => 6,
+    };
+    assert_eq!(attempts, expected, "durable attempts for SDK requests");
 }

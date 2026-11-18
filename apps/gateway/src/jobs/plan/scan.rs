@@ -174,7 +174,18 @@ impl Jobs {
             BatchRequest::Chat(r) => {
                 if line.requested.is_none() {
                     coarse_ok
-                        .then(|| resolved.adapter.validate_chat_request(r).err())
+                        .then(|| {
+                            resolved
+                                .adapter
+                                .validate_chat_request(r)
+                                .and_then(|()| {
+                                    resolved.adapter.validate_tool_result_target(
+                                        &resolved.deployment,
+                                        r.has_failed_tool_result(),
+                                    )
+                                })
+                                .err()
+                        })
                         .flatten()
                 } else {
                     self.every_candidate_route_refuses(

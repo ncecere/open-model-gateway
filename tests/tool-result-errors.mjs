@@ -12,6 +12,16 @@ const followup = (block) => ({ model: "company/smart", max_tokens: 32, messages:
   ] },
   { role: "user", content: [block, { type: "tool_result", tool_use_id: "first-call", content: "unchanged" }] },
 ], tools: [{ name: "ping", input_schema: { type: "object" } }] });
+const [expectedStatus, expectedMessage] = process.argv.slice(2);
+if (expectedStatus) {
+  const request = followup({ type: "tool_result", tool_use_id: "second-call", content: "failed", is_error: true });
+  for (const stream of [false, true]) {
+    await assert.rejects(client.messages.create({ ...request, stream }, { maxRetries: 0 }), (e) =>
+      e.status === Number(expectedStatus) && e.error?.error?.type === "invalid_request_error" &&
+      e.error.error.message === expectedMessage);
+  }
+  process.exit(0);
+}
 for (const flag of [undefined, false, true]) {
   for (const content of ["", "failed\n東京"]) {
     const block = { type: "tool_result", tool_use_id: "second-call", content };

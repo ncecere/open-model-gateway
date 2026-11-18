@@ -421,6 +421,45 @@ pub(crate) fn valid_upstream_model(model: &str, region: &str) -> bool {
         && charset(model, b"._:-")
 }
 
+/// Only foundation models and system-defined inference profiles identify the model.
+pub(super) fn model_refuses_tool_result_status(route: &str) -> bool {
+    let id = if route.starts_with("arn:") {
+        match route
+            .splitn(6, ':')
+            .nth(5)
+            .and_then(|resource| resource.split_once('/'))
+        {
+            Some(("foundation-model" | "inference-profile", id)) => id,
+            _ => return false,
+        }
+    } else {
+        route
+    };
+    let id = match id.split_once('.') {
+        Some(("us" | "us-gov" | "ca" | "eu" | "apac" | "jp" | "au" | "in" | "global", model)) => {
+            model
+        }
+        _ => id,
+    };
+    let Some((provider, model)) = id.split_once('.') else {
+        return false; // Opaque identifier: Bedrock must evaluate the explicit status.
+    };
+    if provider == "amazon" && model.starts_with("nova-") {
+        return false;
+    }
+    if provider == "anthropic" {
+        let mut parts = model.split(['-', ':', '.']);
+        if parts.next() == Some("claude") {
+            match parts.next() {
+                Some("3" | "4") => return false,
+                Some("haiku" | "sonnet" | "opus") if parts.next() == Some("4") => return false,
+                _ => {}
+            }
+        }
+    }
+    true
+}
+
 fn valid_model_arn(arn: &str, region: &str) -> bool {
     let fields: Vec<&str> = arn.splitn(6, ':').collect();
     let [_, partition, service, arn_region, account, resource] = fields[..] else {
