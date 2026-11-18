@@ -9,6 +9,7 @@ name: omg-loadtest
 
 x-gateway: &gateway
   image: ${OMG_LOADTEST_IMAGE:-omg-loadtest:local}
+  pull_policy: never
   restart: "no"
   read_only: true
   cap_drop: [ALL]
@@ -45,7 +46,7 @@ x-gateway: &gateway
 
 services:
   postgres:
-    image: mirror.gcr.io/library/postgres:17-alpine
+    image: mirror.gcr.io/library/postgres:17-alpine@sha256:a77aa70e641402a21411b92b721c58d10f23b50ae5fdd2333efd22d166e1e5f7
     environment:
       POSTGRES_USER: loadtest_admin
       POSTGRES_DB: postgres
@@ -130,6 +131,7 @@ services:
 
   mock-upstream:
     image: ${OMG_LOADTEST_IMAGE:-omg-loadtest:local}
+    pull_policy: never
     entrypoint: [/usr/local/bin/mock-upstream]
     read_only: true
     cap_drop: [ALL]
@@ -165,6 +167,7 @@ services:
     healthcheck: {disable: true}
   loadgen:
     image: ${OMG_LOADTEST_IMAGE:-omg-loadtest:local}
+    pull_policy: never
     profiles: [tools]
     entrypoint: [/usr/local/bin/loadgen]
     read_only: true

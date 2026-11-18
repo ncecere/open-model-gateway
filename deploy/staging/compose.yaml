@@ -2,6 +2,7 @@ name: omg-staging
 
 x-gateway: &gateway
   image: ${GATEWAY_IMAGE:-open-model-gateway:staging}
+  pull_policy: never
   build:
     context: ../..
     dockerfile: Dockerfile
