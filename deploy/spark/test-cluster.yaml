@@ -1,0 +1,26 @@
+# The disposable PostgreSQL 17 of one test run (scripts/spark-test.py), CloudNativePG on
+# local-path storage like deploy/spark/values.yaml and CI's service container. The tests
+# create and drop databases and roles, so the connection role is the superuser (CI's
+# POSTGRES_USER is one too); its password is a Secret generated per run and never printed.
+# One data volume (no separate WAL volume) keeps the persistent volume claim count down.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: omg-test-db
+  labels: {app.kubernetes.io/name: omg-test-db}
+spec:
+  instances: 1
+  # The multi-arch index (amd64 and arm64), pinned by digest like values.yaml.
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.6@sha256:30b304a2e300ed80b6d1b740e4369e9b0f25599fb518de78c01fd9f25531791b
+  enableSuperuserAccess: true
+  superuserSecret: {name: omg-test-pg-superuser}
+  bootstrap:
+    initdb:
+      database: gateway
+      owner: gateway
+  storage:
+    size: 8Gi
+    storageClass: local-path
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1Gi}

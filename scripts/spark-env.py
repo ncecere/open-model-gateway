@@ -49,6 +49,9 @@ BASE = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?")
 REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/@+-]*")
 RELEASE = re.compile(r"v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?")
 SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
+# <base>-omg-test-<slot> namespaces belong to scripts/spark-test.py (the suites on Spark); this script never
+# creates, lists or touches them, and that script never touches <base>-omg-<name> environments.
+RESERVED_PREFIX = "test-"
 DEMO_PORTS = (3000, 18084)
 BOOTSTRAP_JOB = "omg-bootstrap-demo"
 ACCOUNTS = (
@@ -108,6 +111,8 @@ def redact(text, extra=()):
 def validate_name(name):
     if not NAME.fullmatch(name or ""):
         raise SparkError("name must be 2-20 characters: lowercase letters, digits and inner dashes")
+    if name.startswith(RESERVED_PREFIX):
+        raise SparkError(f"names starting with {RESERVED_PREFIX!r} are reserved for scripts/spark-test.py")
     return name
 
 
@@ -117,7 +122,7 @@ def namespace_for(base, name):
 
 def check_namespace(base, namespace):
     prefix = f"{base}-omg-"
-    if not namespace.startswith(prefix) or not NAME.fullmatch(namespace[len(prefix):]):
+    if not namespace.startswith(prefix) or not NAME.fullmatch(namespace[len(prefix):]) or namespace[len(prefix):].startswith(RESERVED_PREFIX):
         raise SparkError(f"refusing namespace {namespace!r}: only {prefix}<name> environments are touched")
     return namespace
 
@@ -481,7 +486,8 @@ class Spark:
     def status(self, name=None):
         if name is None:
             prefix = f"namespace/{self.base}-omg-"
-            names = sorted(line.removeprefix("namespace/") for line in self.kubectl(["get", "namespace", "-o", "name"], capture=True).split() if line.startswith(prefix))
+            names = sorted(line.removeprefix("namespace/") for line in self.kubectl(["get", "namespace", "-o", "name"], capture=True).split()
+                           if line.startswith(prefix) and not line.startswith(prefix + RESERVED_PREFIX))
             print("\n".join(names) if names else "no environments")
             return
         namespace = self.environment(name)
