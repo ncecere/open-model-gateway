@@ -1,0 +1,22 @@
+{
+  "nonce": "e4fb8e8d6bf4945a",
+  "suite": "integration",
+  "commit": "253823509143e78a605244cd7bbbbede56737e27",
+  "wall_seconds": 650,
+  "expect": {
+    "result": "passed",
+    "exit_code": 0,
+    "counts": {
+      "passed": 170,
+      "failed": 0,
+      "ignored": 10
+    },
+    "failed_steps": [],
+    "partial": false,
+    "database": {
+      "version": "17.6",
+      "lc_collate": "C",
+      "max_connections": "100"
+    }
+  }
+}

@@ -1,0 +1,14 @@
+# The build cache of one Spark test slot (scripts/spark-test.py): the cargo registry, the
+# target directory, the rustup home, the npm cache and the source checkout. It lives in the
+# slot's own namespace (a pod can only mount a volume of its namespace), survives `down`
+# and is removed by `spark-test.py purge`. 20Gi per slot, two slots: 40 of the shared 100 GiB (a standing cost while the slots exist).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: omg-test-cache
+  labels: {app.kubernetes.io/name: omg-test-cache}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests: {storage: 20Gi}
