@@ -226,11 +226,21 @@ impl<'ast> Visit<'ast> for Finder<'_> {
         });
     }
 
-    fn visit_arm(&mut self, arm: &'ast syn::Arm) {
-        self.scoped(|this| {
-            this.binding(&arm.pat, None, Reads::new());
-            visit::visit_arm(this, arm);
-        });
+    fn visit_expr_match(&mut self, expr: &'ast syn::ExprMatch) {
+        if !self.tracks_bindings() {
+            visit::visit_expr_match(self, expr);
+            return;
+        }
+        for attr in &expr.attrs {
+            self.visit_attribute(attr);
+        }
+        let reads = self.read_sources(|this| this.visit_expr(&expr.expr));
+        for arm in &expr.arms {
+            self.scoped(|this| {
+                this.binding(&arm.pat, Some(&expr.expr), reads.clone());
+                this.visit_arm(arm);
+            });
+        }
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
@@ -301,7 +311,7 @@ impl<'ast> Visit<'ast> for Finder<'_> {
         let fixed_values = mac.path.is_ident("fixed_enum")
             && match self.path {
                 "ops_log.rs" => true,
-                "otlp.rs" | "metrics_export.rs" => {
+                "otlp.rs" | "metrics_export.rs" | "telemetry.rs" => {
                     let expected = if self.path == "otlp.rs" {
                         "Delivery"
                     } else {

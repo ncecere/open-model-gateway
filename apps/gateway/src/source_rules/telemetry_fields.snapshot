@@ -254,6 +254,7 @@ scheduled_reports.rs :: failed :: metrics call :: crate :: metrics :: METRICS . 
 scheduled_reports.rs :: select_tick_with_clock :: metrics call :: crate :: metrics :: METRICS . set_report_queue (backlog . min (1024) , backlog > 1024 , lag . unwrap_or (0))
 scheduled_reports.rs :: start :: metrics call :: crate :: metrics :: METRICS . clear_report_queue ()
 scheduled_reports.rs :: start :: metrics call :: crate :: metrics :: METRICS . clear_report_queue ()
+telemetry.rs :: <file> :: macro :: fixed_enum ! (DropReason { Contexts => "contexts" , RequestLimit => "request_limit" , SpanLimit => "span_limit" , QueueFull => "queue_full" , Shutdown => "shutdown" , Ineligible => "ineligible" , Delivery => "delivery" , Invalid => "invalid" })
 telemetry.rs :: impl Counts::delivery :: metrics call :: crate :: metrics :: METRICS . trace_delivery (outcome)
 telemetry.rs :: impl Counts::drop_spans :: metrics call :: crate :: metrics :: METRICS . trace_drop (reason , n)
 telemetry.rs :: impl Counts::reject :: metrics call :: crate :: metrics :: METRICS . trace_rejected (n)

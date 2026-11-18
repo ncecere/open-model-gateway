@@ -101,6 +101,12 @@ fn producer_source_fixtures() {
             "two",
         ),
         (
+            "telemetry.rs",
+            r#"fixed_enum!(DropReason { Contexts => "contexts" });"#,
+            "contexts",
+            "context_limit",
+        ),
+        (
             "metrics_export.rs",
             r#"fixed_enum!(DropReason { Label => "one" });"#,
             "one",
@@ -161,6 +167,11 @@ fn only_the_visible_source_changes_a_family_entry() {
             "let x = first(); if let Some(x) = second() {} else { f.get_or_create(&x); }",
             "first",
             "second",
+        ),
+        (
+            "let x = first(); match second() { Some(x) => f.get_or_create(&x), None => () }",
+            "second",
+            "first",
         ),
         (
             "let x = first(); for x in second() {} f.get_or_create(&x);",
