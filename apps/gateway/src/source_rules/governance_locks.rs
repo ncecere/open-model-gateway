@@ -148,7 +148,7 @@ impl Scan<'_> {
     }
 
     fn helper(&self) -> bool {
-        self.module == "governance::locks"
+        self.path == "governance/locks.rs" && self.module == "governance::locks"
     }
 
     fn check(&mut self, literal: &LitStr) {
@@ -189,6 +189,11 @@ impl<'ast> Visit<'ast> for Scan<'_> {
         self.module.push_str(&item.ident.unraw().to_string());
         visit::visit_item_mod(self, item);
         self.module.truncate(parent_len);
+    }
+
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        self.check_sqlx_renames(&item.tree, false);
+        visit::visit_item_use(self, item);
     }
 
     fn visit_ident(&mut self, ident: &'ast syn::Ident) {
@@ -268,6 +273,40 @@ impl<'ast> Visit<'ast> for Scan<'_> {
 }
 
 impl Scan<'_> {
+    fn check_sqlx_renames(&mut self, tree: &syn::UseTree, sqlx: bool) {
+        match tree {
+            syn::UseTree::Path(path) => {
+                self.check_sqlx_renames(&path.tree, sqlx || path.ident.unraw() == "sqlx");
+            }
+            syn::UseTree::Group(group) => {
+                for item in &group.items {
+                    self.check_sqlx_renames(item, sqlx);
+                }
+            }
+            syn::UseTree::Rename(rename) if sqlx => {
+                let name = rename.ident.unraw().to_string();
+                let core = name.strip_suffix("_unchecked").unwrap_or(&name);
+                if matches!(
+                    core,
+                    "query"
+                        | "query_as"
+                        | "query_scalar"
+                        | "query_file"
+                        | "query_file_as"
+                        | "query_file_scalar"
+                ) {
+                    self.findings.push(format!(
+                        "{}:{}: inspect renamed SQLx query {}",
+                        self.path,
+                        rename.ident.span().start().line,
+                        rename.ident
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn macro_input(&mut self, name: &syn::Ident, tokens: TokenStream) {
         let name = name.unraw();
         if name == "concat"
@@ -563,20 +602,61 @@ fn quoted_identifiers_and_function_references() {
 #[test]
 fn sqlx_query_literal_addition() {
     for (query, expected) in [
-        (r#"sqlx::query!("SELECT 1 FOR " + "SHARE")"#, 1),
+        (
+            r#"sqlx::query!("SELECT 1 FOR " + "SHARE")"#,
+            Some("FOR SHARE"),
+        ),
         (
             r#"sqlx::query_as!(Row, "SELECT pg_advisory_" + "lock(1)")"#,
-            1,
+            Some("direct lock acquisition"),
         ),
-        (r#"sqlx::query_scalar!("SELECT " + "1", n + 1)"#, 0),
+        (r#"sqlx::query_scalar!("SELECT " + "1", n + 1)"#, None),
     ] {
         for expr in [query.to_owned(), format!("opaque!(key => [{query}])")] {
             let rust = format!("fn f() {{ {expr}; }}");
+            let findings = violations(&parse_fixture("governance/jobs.rs", &rust));
             assert_eq!(
-                violations(&parse_fixture("governance/jobs.rs", &rust)).len(),
-                expected,
-                "{expr}"
+                findings.len(),
+                usize::from(expected.is_some()),
+                "{expr}: {findings:?}"
             );
+            if let Some(rule) = expected {
+                assert!(findings[0].ends_with(rule), "{expr}: {findings:?}");
+            }
         }
     }
+}
+
+#[test]
+fn block_local_locks_module_does_not_own_the_helper_exception() {
+    let rust = r#"fn foo() { mod locks { fn bar() { q!("SELECT pg_advisory_lock(1)"); } } }"#;
+    let findings = violations(&parse_fixture("governance.rs", rust));
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.ends_with("direct lock acquisition"))
+    );
+}
+
+#[test]
+fn explicit_sqlx_macro_renames_require_inspection() {
+    for rust in [
+        r#"use sqlx::query as q; fn f() { q!("SELECT 1 FOR " + "SHARE"); }"#,
+        r#"use sqlx::{query_file as q}; fn f() { q!("fixture.sql"); }"#,
+    ] {
+        let findings = violations(&parse_fixture("governance/jobs.rs", rust));
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.contains("renamed SQLx query")),
+            "{findings:?}"
+        );
+    }
+    assert!(
+        violations(&parse_fixture(
+            "governance/jobs.rs",
+            "use application::query as q;"
+        ))
+        .is_empty()
+    );
 }
