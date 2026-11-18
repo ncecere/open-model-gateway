@@ -47,8 +47,9 @@ groups:
       # A series exists only after a failure and starts at 1, so increase() and
       # rate() never see the first failure on an instance; the `unless ... offset
       # 10m` term adds series that did not exist 10 minutes ago, which is always a
-      # real failure. Missing data yields nothing, so neither rule can fire
-      # before the first failure. A scrape gap longer than 10 minutes makes every
+      # real failure. Filter zero increases before `or` so they cannot mask
+      # the first-failure term once a new series has two scrapes. Missing data
+      # yields nothing, so neither rule can fire before the first failure. A scrape gap longer than 10 minutes makes every
       # existing series look new and can fire them once.
       # Critical exactly when a failure at that stage leaves money held until
       # reconciliation (#497), with no pending period: the reservation stays
@@ -71,7 +72,7 @@ groups:
       - alert: GatewayAccountingFailures
         expr: |
           sum by (stage, cause) (
-              increase(gateway_accounting_failures_total{stage!~"explicit_settlement|cancellation_settlement|realtime_settlement|job_settlement"}[10m])
+              increase(gateway_accounting_failures_total{stage!~"explicit_settlement|cancellation_settlement|realtime_settlement|job_settlement"}[10m]) > 0
             or
               (gateway_accounting_failures_total{stage!~"explicit_settlement|cancellation_settlement|realtime_settlement|job_settlement"} unless gateway_accounting_failures_total{stage!~"explicit_settlement|cancellation_settlement|realtime_settlement|job_settlement"} offset 10m)
           ) > 0
@@ -84,7 +85,7 @@ groups:
       - alert: GatewaySettlementAccountingFailures
         expr: |
           sum by (stage, cause) (
-              increase(gateway_accounting_failures_total{stage=~"explicit_settlement|cancellation_settlement|realtime_settlement|job_settlement"}[10m])
+              increase(gateway_accounting_failures_total{stage=~"explicit_settlement|cancellation_settlement|realtime_settlement|job_settlement"}[10m]) > 0
             or
               (gateway_accounting_failures_total{stage=~"explicit_settlement|cancellation_settlement|realtime_settlement|job_settlement"} unless gateway_accounting_failures_total{stage=~"explicit_settlement|cancellation_settlement|realtime_settlement|job_settlement"} offset 10m)
           ) > 0
