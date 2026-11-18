@@ -55,7 +55,8 @@ pub fn ensure_dev_config(
         "bootstrap-dev requires GATEWAY_ENV=development"
     );
     anyhow::ensure!(
-        matches!(options.get_host(), "127.0.0.1" | "::1" | "[::1]"),
+        options.get_socket().is_none()
+            && matches!(options.get_host(), "127.0.0.1" | "::1" | "[::1]"),
         "bootstrap-dev requires a loopback database (127.0.0.1 or ::1)"
     );
     Ok(())
@@ -173,6 +174,7 @@ mod config_tests {
         for url in [
             "postgres://user@example.invalid/db",
             "postgres://user@localhost/db",
+            "postgres://user@127.0.0.1/db?host=/unused-socket-directory",
             "postgres://user@127.0.0.1/db?host=example.invalid",
             "postgres://user@127.0.0.1/db?hostaddr=192.0.2.1",
         ] {

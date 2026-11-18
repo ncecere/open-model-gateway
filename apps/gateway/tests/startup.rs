@@ -798,6 +798,25 @@ fn bootstrap_dev_refuses_remote_database_before_connecting_or_printing_keys() {
 }
 
 #[test]
+fn bootstrap_dev_refuses_a_socket_override_before_connecting() {
+    let f = Fixture::new();
+    let mut database = reqwest::Url::parse("postgres://gateway@127.0.0.1/db").unwrap();
+    database
+        .query_pairs_mut()
+        .append_pair("host", f.dir.path().to_str().unwrap());
+    let output = f.run(
+        &["bootstrap-dev"],
+        [
+            ("GATEWAY_ENV", "development"),
+            ("DATABASE_URL", database.as_str()),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(text(&output.stderr).contains("bootstrap-dev requires a loopback database"));
+}
+
+#[test]
 fn bootstrap_dev_refuses_production_before_database_access() {
     let f = Fixture::new();
     let output = f.run(
