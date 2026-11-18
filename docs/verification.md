@@ -365,8 +365,9 @@ Every rule in AGENTS.md's Invariants and Deployment lists is either enforced by 
 The shared rule reader refuses a file module declared inside a production block,
 including one nested in a block-local inline module. Declare file modules at
 module scope so the reader can resolve them. Inline modules with self-contained
-bodies are supported inside blocks. The reader skips local items with a
-definitely false `#[cfg(..)]`; expression-level conditions are conservative.
+bodies are supported inside blocks. A definitely false cfg excludes a file with an inner `#![cfg(..)]`,
+a local item, or a member of a block-local impl or trait. Unknown predicates
+remain in scope. Expression-level conditions are conservative.
 
 Commands, from the repository root: `LIB` is `cargo test -p open-model-gateway --all-features --lib`; the database-backed checks need `DATABASE_URL` (see the table at the top).
 
