@@ -5,7 +5,7 @@
 // process-tested in Rust (apps/gateway/src/startup.rs, apps/gateway/tests/startup.rs).
 // Requires Docker. Never touches the demo or staging projects.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./process.mjs";
 import { randomBytes } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

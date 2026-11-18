@@ -1,5 +1,5 @@
 // Git must read the selected checkout, even when tests run from a Git hook.
-import { execFileSync } from "node:child_process";
+import { execFileSync } from "./process.mjs";
 
 export const gitEnv = () => ({
   ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
