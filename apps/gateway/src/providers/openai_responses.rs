@@ -230,6 +230,7 @@ fn decode_shape(value: &Value) -> Result<ChatResponse> {
 #[derive(Default)]
 struct State {
     started: bool,
+    done: bool,
     items: std::collections::BTreeMap<u64, Value>,
     bytes: usize,
     text: String,
@@ -248,6 +249,9 @@ fn stream_error(error: &Value) -> InferenceError {
 }
 impl State {
     fn push(&mut self, value: Value) -> Result<Vec<ChatEvent>> {
+        if self.done {
+            return Err(InferenceError::InvalidUpstream);
+        }
         let kind = string(&value["type"])?;
         match kind {
             "response.created" => self.created(),
@@ -467,7 +471,7 @@ impl State {
         }
         Ok(vec![])
     }
-    fn terminal(&self, kind: &str, value: &Value) -> Result<Vec<ChatEvent>> {
+    fn terminal(&mut self, kind: &str, value: &Value) -> Result<Vec<ChatEvent>> {
         if (kind == "response.completed" && value["response"]["status"] != "completed")
             || (kind == "response.incomplete" && value["response"]["status"] != "incomplete")
         {
@@ -490,6 +494,7 @@ impl State {
                 || Some(Ok(response.usage)),
             );
         }
+        self.done = true;
         Ok(vec![
             ChatEvent::Finish(response.finish_reason),
             ChatEvent::Usage(response.usage),
