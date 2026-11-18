@@ -53,6 +53,39 @@ test("Git inventories include tracked force-added and untracked source, excludin
   assert.deepEqual(buildPath("../.local/Dockerfile", "x/sub", dir), { path: "x/.local/Dockerfile" });
 });
 
+test("build inventories refuse untracked embedded repositories and tracked gitlinks", t => {
+  const { dir, write } = fixture(t);
+  write("nested/Dockerfile", "FROM scratch\n");
+  write("nested/compose.yaml", "services: {}\n");
+  const nested = join(dir, "nested");
+  git(nested, "init", "-q");
+  git(nested, "add", "Dockerfile", "compose.yaml");
+  git(nested, "commit", "-qm", "fixture");
+  function assertBoundary() {
+    for (const inspect of [() => findDockerfiles(dir), () => repoComposeFiles(dir), () => buildPath(".", ".", dir)]) {
+      assert.throws(inspect, /nested Git repository.*nested/);
+    }
+  }
+  assertBoundary();
+  git(dir, "add", "nested");
+  assertBoundary();
+  rmSync(nested, { recursive: true });
+  assertBoundary();
+});
+
+test("Git inventories refuse undecodable filename bytes and preserve a literal BOM", t => {
+  const { dir, write } = fixture(t);
+  const bomName = "\ufeffexample.txt";
+  write(bomName, "fixture");
+  git(dir, "rm", "--cached", "-q", ".gitignore");
+  git(dir, "add", bomName);
+  assert.ok(tracked(dir).has(bomName));
+  writeFileSync(Buffer.concat([Buffer.from(join(dir, "example-")), Buffer.from([0xff])]), "fixture");
+  assert.throws(() => findDockerfiles(dir), /utf-8/i);
+  git(dir, "add", "-A");
+  assert.throws(() => tracked(dir), /utf-8/i);
+});
+
 test("Git discovery ignores inherited repository, index and config overrides", t => {
   const { dir, write } = fixture(t);
   write("Dockerfile", "FROM alpine:3\n");
