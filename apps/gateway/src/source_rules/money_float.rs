@@ -71,6 +71,9 @@ const MONEY_WORDS: &[&str] = &[
 ///   and the literal `0.0` only decide whether a catalog "discount" value is
 ///   nonzero, to warn that it was not applied. No amount is computed and no
 ///   float reaches a price, hold or total.
+/// * `management/governance/suggestion/limits.rs`, `visit_f64`: the Serde
+///   visitor discards numbers while checking JSON complexity before allocating
+///   a value tree. No arithmetic, rate conversion or output uses this value.
 /// * `inference/types.rs`, `MessagesOptions`: the struct has a `task_budget`
 ///   (a token budget, not money, which is why the money-word rule reached it)
 ///   next to the `top_p` sampling parameter, an `f64`. Granularity is the
@@ -86,6 +89,12 @@ const ALLOWED: &[(&str, &str, &str, usize)] = &[
         "management/governance/suggestion.rs",
         "discounted",
         "float literal",
+        1,
+    ),
+    (
+        "management/governance/suggestion/limits.rs",
+        "impl Check::visit_f64",
+        "f64",
         1,
     ),
     ("inference/types.rs", "MessagesOptions", "f64", 1),

@@ -3,11 +3,27 @@
 use super::*;
 
 /// Pure mapping from one catalog model (+ image endpoint body) to a v3 draft.
-pub(crate) fn map(model: &Value, workload: WorkloadKind, images: Option<&[u8]>) -> Value {
+pub(crate) fn map(model: &Value, workload: WorkloadKind, mut images: Option<&[u8]>) -> Value {
+    if !limits::mapping_value(model) {
+        return limits::refused(model, workload);
+    }
+    if let Some(body) = images {
+        if body.len() > BODY_CAP {
+            return limits::refused(model, workload);
+        }
+        if !limits::mapping_json(body) {
+            if serde_json::from_slice::<&RawValue>(body).is_ok() {
+                return limits::refused(model, workload);
+            }
+            // Malformed image JSON has no image rates, as with a failed fetch.
+            images = None;
+        }
+    }
     let pricing = &model["pricing"];
     let mut d = Draft {
         lines: vec![],
-        warnings: vec![],
+        warnings: Warnings::default(),
+        exceeded: false,
     };
     let used = |k: &str| !pricing[k].is_null();
     match workload {
@@ -34,7 +50,18 @@ pub(crate) fn map(model: &Value, workload: WorkloadKind, images: Option<&[u8]>) 
     for meter in Meter::ALL {
         d.na(meter, false, "");
     }
+    if d.exceeded {
+        return limits::refused(model, workload);
+    }
     let price_lines = draft_price_lines(&d);
+    if d.lines.iter().any(|l| {
+        !l["min_prompt_tokens"].is_null()
+            && price_lines
+                .iter()
+                .any(|p| p["meter"] == l["meter"] && p["unknown"] == true)
+    }) {
+        d.warnings.push("Prompt-size tiers were left out of the draft where the base rate is unknown; enter a base rate before applying those tiers.".into());
+    }
     let parsed = serde_json::from_value::<PriceLines>(json!(price_lines)).ok();
     if parsed.is_none() {
         d.warnings
@@ -47,14 +74,16 @@ pub(crate) fn map(model: &Value, workload: WorkloadKind, images: Option<&[u8]>) 
         context,
         max_completion,
     } = ceilings(&mut d, model);
-    let needs_review = d.lines.iter().any(|l| l["needs_review"] == true) || parsed.is_none();
+    let needs_review = d.lines.iter().any(|l| l["needs_review"] == true)
+        || parsed.is_none()
+        || d.warnings.items.len() == limits::MAX_WARNINGS;
     json!({
         "source":"openrouter_public_catalog",
         "catalog_model_id":model["id"],
         "workload":workload.as_str(),
         "needs_review":needs_review,
         "lines":d.lines,
-        "warnings":d.warnings,
+        "warnings":d.warnings.items,
         "display_lines":parsed.as_ref().map(|p| p.0.iter().map(display_line).collect::<Vec<_>>()),
         "ceilings":{"input_token_limit":input_limit,"output_token_limit":output_limit,"context_length":context,"max_completion_tokens":max_completion},
         "draft":{"pricing_version":3,"input_token_limit":input_limit,"output_token_limit":output_limit,"price_lines":price_lines,"max_units":max_units},
@@ -296,8 +325,10 @@ fn draft_price_lines(d: &Draft) -> Vec<Value> {
         let meter = &line["meter"];
         if line["microusd_per_batch"].is_null()
             && line["not_applicable"] != true
-            && !price_lines.iter().any(|l| &l["meter"] == meter)
+            && line["min_prompt_tokens"].is_null()
+            && line["variant"].is_null()
         {
+            price_lines.retain(|l| &l["meter"] != meter);
             price_lines.push(json!({"meter":meter,"unknown":true}));
         }
     }

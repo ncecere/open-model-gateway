@@ -6,6 +6,10 @@ Notes for changes on `main` after [v0.18.0](v0.18.0.md). They become the next re
 
 The gateway repository is now [bitop-dev/open-model-gateway](https://github.com/bitop-dev/open-model-gateway) (#623). New gateway and loadtest builds publish to `ghcr.io/bitop-dev/open-model-gateway` and `ghcr.io/bitop-dev/open-model-gateway-loadtest`. The next release will be the first published under the organization. This change does not add a migration, runtime grant or API change.
 
+## Pricing drafts
+
+OpenRouter operator price previews state an unusable base rate as unknown even when a prompt-size tier is priced (#635). Oversized catalog entries refuse the whole draft with bounded output; warnings are capped and deduplicated, and malformed successful JSON responses do not enter the cache (#649). Endpoint ranking requires complete comparable rates, unreadable statuses are unknown, unusable endpoint ceilings retain catalog values, and provider labels strip formatting controls (#650). Preview does not modify stored prices or accounting history.
+
 ## Upgrade
 
 For the next release, change the image repository to **`ghcr.io/bitop-dev/open-model-gateway`** and pin the verified release digest. For Helm, set `image.repository` and `image.digest` together (a digest takes precedence over `image.tag`). Do the same for explicit migration jobs and any separate gateway workloads; changing only the version tag on an old repository override will not pull the new release. Verify the signature with the exact `bitop-dev/open-model-gateway/.github/workflows/image.yml@refs/tags/<tag>` certificate identity and GitHub Actions OIDC issuer shown in the generated GitHub Release. See [image paths and signature identities](../staging.md#image-paths-and-signature-identities).

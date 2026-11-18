@@ -18,9 +18,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod limits;
 mod mapping;
+mod selection;
+pub(crate) use selection::map_with_endpoints;
 #[cfg(test)]
 mod mapping_property_tests;
+#[cfg(test)]
+mod regression_tests;
 pub(crate) use mapping::map;
 
 const BODY_CAP: usize = 4 * 1024 * 1024;
@@ -106,6 +111,9 @@ impl OpenRouterCatalog {
         })
         .await
         .map_err(|_| ())??;
+        // Decode only bounded, complete JSON; a malformed 200 must not poison
+        // subsequent previews for the cache TTL.
+        limits::catalog_json(&body)?;
         let body = Arc::new(body);
         let mut cache = self.cache.lock().await;
         cache.retain(|_, (at, _)| at.elapsed() < CACHE_TTL);
@@ -277,7 +285,8 @@ pub(crate) fn microusd(usd_per_unit: &str, units: u64) -> Option<(i64, bool)> {
 
 struct Draft {
     lines: Vec<Value>,
-    warnings: Vec<String>,
+    warnings: Warnings,
+    exceeded: bool,
 }
 impl Draft {
     fn na(&mut self, meter: Meter, review: bool, note: &str) {
@@ -288,7 +297,14 @@ impl Draft {
         if !note.is_empty() {
             v["note"] = json!(note);
         }
-        self.lines.push(v);
+        self.push_line(v);
+    }
+    fn push_line(&mut self, v: Value) {
+        if self.lines.len() >= crate::billing::v3::MAX_LINES {
+            self.exceeded = true;
+        } else {
+            self.lines.push(v);
+        }
     }
     fn has(&self, meter: Meter) -> bool {
         self.lines.iter().any(|l| l["meter"] == meter.as_str())
@@ -307,6 +323,9 @@ impl Draft {
         variant: Option<&str>,
         note: &str,
     ) {
+        if self.exceeded {
+            return;
+        }
         let batches: Vec<u64> = match meter {
             Meter::InputAudioSecondsMs | Meter::OutputAudioSecondsMs => {
                 vec![60_000, 1_000, 3_600_000]
@@ -368,7 +387,26 @@ impl Draft {
                 && l["variant"] == v["variant"]
                 && l["min_prompt_tokens"] == v["min_prompt_tokens"])
         });
-        self.lines.push(v);
+        self.push_line(v);
+    }
+}
+#[derive(Default)]
+struct Warnings {
+    items: Vec<String>,
+}
+impl Warnings {
+    fn push(&mut self, w: String) {
+        if self.items.contains(&w) {
+            return;
+        }
+        if self.items.len() < limits::MAX_WARNINGS - 1 {
+            self.items.push(w);
+        } else if self.items.len() == limits::MAX_WARNINGS - 1 {
+            self.items.push(
+                "Additional catalog warnings were omitted; review all rates before publishing."
+                    .into(),
+            );
+        }
     }
 }
 const TOKEN_KEYS: [(&str, Meter, &str); 6] = [
@@ -423,189 +461,6 @@ pub(crate) struct Evidence {
     pub(crate) output: u64,
     pub(crate) cost: i64,
 }
-/// Exact list cost of `e` at an endpoint's token prices (each part rounded up).
-fn endpoint_cost(pricing: &Value, e: &Evidence) -> Option<i64> {
-    let part = |key: &str, units: u64| match price_str(pricing, key) {
-        Some(p) => microusd(&p, units).map(|x| x.0),
-        None => Some(0),
-    };
-    part("prompt", e.input)?
-        .checked_add(part("completion", e.output)?)?
-        .checked_add(part("request", 1)?)
-}
-/// Comparable list price: one million input plus one million output tokens
-/// plus one request fee, in micro-USD. `None` for variable/unparseable prices.
-fn reference_cost(pricing: &Value) -> Option<i64> {
-    let part = |key: &str, units: u64| match price_str(pricing, key) {
-        Some(p) => microusd(&p, units).map(|x| x.0),
-        None if key == "prompt" => None,
-        None => Some(0),
-    };
-    part("prompt", 1_000_000)?
-        .checked_add(part("completion", 1_000_000)?)?
-        .checked_add(part("request", 1)?)
-}
-/// Which endpoint to price from: `(index, selection, matched attempts)`.
-/// Evidence wins when any attempt's provider cost matches an endpoint's list
-/// price (within per-part rounding); among equally matching endpoints the most
-/// expensive is chosen. Otherwise the cheapest currently available endpoint.
-fn choose_endpoint(
-    endpoints: &[Value],
-    evidence: &[Evidence],
-) -> Option<(usize, &'static str, usize)> {
-    let priced: Vec<(usize, i64)> = endpoints
-        .iter()
-        .enumerate()
-        .filter_map(|(i, e)| reference_cost(&e["pricing"]).map(|c| (i, c)))
-        .collect();
-    let matches = |i: usize| {
-        evidence
-            .iter()
-            .filter(|e| {
-                endpoint_cost(&endpoints[i]["pricing"], e).is_some_and(|c| (c - e.cost).abs() <= 2)
-            })
-            .count()
-    };
-    if let Some((i, n)) = priced
-        .iter()
-        .map(|(i, c)| (*i, matches(*i), *c))
-        .filter(|(_, n, _)| *n > 0)
-        .max_by_key(|(_, n, c)| (*n, *c))
-        .map(|(i, n, _)| (i, n))
-    {
-        return Some((i, "evidence", n));
-    }
-    // Prefer endpoints OpenRouter reports as up (status 0 or absent).
-    let up = |i: &usize| endpoints[*i]["status"].as_i64().is_none_or(|s| s == 0);
-    let pool: Vec<_> = if priced.iter().any(|(i, _)| up(i)) {
-        priced.into_iter().filter(|(i, _)| up(i)).collect()
-    } else {
-        priced
-    };
-    pool.into_iter()
-        .min_by_key(|(_, c)| *c)
-        .map(|(i, _)| (i, "cheapest", 0))
-}
-fn provider_label(e: &Value) -> String {
-    e["provider_name"]
-        .as_str()
-        .or(e["tag"].as_str())
-        .unwrap_or("unnamed provider")
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(64)
-        .collect()
-}
-/// `map` priced from one concrete endpoint when the endpoint list is known.
-pub(crate) fn map_with_endpoints(
-    model: &Value,
-    workload: WorkloadKind,
-    images: Option<&[u8]>,
-    endpoints: Option<&Value>,
-    evidence: &[Evidence],
-) -> Value {
-    let list = endpoints
-        .and_then(|v| {
-            v["data"]["endpoints"]
-                .as_array()
-                .or(v["endpoints"].as_array())
-        })
-        .filter(|l| !l.is_empty());
-    let Some((list, (index, selection, matched))) =
-        list.and_then(|l| choose_endpoint(l, evidence).map(|c| (l, c)))
-    else {
-        let mut out = map(model, workload, images);
-        if workload != WorkloadKind::Images {
-            out["endpoint"] = json!({"selection":"catalog"});
-            push_warning(
-                &mut out,
-                "Endpoint prices were unavailable; the catalog's top-provider price was used. OpenRouter may route to an endpoint with a different price.",
-            );
-        }
-        return out;
-    };
-    let endpoint = &list[index];
-    let mut priced = model.clone();
-    let mut pricing = endpoint["pricing"].clone();
-    // Prompt-size tiers are listed for the catalog's top provider only.
-    let same_rates = ["prompt", "completion"]
-        .iter()
-        .all(|k| price_str(&pricing, k) == price_str(&model["pricing"], k));
-    let tiers_dropped = !model["pricing"]["overrides"].is_null() && !same_rates;
-    // Only an object can carry the tiers (an endpoint is chosen only when its
-    // `pricing.prompt` reads as a string, so this is also guaranteed upstream).
-    if same_rates && pricing.is_object() && pricing["overrides"].is_null() {
-        pricing["overrides"] = model["pricing"]["overrides"].clone();
-    }
-    priced["pricing"] = pricing;
-    if let Some(n) = endpoint["context_length"].as_u64() {
-        priced["context_length"] = json!(n);
-    }
-    if let Some(n) = endpoint["max_completion_tokens"].as_u64() {
-        // `top_provider` comes from the untrusted catalog; `map` reads a
-        // non-object one as absent, so it is replaced rather than indexed into
-        // (`IndexMut` panics on a string, number, boolean or array).
-        if !priced["top_provider"].is_object() {
-            priced["top_provider"] = json!({});
-        }
-        priced["top_provider"]["max_completion_tokens"] = json!(n);
-    }
-    let mut out = map(&priced, workload, images);
-    let label = provider_label(endpoint);
-    let rate = |e: &Value| {
-        price_str(&e["pricing"], "prompt")
-            .and_then(|p| microusd(&p, 1_000_000))
-            .map(|x| format!("{}/M input tokens", crate::billing::v3::format_usd(x.0)))
-    };
-    let chosen_rate = rate(endpoint).unwrap_or_else(|| "an unlisted input rate".into());
-    let highest = list
-        .iter()
-        .filter_map(|e| reference_cost(&e["pricing"]).map(|c| (c, e)))
-        .max_by_key(|(c, _)| *c);
-    let pricier =
-        highest.filter(|(c, _)| reference_cost(&endpoint["pricing"]).is_some_and(|own| *c > own));
-    out["endpoint"] = json!({"provider":label,"selection":selection,"matched_attempts":matched,"endpoint_count":list.len(),"input_rate":rate(endpoint)});
-    push_warning(
-        &mut out,
-        &match selection {
-            "evidence" => format!(
-                "Priced from the {label} endpoint ({chosen_rate}), which matches the provider-reported cost of {matched} recent request{}.",
-                if matched == 1 { "" } else { "s" }
-            ),
-            _ => format!(
-                "Priced from the {label} endpoint ({chosen_rate}), the cheapest of {} current endpoint{}.",
-                list.len(),
-                if list.len() == 1 { "" } else { "s" }
-            ),
-        },
-    );
-    if let Some((_, top)) = pricier {
-        push_warning(
-            &mut out,
-            &format!(
-                "OpenRouter may route to another endpoint at a higher price ({} on {}); budget holds use the imported price.",
-                rate(top).unwrap_or_else(|| "unlisted".into()),
-                provider_label(top)
-            ),
-        );
-        if selection != "evidence" {
-            out["needs_review"] = json!(true);
-        }
-    }
-    if tiers_dropped {
-        push_warning(
-            &mut out,
-            "Prompt-size price tiers are listed only for the catalog's top provider and were not applied to this endpoint; review large-prompt rates.",
-        );
-        out["needs_review"] = json!(true);
-    }
-    out
-}
-fn push_warning(out: &mut Value, w: &str) {
-    if let Some(list) = out["warnings"].as_array_mut() {
-        list.push(json!(w));
-    }
-}
 /// Prompt-size tiers (`min_prompt_tokens`, strictly greater). Time-window
 /// overrides are not representable and are reported instead of guessed.
 fn overrides(d: &mut Draft, pricing: &Value) {
@@ -650,15 +505,12 @@ fn overrides(d: &mut Draft, pricing: &Value) {
                 );
             }
         }
-        for key in o
-            .as_object()
-            .map(|m| m.keys().cloned().collect::<Vec<_>>())
-            .unwrap_or_default()
-        {
-            if key != "min_prompt_tokens" && !TOKEN_KEYS.iter().any(|(k, _, _)| *k == key) {
+        for key in o.as_object().into_iter().flat_map(|m| m.keys()) {
+            if key != "min_prompt_tokens" && !TOKEN_KEYS.iter().any(|(k, _, _)| *k == key.as_str())
+            {
                 d.warnings.push(format!(
                     "A prompt-size override for {} pricing has no meter and was ignored.",
-                    human_key(&key)
+                    human_key(key)
                 ));
             }
         }
@@ -746,7 +598,13 @@ fn image_lines(d: &mut Draft, body: Option<&[u8]>) {
                 b.1 = amount;
                 b.2 = text;
             }
-            None => best.push((variant, amount, text)),
+            None => {
+                if best.len() >= crate::billing::v3::MAX_LINES {
+                    d.exceeded = true;
+                    return;
+                }
+                best.push((variant, amount, text));
+            }
         }
     }
     if best.is_empty() {
@@ -1083,16 +941,15 @@ pub(crate) mod tests {
         // #634: the catalog is untrusted upstream JSON. A `top_provider` that
         // is not an object is read as absent (as `map` already does), so the
         // chosen endpoint's own `max_completion_tokens` is the ceiling.
-        let model =
-            json!({"id":"v/m","pricing":{"prompt":"1","completion":"2"},"top_provider":"x"});
+        let model = json!({"id":"v/m","pricing":{"prompt":"1","completion":"2","request":"0"},"top_provider":"x"});
         let list = endpoints(json!([
-            {"pricing":{"prompt":"1","completion":"2"},"max_completion_tokens":100}
+            {"pricing":{"prompt":"1","completion":"2","request":"0"},"max_completion_tokens":100}
         ]));
         let v = map_with_endpoints(&model, WorkloadKind::Generation, None, Some(&list), &[]);
         assert_eq!(v["draft"]["output_token_limit"], 100);
         assert_eq!(v["endpoint"]["selection"], "cheapest");
         // With no endpoint ceiling the malformed value is still just absent.
-        let bare = endpoints(json!([{"pricing":{"prompt":"1","completion":"2"}}]));
+        let bare = endpoints(json!([{"pricing":{"prompt":"1","completion":"2","request":"0"}}]));
         let v = map_with_endpoints(&model, WorkloadKind::Generation, None, Some(&bare), &[]);
         assert_eq!(v["draft"]["output_token_limit"], 1024);
         // An endpoint whose `pricing` is not an object is never chosen (it has
@@ -1104,10 +961,10 @@ pub(crate) mod tests {
     }
     #[test]
     fn endpoint_choice_follows_evidence_else_cheapest() {
-        let model = json!({"id":"cloudflare/clef-flash","context_length":65536,"top_provider":{"max_completion_tokens":58982},"pricing":{"prompt":"0.00000009","completion":"0"}});
+        let model = json!({"id":"cloudflare/clef-flash","context_length":65536,"top_provider":{"max_completion_tokens":58982},"pricing":{"prompt":"0.00000009","completion":"0","request":"0"}});
         let list = endpoints(json!([
-            {"provider_name":"Cloudflare","tag":"cloudflare","context_length":65536,"max_completion_tokens":58982,"status":0,"pricing":{"prompt":"0.00000009","completion":"0"}},
-            {"provider_name":"PrimeIntellect","tag":"primeintellect","context_length":16384,"status":0,"pricing":{"prompt":"0.000000021","completion":"0"}}
+            {"provider_name":"Cloudflare","tag":"cloudflare","context_length":65536,"max_completion_tokens":58982,"status":0,"pricing":{"prompt":"0.00000009","completion":"0","request":"0"}},
+            {"provider_name":"PrimeIntellect","tag":"primeintellect","context_length":16384,"status":0,"pricing":{"prompt":"0.000000021","completion":"0","request":"0"}}
         ]));
         // No evidence: the cheapest current endpoint, flagged for review.
         let v = map_with_endpoints(&model, WorkloadKind::Systemone, None, Some(&list), &[]);
@@ -1186,8 +1043,8 @@ pub(crate) mod tests {
         assert_eq!(v["endpoint"]["selection"], "catalog");
         // Down endpoints are skipped when an available one exists.
         let list = endpoints(json!([
-            {"provider_name":"Down","status":-5,"pricing":{"prompt":"0.00000001","completion":"0"}},
-            {"provider_name":"Up","status":0,"pricing":{"prompt":"0.00000005","completion":"0"}}
+            {"provider_name":"Down","status":-5,"pricing":{"prompt":"0.00000001","completion":"0","request":"0"}},
+            {"provider_name":"Up","status":0,"pricing":{"prompt":"0.00000005","completion":"0","request":"0"}}
         ]));
         let v = map_with_endpoints(&model, WorkloadKind::Systemone, None, Some(&list), &[]);
         assert_eq!(v["endpoint"]["provider"], "Up");

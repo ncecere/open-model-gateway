@@ -45,6 +45,8 @@ mod db {
     mod batch_envelope_tests;
     #[path = "free_price_tests.rs"]
     mod free_price_tests;
+    #[path = "price_suggestion_http_tests.rs"]
+    mod price_suggestion_http_tests;
     #[path = "reconcile_usage_tests.rs"]
     mod reconcile_usage_tests;
     use super::*;
@@ -1458,8 +1460,8 @@ mod db {
         use std::sync::Arc;
         let f = fixture(pool).await;
         let admin = user(f.owner, true);
-        let catalog = json!({"data":[{"id":"v/m","pricing":{"prompt":"1","completion":"2"},"top_provider":"x"}]});
-        let endpoints = json!({"data":{"id":"v/m","endpoints":[{"provider_name":"P","status":0,"pricing":{"prompt":"1","completion":"2"},"max_completion_tokens":100}]}});
+        let catalog = json!({"data":[{"id":"v/m","pricing":{"prompt":"1","completion":"2","request":"0"},"top_provider":"x"}]});
+        let endpoints = json!({"data":{"id":"v/m","endpoints":[{"provider_name":"P","status":0,"pricing":{"prompt":"1","completion":"2","request":"0"},"max_completion_tokens":100}]}});
         let app = axum::Router::new()
             .route(
                 "/models",
