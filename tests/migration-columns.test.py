@@ -44,30 +44,53 @@ def sql_tokens(sql):
             yield word.translate(lower_ascii)
 
 
-def routine_body(statement):
-    """Read only a dollar-quoted SQL or PL/pgSQL body in a DO or routine definition."""
-    is_do = statement[:1] == ["do"]
-    header = 3 if statement[:3] == ["create", "or", "replace"] else 1
-    if not is_do and not (statement[:1] == ["create"] and
-                          statement[header:header + 1] in (["function"], ["procedure"])):
-        return None
-    language = "plpgsql" if is_do else None
-    body = None
-    depth = 0
+def supported_language(token):
+    if token.startswith("e'"):
+        token = token[1:]
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in ("'", '"'):
+        token = token[1:-1]
+    return token in ("plpgsql", "sql")
+
+
+def routine_bodies(statement):
+    """Find literal bodies without treating a routine's SET options as LANGUAGE clauses."""
+    # A nested statement may follow a PL/pgSQL BEGIN, THEN or ELSE.
     for i, word in enumerate(statement):
-        if word == "(":
-            depth += 1
-        elif word == ")":
-            depth -= 1
-        elif depth == 0:
-            if word == "language" and i + 1 < len(statement):
-                language = statement[i + 1].strip("'\"")
-            elif len(word) > 1 and word.startswith("$") and (is_do or statement[i - 1] == "as"):
-                body = word
-    if body and language in ("plpgsql", "sql"):
-        tag_end = body.index("$", 1) + 1
-        return body[tag_end:-tag_end]
-    return None
+        if word == "do":
+            j = i + 1
+            if statement[j:j + 1] == ["language"]:
+                if j + 1 >= len(statement) or not supported_language(statement[j + 1]):
+                    continue
+                j += 2
+            if j < len(statement) and statement[j].startswith("$"):
+                if statement[j + 1:j + 2] == ["language"] and not (
+                    j + 2 < len(statement) and supported_language(statement[j + 2])
+                ):
+                    continue
+                yield statement[j]
+        elif word == "create":
+            j = i + (3 if statement[i + 1:i + 3] == ["or", "replace"] else 1)
+            if statement[j:j + 1] not in (["function"], ["procedure"]):
+                continue
+            depth = 0
+            body = None
+            supported = False
+            for k in range(j + 1, len(statement) - 1):
+                option, value = statement[k:k + 2]
+                if option == "(":
+                    depth += 1
+                elif option == ")":
+                    depth -= 1
+                elif depth == 0:
+                    # A complete LANGUAGE <supported name> clause selects a
+                    # body. SET app.language TO and SET x TO language each
+                    # consume the name as data and cannot reset that choice.
+                    if option == "language" and supported_language(value):
+                        supported = True
+                    elif option == "as" and value.startswith("$"):
+                        body = value
+            if supported and body:
+                yield body
 
 
 def ddl_tokens(sql):
@@ -78,9 +101,9 @@ def ddl_tokens(sql):
             continue
         yield from statement
         yield ";"
-        body = routine_body(statement)
-        if body is not None:
-            yield from sql_tokens(body)
+        for quoted in routine_bodies(statement):
+            end = quoted.index("$", 1) + 1
+            yield from ddl_tokens(quoted[end:-end])
             yield ";"
         statement.clear()
 
@@ -260,12 +283,18 @@ class MigrationColumns(unittest.TestCase):
             DO LANGUAGE plpgsql $code$ BEGIN ALTER TABLE if ADD inner_secret text; END $code$;
             CREATE FUNCTION f() RETURNS void AS $$ BEGIN
                 ALTER TABLE if ADD inner_password text; END $$ LANGUAGE plpgsql;
+            CREATE PROCEDURE p() LANGUAGE SQL SET search_path TO language
+                AS $$ ALTER TABLE ordinary ADD procedure_token text; $$;
+            CREATE FUNCTION h() RETURNS void LANGUAGE E'plpgsql' SET app.language TO 'en'
+                AS $$ BEGIN DO $nested$ BEGIN ALTER TABLE ordinary ADD nested_token text;
+                END $nested$; END $$;
             CREATE FUNCTION g() RETURNS void AS $$ # ALTER TABLE ordinary ADD bogus_password text;
             $$ LANGUAGE plpython3u;
         """
         self.assertCountEqual(columns(sql), [
             ("if", "é_password", "text"), ("if", "new_token", "text"),
             ("if", "inner_secret", "text"), ("if", "inner_password", "text"),
+            ("ordinary", "procedure_token", "text"), ("ordinary", "nested_token", "text"),
         ])
 
     def test_exception_binds_table_and_first_type_token(self):
