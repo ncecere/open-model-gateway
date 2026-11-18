@@ -4,7 +4,7 @@
 // secret-scan-run.test.mjs. Every fixture is built from pieces at run time, so this file
 // contains no string that a scanner (or GitHub's own scanning) would take for a credential.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "../process.mjs";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

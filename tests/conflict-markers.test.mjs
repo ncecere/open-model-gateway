@@ -13,7 +13,7 @@
 // matching `>>>>>>> `, so a future setext heading or divider that happens to be
 // exactly seven `=` characters on its own line still passes.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync } from "./process.mjs";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";

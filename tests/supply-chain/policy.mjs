@@ -6,7 +6,7 @@
 // publish or test an image, a visible change in review, and they catch accidental drift. They
 // are not a boundary against a deliberately malicious pull request, which controls the
 // workflows and these tests; mandatory review of workflow diffs and of pinned-jobs.yaml is.
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "../process.mjs";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, posix } from "node:path";
 import {
