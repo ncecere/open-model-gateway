@@ -361,6 +361,12 @@ async fn run(cli: Cli, process_start_unix_nano: u64) -> Result<()> {
         )
         .init();
     let config = Config::from_env()?;
+    if matches!(cli.command, Some(Command::BootstrapDev)) {
+        use std::str::FromStr;
+        let options = sqlx::postgres::PgConnectOptions::from_str(&config.database_url)
+            .map_err(|_| anyhow::anyhow!("invalid development database configuration"))?;
+        open_model_gateway::bootstrap::ensure_dev_config(config.environment, &options)?;
+    }
     if matches!(cli.command, Some(Command::BootstrapDemo { .. }))
         || std::env::var("GATEWAY_OIDC_ISSUER").as_deref() == Ok("http://127.0.0.1:18084")
     {
