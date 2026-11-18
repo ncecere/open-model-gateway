@@ -1528,6 +1528,7 @@ proptest! {
                     prop_assert!(out.get("endpoint").is_none(), "{}", out["endpoint"]);
                 } else {
                     prop_assert_eq!(&out["endpoint"], &json!({"selection": "catalog"}));
+                    prop_assert_eq!(&out["needs_review"], &json!(true));
                 }
                 check_output(&out, Some(&model), workload != WorkloadKind::Images)?;
             }
