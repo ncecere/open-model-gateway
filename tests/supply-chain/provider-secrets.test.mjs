@@ -372,3 +372,52 @@ test("literal JavaScript process calls distinguish executable names from message
   check('console.log("cargo"); runner.spawnSync("tar", ["cargo"]); // spawn("cargo")');
   assert.throws(() => check('runner.execFileSync("cargo", args)'), /env.TOKEN/);
 });
+
+test("JavaScript interpreter calls follow extensionless script operands", () => {
+  for (const path of ["scripts/fixture-check", "fixture-check"]) {
+    const job = credentialJob("node wrapper.js");
+    const files = new Map([["wrapper.js", `runner.execFile("bash", ["${path}"])`], [path, "cargo test"]]);
+    assert.throws(() => checkInputs({ jobs: { job } }, "fixture.yml", new Map(), file => files.get(file)), /env.TOKEN/);
+  }
+});
+
+test("JavaScript process calls resolve wrappers from the child working directory", () => {
+  const job = credentialJob("node wrapper.js");
+  job.steps[0]["working-directory"] = "jobs";
+  const files = new Map([["jobs/check.sh", "echo fixture"], ["jobs/suite/check.sh", "cargo test"]]);
+  const check = source => {
+    files.set("jobs/wrapper.js", source);
+    checkInputs({ jobs: { job } }, "fixture.yml", new Map(), path => files.get(path));
+  };
+  check('runner.spawn("bash", ["check.sh"])');
+  for (const call of [
+    'runner.spawnSync("bash", ["check.sh"], { cwd: "suite" })',
+    'runner.execFile("bash", ["check.sh"], { "cwd": "suite" }, callback)',
+    'runner.exec("bash check.sh", { cwd: "suite" }, callback)',
+    'runner.execFileSync("./check.sh", { cwd: "suite" })',
+  ]) assert.throws(() => check(call), /env.TOKEN/);
+});
+
+test("npm forwards literal script operands to the main lifecycle event", () => {
+  const files = new Map([["check.sh", "cargo test"], ["package.json", JSON.stringify({
+    scripts: { script: "bash", echo: "echo fixture", preecho: "bash", postecho: "bash" },
+  })]]);
+  const check = run => checkInputs({ jobs: { job: credentialJob(run) } }, "fixture.yml", new Map(), p => files.get(p));
+  check("npm run echo -- check.sh");
+  assert.throws(() => check("npm run script -- check.sh"), /env.TOKEN/);
+  files.set("runner.js", 'spawn("npm", ["run", "script", "--", "check.sh"])');
+  assert.throws(() => check("node runner.js"), /env.TOKEN/);
+});
+
+test("removing the parent of an indexed wrapper still reports the missing file", t => {
+  const checkout = mkdtempSync(posix.join(tmpdir(), "missing-wrapper-"));
+  t.after(() => rmSync(checkout, { recursive: true, force: true }));
+  git(checkout, "init", "-q");
+  mkdirSync(posix.join(checkout, "scripts"));
+  writeFileSync(posix.join(checkout, "scripts/check.sh"), "echo fixture");
+  git(checkout, "add", "scripts/check.sh");
+  rmSync(posix.join(checkout, "scripts"), { recursive: true });
+  const read = indexedReader(checkout, sourceFiles(checkout));
+  assert.equal(read("scripts/absent.sh"), undefined);
+  assert.throws(() => read("scripts/check.sh"), /indexed wrapper path is missing/);
+});

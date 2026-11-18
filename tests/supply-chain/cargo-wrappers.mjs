@@ -26,7 +26,7 @@ export function indexedReader(root, files) {
         const entry = lstatSync(full, { throwIfNoEntry: false });
         assert.ok(!entry?.isSymbolicLink(), `wrapper path contains a symlink: ${path}`);
         if (!entry) {
-          assert.ok(!paths.has(posix.relative(base, full)), `indexed wrapper path is missing: ${path}`);
+          assert.ok(!paths.has(posix.normalize(path)), `indexed wrapper path is missing: ${path}`);
           return;
         }
       }
@@ -38,48 +38,56 @@ export function indexedReader(root, files) {
   };
 }
 
-// Only inspect executable arguments of process calls. Regexes, comments and
-// messages mentioning cargo are common in tests that never start the tool.
-function jsCommands(source) {
+// Object properties take effect in order. A later literal cwd resolves an earlier spread.
+function childDirectory(parent, options) {
+  if (!options || !ts.isObjectLiteralExpression(options)) return parent;
+  let cwd = parent;
+  for (const prop of options.properties) {
+    if (ts.isSpreadAssignment(prop) || (prop.name && ts.isComputedPropertyName(prop.name))) cwd = undefined;
+    if (prop.name?.text === "cwd") {
+      cwd = ts.isPropertyAssignment(prop) && ts.isStringLiteralLike(prop.initializer)
+        ? wrapperPath(parent, prop.initializer.text) : undefined;
+    }
+  }
+  return cwd;
+}
+
+// Keep the execution directory and the literal argv of each process call together.
+function jsCommands(source, cwd) {
   const tree = ts.createSourceFile("wrapper.js", source, ts.ScriptTarget.Latest, false, ts.ScriptKind.JS);
   assert.equal(tree.parseDiagnostics.length, 0, "cannot parse JavaScript wrapper");
-  const commands = [];
+  const calls = [];
   function visit(node) {
     if (ts.isCallExpression(node)) {
       const target = node.expression;
       const name = ts.isPropertyAccessExpression(target) ? target.name.text : target.text;
-      const [program, args] = node.arguments;
-      if (program && ts.isStringLiteralLike(program)) {
-        if (["exec", "execSync"].includes(name)) commands.push(...shellCommands(program.text));
-        if (["spawn", "spawnSync", "execFile", "execFileSync"].includes(name)) {
-          const words = [program];
-          if (program.text === "npm" && args && ts.isArrayLiteralExpression(args)) {
-            const [verb, script] = args.elements;
-            if (verb && ts.isStringLiteralLike(verb) && verb.text === "run" && script && ts.isStringLiteralLike(script)) {
-              words.push(verb, script);
-            }
-          }
-          if (/^(node|bash|sh|python3?)$/.test(program.text) && args && ts.isArrayLiteralExpression(args)) {
-            // Follow the literal script operand of a normal interpreter call.
-            for (const arg of args.elements) {
-              if (!ts.isStringLiteralLike(arg)) break;
-              if (arg.text.startsWith("-")) continue;
-              if (/\.(?:sh|bash|[cm]?js|py)$/.test(arg.text)) words.push(arg);
-              break;
-            }
-          }
-          commands.push(words);
-        }
+      const shell = ["exec", "execSync"].includes(name);
+      const direct = ["spawn", "spawnSync", "execFile", "execFileSync"].includes(name);
+      const [program, args, third] = node.arguments;
+      if ((shell || direct) && program && ts.isStringLiteralLike(program)) {
+        const argv = args && ts.isArrayLiteralExpression(args) ? args.elements : [];
+        const options = shell || (args && ts.isObjectLiteralExpression(args)) ? args : third;
+        const words = argv.map(arg => ts.isStringLiteralLike(arg) ? { text: arg.text } : { variable: true, text: "" });
+        const commands = shell ? shellCommands(program.text) : [[{ text: program.text }, ...words]];
+        calls.push({ commands, cwd: childDirectory(cwd, options), direct });
       }
     }
     ts.forEachChild(node, visit);
   }
   visit(tree);
-  return commands;
+  return calls;
+}
+
+// Interpreter eval strings and options with separate operands need manual review.
+function interpreterLanguage(program) {
+  if (program === "bash" || program === "sh") return "shell";
+  if (program === "node") return "js";
+  if (program === "python" || program === "python3") return "other";
 }
 
 export function cargoScanner(read, shellSources) {
   const seen = new Set();
+  const runningScripts = new Set();
 
   // npm searches upward for the package. Only the root package's scripts are
   // in scope. An intervening manifest selects a different package.
@@ -96,43 +104,93 @@ export function cargoScanner(read, shellSources) {
     return true;
   }
 
-  function scan(source, kind, cwd) {
+  function follow(word, cwd, interpreter) {
+    if (!cwd || word.variable || !word.text || posix.isAbsolute(word.text)) return false;
+    if (!interpreter && !word.text.startsWith("./") && !word.text.startsWith("scripts/")
+        && !/\.(?:sh|bash|[cm]?js|py)$/.test(word.text)) return false;
+    const path = wrapperPath(cwd, word.text);
+    const source = read(path);
     if (!source) return false;
-    const commands = kind === "js" ? jsCommands(source) : kind === "shell" ? shellCommands(source) : [];
-    const words = kind === "other" ? source.split(/[^a-zA-Z0-9_./-]+/)
-      : commands.filter(([program]) => !["echo", "printf"].includes(program.text))
-        .flatMap(command => command[0].text === "npm" ? [command[0]] : command)
-        .filter(word => !word.variable).map(word => word.text);
-    let cargo = words.some(word => word === "cargo" || word.endsWith("/cargo"));
-    for (const word of words) {
-      if (posix.isAbsolute(word) || (!word.startsWith("./") && !/\.(?:sh|bash|m?js|cjs|py)$/.test(word)
-          && !word.startsWith("scripts/"))) continue;
-      const path = wrapperPath(cwd, word);
-      const key = JSON.stringify([cwd, path]);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const script = read(path);
-      if (!script) continue;
-      const isShell = /\.(?:sh|bash)$/.test(path) || /^#![^\n]*\b(?:ba)?sh\b/.test(script);
-      if (isShell) shellSources.set(path, script);
-      const language = isShell ? "shell" : /\.[cm]?js$/.test(path) ? "js" : "other";
-      if (scan(script, language, cwd)) cargo = true;
+    const isShell = /\.(?:sh|bash)$/.test(path) || /^#![^\n]*\b(?:ba)?sh\b/.test(source);
+    const kind = interpreter ?? (isShell ? "shell" : /\.[cm]?js$/.test(path) ? "js" : "other");
+    if (kind === "shell") shellSources.set(path, source);
+    const key = JSON.stringify([posix.normalize(cwd), posix.normalize(path), kind]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return scan(source, kind, cwd);
+  }
+
+  function npmScript(command, cwd) {
+    const [, verb, name, ...args] = command;
+    if (!cwd || verb?.text !== "run" || verb.variable || !name || name.variable || !selectsRootPackage(cwd)) return false;
+    const manifest = read("package.json");
+    const scripts = manifest && JSON.parse(manifest).scripts;
+    if (typeof scripts?.[name.text] !== "string" || runningScripts.has(name.text)) return false;
+    const invocation = JSON.stringify(["npm", name.text, args]);
+    if (seen.has(invocation)) return false;
+    seen.add(invocation);
+    runningScripts.add(name.text);
+    let cargo = false;
+    for (const event of [`pre${name.text}`, name.text, `post${name.text}`]) {
+      if (typeof scripts[event] !== "string") continue;
+      shellSources.set(`npm:${event}`, scripts[event]);
+      const commands = shellCommands(scripts[event]);
+      if (event === name.text && commands.length) {
+        const separator = args.findIndex(word => !word.variable && word.text === "--");
+        const forwarded = separator < 0 ? args.filter(arg => !arg.text.startsWith("-")) : args.slice(separator + 1);
+        commands.at(-1).push(...forwarded);
+      }
+      if (scanCommands(commands, ".", false)) cargo = true;
     }
-    for (const [program, verb, name] of commands) {
-      if (program.variable || program.text !== "npm" || verb?.variable || verb?.text !== "run" || !name || name.variable || !selectsRootPackage(cwd)) continue;
-      const key = `npm:${name.text}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const manifest = read("package.json");
-      const scripts = manifest && JSON.parse(manifest).scripts;
-      if (typeof scripts?.[name.text] !== "string") continue;
-      for (const event of [`pre${name.text}`, name.text, `post${name.text}`]) {
-        if (typeof scripts[event] !== "string") continue;
-        shellSources.set(`npm:${event}`, scripts[event]);
-        if (scan(scripts[event], "shell", ".")) cargo = true;
+    runningScripts.delete(name.text);
+    return cargo;
+  }
+
+  function scanCommands(commands, cwd, direct) {
+    let cargo = false;
+    for (const command of commands) {
+      const [program, ...args] = command;
+      if (!program.variable && ["echo", "printf"].includes(program.text)) continue;
+      if (!program.variable && program.text === "npm") {
+        if (npmScript(command, cwd)) cargo = true;
+        continue;
+      }
+      const interpreter = !program.variable && interpreterLanguage(program.text);
+      // Direct process calls supply argv as data. Only a script operand is executable.
+      const words = direct ? [program] : command;
+      for (const word of words) {
+        if (word.variable) continue;
+        if (word.text === "cargo" || word.text.endsWith("/cargo")) cargo = true;
+        if (follow(word, cwd)) cargo = true;
+      }
+      if (interpreter) {
+        let i = 0;
+        while (i < args.length && !args[i].variable && args[i].text.startsWith("-")) {
+          const flag = args[i++].text;
+          if (flag === "--") break;
+          if (["-c", "-e", "--eval", "-m", "--require", "-r", "--import", "-o"].includes(flag)) {
+            i = args.length;
+            break;
+          }
+        }
+        if (args[i] && !args[i].text.startsWith("-") && follow(args[i], cwd, interpreter)) cargo = true;
       }
     }
     return cargo;
+  }
+
+  function scan(source, kind, cwd) {
+    if (!source) return false;
+    if (kind === "shell") return scanCommands(shellCommands(source), cwd, false);
+    if (kind === "js") {
+      let cargo = false;
+      for (const call of jsCommands(source, cwd)) {
+        if (scanCommands(call.commands, call.cwd, call.direct)) cargo = true;
+      }
+      return cargo;
+    }
+    const words = source.split(/[^a-zA-Z0-9_./-]+/).filter(Boolean).map(text => ({ text }));
+    return scanCommands(words.map(word => [word]), cwd, false);
   }
   return scan;
 }
