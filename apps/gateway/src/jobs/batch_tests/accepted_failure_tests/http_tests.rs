@@ -252,3 +252,5 @@ async fn running_gateway_native_batch_failure_and_refusals(pool: PgPool) {
         ]
     );
 }
+
+mod durable;

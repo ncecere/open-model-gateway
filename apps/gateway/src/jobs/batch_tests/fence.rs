@@ -19,13 +19,13 @@ async fn batch(pool: PgPool, lines: &[(&str, &str)]) -> (World, JobRow) {
 }
 
 /// Run the next claimable batch on a new runner (a process of its own).
-fn start(w: &World) -> tokio::task::JoinHandle<JobResult<bool>> {
+pub(super) fn start(w: &World) -> tokio::task::JoinHandle<JobResult<bool>> {
     let runner = Runner::new(w.jobs.clone());
     tokio::spawn(async move { runner.run_next().await })
 }
 
 /// The runner that holds the batch stops renewing: its lease lapses.
-async fn lapse(w: &World, job: &JobRow) {
+pub(super) async fn lapse(w: &World, job: &JobRow) {
     sqlx::query("UPDATE async_jobs SET runner_lease_until=now()-interval '1 second' WHERE id=$1")
         .bind(job.id)
         .execute(&w.f.store.pool)
