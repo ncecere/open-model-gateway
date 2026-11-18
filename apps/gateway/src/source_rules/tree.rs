@@ -369,7 +369,15 @@ pub(super) fn dropped_spans(file: &syn::File) -> Vec<SpanRange> {
     out
 }
 
-pub(super) fn words(ident: &str) -> Vec<String> {
+/// Match both interpretations of capital runs: APIkey contains "apikey",
+/// while clientAPIKey contains the adjacent words "api" and "key".
+pub(super) fn word_forms(ident: &str) -> impl Iterator<Item = Vec<String>> {
+    [false, true]
+        .into_iter()
+        .map(move |split_acronyms| words(ident, split_acronyms))
+}
+
+fn words(ident: &str, split_acronyms: bool) -> Vec<String> {
     let mut out = Vec::new();
     let mut word = String::new();
     let mut chars = ident.chars().peekable();
@@ -385,7 +393,9 @@ pub(super) fn words(ident: &str) -> Vec<String> {
         let starts_word = previous.is_some_and(|p| {
             p.is_lowercase()
                 || p.is_ascii_digit()
-                || (p.is_uppercase() && chars.peek().is_some_and(|next| next.is_lowercase()))
+                || (split_acronyms
+                    && p.is_uppercase()
+                    && chars.peek().is_some_and(|next| next.is_lowercase()))
         });
         if c.is_uppercase() && starts_word {
             out.push(std::mem::take(&mut word));

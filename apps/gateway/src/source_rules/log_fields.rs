@@ -181,14 +181,19 @@ fn denied_item(item: &str) -> BTreeSet<String> {
 
 /// Denied words in a stretch of token text (a name or an expression).
 fn denied(text: &str) -> BTreeSet<String> {
-    let all = super::tree::words(text);
-    let mut out: BTreeSet<String> = all
-        .iter()
-        .filter(|w| DENIED_WORDS.contains(&w.as_str()))
-        .cloned()
-        .collect();
-    if all.windows(2).any(|p| p[0] == "api" && p[1] == "key") {
-        out.insert("api_key".to_owned());
+    let mut out = BTreeSet::new();
+    for words in super::tree::word_forms(text) {
+        if words
+            .windows(2)
+            .any(|pair| pair[0] == "api" && pair[1] == "key")
+        {
+            out.insert("api_key".to_owned());
+        }
+        out.extend(
+            words
+                .into_iter()
+                .filter(|word| DENIED_WORDS.contains(&word.as_str())),
+        );
     }
     out
 }
@@ -775,7 +780,7 @@ mod tests {
             }"#,
         );
         let found = denied_problems(&entries, &[]);
-        assert!(denied("clientAPIKey").contains("api_key"));
+
         for word in [
             "body",
             "messages",
@@ -795,6 +800,23 @@ mod tests {
                 .any(|p| p.contains("execution_id") || p.contains("fixed text")),
             "{found:?}"
         );
+    }
+
+    #[test]
+    fn acronym_spellings_preserve_log_value_refusals() {
+        for (field, word) in [("APIkey", "apikey"), ("clientAPIKey", "api_key")] {
+            let (entries, _) = fixture(
+                "background.rs",
+                &format!(r#"fn f() {{ warn!(detail = %self.{field}, "ok"); }}"#),
+            );
+            let found = denied_problems(&entries, &[]);
+            assert!(
+                found
+                    .iter()
+                    .any(|p| p.ends_with(&format!("names `{word}`"))),
+                "{found:?}"
+            );
+        }
     }
 
     #[test]
