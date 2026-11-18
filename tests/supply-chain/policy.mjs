@@ -6,11 +6,11 @@
 // publish or test an image, a visible change in review, and they catch accidental drift. They
 // are not a boundary against a deliberately malicious pull request, which controls the
 // workflows and these tests; mandatory review of workflow diffs and of pinned-jobs.yaml is.
-import { spawnSync } from "../process.mjs";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, posix } from "node:path";
+import { gitFiles } from "../git.mjs";
 import {
-  DOCKERFILE_SKIP_DIRS, KNOWN_DOCKERFILES, actionName, jobPermissions, actionsDir, isMapping, jobsOf, loadWorkflow, parseStrict, readLocalFromRepo, root, stepsOf, toData, workflowsDir,
+  DOCKERFILE_SKIP_DIRS, KNOWN_DOCKERFILES, actionName, jobPermissions, actionsDir, isMapping, jobsOf, loadWorkflow, parseStrict, readLocalFromRepo, root, sourceFiles, stepsOf, toData, workflowsDir,
 } from "./lib.mjs";
 
 // ---- job and service containers (#493) ----
@@ -103,7 +103,7 @@ export const BUILDX_INPUTS = { "driver-opts": `image=${BUILDKIT_IMAGE}` };
 
 // A build context or Dockerfile path relative to `base` (a directory of the checkout): the
 // normalized path, or the reason it is refused.
-export function buildPath(value, base = ".") {
+export function buildPath(value, base = ".", dir = root) {
   if (typeof value !== "string" || value === "") return { refused: "must be one literal, non-empty path" };
   if (value.includes("${")) return { refused: `'${value}' is an expression or variable, which cannot be checked` };
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value) || /^git@/i.test(value) || value.includes("#")) return { refused: `'${value}' is a remote context, which the checks never read` };
@@ -112,6 +112,10 @@ export function buildPath(value, base = ".") {
   if (path === ".." || path.startsWith("../")) return { refused: `'${value}' leaves the checkout` };
   const skipped = path.split("/").find(segment => DOCKERFILE_SKIP_DIRS.test(segment));
   if (skipped) return { refused: `'${value}' is in '${skipped}', a directory the Dockerfile walker skips` };
+  const files = sourceFiles(dir);
+  if (!files.some(file => path === "." || file === path || file.startsWith(`${path}/`))) {
+    return { refused: `'${value}' is outside the Git source inventory (tracked and non-ignored untracked files)` };
+  }
   return { path };
 }
 
@@ -279,8 +283,7 @@ export const PINNED_JOB_INPUTS = [
   "tests/container-image.test.mjs",
 ];
 const SCRIPT_PATH = /^(\.github|scripts|tests|deploy|tools|apps)\/[\w./-]+\.(sh|bash|py|mjs|js|cjs|ts)$/;
-let trackedCache;
-export const tracked = () => (trackedCache ??= new Set(spawnSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8" }).stdout.split("\0").filter(Boolean)));
+export const tracked = (dir = root) => new Set(gitFiles(dir));
 
 export function pinnedJobInputs(pins = currentPins()) {
   const found = new Set(Object.keys(pins.local_actions ?? {}));
@@ -807,17 +810,11 @@ export function composeBuildViolations(file, data, builds = []) {
 }
 
 // Every Compose file of the repository: a YAML file named like one, or any YAML file with a
-// top-level `services:` key, anywhere outside the skipped directories and .github. Only these
-// may be passed to `docker compose -f`.
+// top-level `services:` key, in the Git source inventory outside the skipped directories
+// and .github. Only these may be passed to `docker compose -f`.
 export function repoComposeFiles(dir = root) {
-  const base = dir.endsWith("/") ? dir : `${dir}/`;
-  const visit = d => readdirSync(d, { withFileTypes: true }).flatMap(e => {
-    const full = join(d, e.name);
-    if (e.isDirectory()) return DOCKERFILE_SKIP_DIRS.test(e.name) || (d === dir && e.name === ".github") ? [] : visit(full);
-    if (!/\.ya?ml$/i.test(e.name)) return [];
-    return COMPOSE_FILE.test(e.name) || /^services[ \t]*:/m.test(readFileSync(full, "utf8")) ? [full.slice(base.length)] : [];
-  });
-  return visit(dir).sort();
+  return sourceFiles(dir).filter(file => !file.startsWith(".github/") && /\.ya?ml$/i.test(file))
+    .filter(file => COMPOSE_FILE.test(posix.basename(file)) || /^services[ \t]*:/m.test(readFileSync(join(dir, file), "utf8")));
 }
 
 // Compose reads `.env` from the project directory (that of the first file) and takes
@@ -825,8 +822,7 @@ export function repoComposeFiles(dir = root) {
 // refused unless listed here with the reason; none is. (A developer's untracked `.env` is
 // not read: CI never has one.)
 export const COMPOSE_DOTENV_ALLOWED = new Map([]);
-const trackedFiles = () => new Set(spawnSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8" }).stdout.split("\0").filter(Boolean));
-export function composeDotenvViolations(composeFiles, exists = path => trackedFiles().has(path)) {
+export function composeDotenvViolations(composeFiles, exists = path => tracked().has(path)) {
   const dirs = new Set([...composeFiles].map(file => posix.dirname(file)));
   return [...dirs].map(dir => (dir === "." ? ".env" : `${dir}/.env`)).filter(path => exists(path) && !COMPOSE_DOTENV_ALLOWED.has(path))
     .map(path => `${path} sets Compose variables (COMPOSE_FILE and others) for the Compose files beside it; it is not allowed unless listed in COMPOSE_DOTENV_ALLOWED`);

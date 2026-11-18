@@ -7,6 +7,8 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadWorkflow, root, stepsOf } from "./lib.mjs";
+import { gitEnv } from "../git.mjs";
+export { gitEnv } from "../git.mjs";
 
 export const CONFIG_FILE = ".gitleaks.toml";
 export const HOOK = "scripts/secret-scan.py";
@@ -43,11 +45,6 @@ export function readConfig(text) {
 
 // ---- git ----
 
-export const gitEnv = () => ({
-  ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
-  GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1",
-  GIT_AUTHOR_NAME: "fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid",
-});
 export function git(dir, ...args) {
   const r = spawnSync("git", args, { cwd: dir, encoding: "utf8", env: gitEnv() });
   assert.equal(r.status, 0, `git ${args.join(" ")}: ${r.stderr}`);
