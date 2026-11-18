@@ -6,14 +6,48 @@ import { parseStrict, repoFiles, toData } from "./lib.mjs";
 // GitHub secrets have arbitrary names. Check the source of a value, including
 // whole-context and dynamic lookups, instead of guessing provider variable names.
 function readsSecret(value, condition) {
-  const bodies = condition ? [value]
-    : Array.from(value.matchAll(/\$\{\{((?:'(?:[^']|'')*'|}(?!})|[^'}])*)}}/gs), match => match[1]);
-  return bodies.some(body => {
-    // Consume strings and whole identifiers so inputs.secrets and literal text
-    // stay distinct from a reference to the root secrets context.
-    const tokens = body.match(/'(?:[^']|'')*'|[\w-]+|[^\s]/g) ?? [];
-    return tokens.some((token, i) => /^secrets$/i.test(token) && tokens[i - 1] !== ".");
-  });
+  const identifier = /[\w-]+/y;
+  let inExpression = condition;
+  let quoted = false;
+  let afterDot = false;
+  let i = 0;
+  while (i < value.length) {
+    if (!inExpression) {
+      const open = value.indexOf("${{", i);
+      if (open === -1) break;
+      i = open + 3;
+      inExpression = true;
+      afterDot = false;
+      continue;
+    }
+    const ch = value[i];
+    if (ch === "'") {
+      if (quoted && value[i + 1] === "'") {
+        i += 2;
+        continue;
+      }
+      quoted = !quoted;
+      afterDot = false;
+    } else if (!quoted) {
+      if (!condition && value.startsWith("}}", i)) {
+        i += 2;
+        inExpression = false;
+        continue;
+      }
+      identifier.lastIndex = i;
+      const word = identifier.exec(value);
+      if (word) {
+        if (!afterDot && word[0].toLowerCase() === "secrets") return true;
+        afterDot = false;
+        i = identifier.lastIndex;
+        continue;
+      }
+      if (!/\s/.test(ch)) afterDot = ch === ".";
+    }
+    i++;
+  }
+  assert.ok(condition || !inExpression, "unterminated expression in workflow input");
+  return false;
 }
 
 function checkInputs(data, file) {
@@ -71,4 +105,11 @@ test("unrelated properties, environment literals and token whitespace are accept
     if: "inputs.secrets && inputs['secrets']",
     run: "cargo test",
   }] } } }, "ok.yml");
+});
+
+test("expression boundaries respect Actions strings across interpolations", () => {
+  const first = "${{ format('it''s }} and secrets', inputs.name) }}";
+  assert.equal(readsSecret(first + " secrets outside ${{ inputs.secrets }}", false), false);
+  assert.equal(readsSecret(first + " ${{ secrets.SYNTHETIC }}", false), true);
+  assert.throws(() => readsSecret("label: ${{ inputs.name", false), /unterminated expression/);
 });
