@@ -2,40 +2,18 @@
 // shell interpolation, ignored-test sweeps, or third-party runners.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-export const TERMINAL = "providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence";
-export const KEY_CONTENTION = "management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement";
+import { checkSources, identity, SPECIAL, KEY_CONTENTION, TERMINAL, DEDICATED_RUNTIME_PROBES } from "../../deploy/spark/target-inventory.mjs";
+export { KEY_CONTENTION, TERMINAL };
 const DEDICATED_LIB_PROBES = [TERMINAL, KEY_CONTENTION];
-const DEDICATED_RUNTIME_PROBES = ["enterprise_runtime_allowlist_and_rollback_probes", "controlled_lock_stall_recovers_on_runtime_http_path"];
-const SPECIAL = ["filestore_s3", "runtime_privileges"];
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const fail = message => { throw new Error(message); };
 
-function identity(packageId, target) {
-  if (typeof packageId !== "string" || !packageId || typeof target?.name !== "string" || !target.name
-      || !Array.isArray(target.kind) || !target.kind.length) fail("Malformed Cargo target identity");
-  const libs = ["lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"];
-  let kind;
-  if (target.kind.every(k => libs.includes(k))) kind = "lib";
-  else if (target.kind.length === 1 && ["bin", "test", "example", "bench"].includes(target.kind[0])) kind = target.kind[0];
-  else fail(`Unsupported Cargo test target kind: ${JSON.stringify(target.kind)}`);
-  return { packageId, name: target.name, kind, key: JSON.stringify([packageId, [...target.kind].sort(), target.name]) };
-}
-
 async function checkSpecialSources() {
   const metadata = JSON.parse(await runCargo(["metadata", "--no-deps", "--all-features", "--format-version", "1", "--locked"]));
-  const packages = metadata.packages.filter(pkg =>
-    pkg.name === "open-model-gateway" && metadata.workspace_members.includes(pkg.id));
-  assert.equal(packages.length, 1, "expected one gateway workspace package");
-  for (const name of SPECIAL) {
-    const targets = packages[0].targets.filter(target => target.name === name && target.kind.includes("test"));
-    assert.equal(targets.length, 1, `expected one gateway test target named ${name}`);
-    assert.equal(targets[0].src_path, join(metadata.workspace_root, "apps/gateway/tests", `${name}.rs`),
-      `unexpected ${name} source path`);
-  }
+  checkSources(metadata, SPECIAL);
 }
 
 export function discoverTargets(metadata, output) {

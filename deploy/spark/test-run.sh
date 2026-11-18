@@ -299,19 +299,6 @@ suite_lib() {
   return "$bad"
 }
 
-exact_probe() { # a dedicated exact test must run once; libtest succeeds even if the name matches nothing
-  local out code
-  out=$(mktemp "$OMG_TMP/exact-probe.XXXXXX") || return 1
-  "$@" 2>&1 | tee "$out"
-  code=$?
-  if ! awk '/^test result: / { results++; if ($0 ~ /^test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out(; finished in [0-9.]+s)?$/) ok++ } END { exit !(results == 1 && ok == 1) }' "$out"; then
-    echo "expected exactly one passing probe"
-    code=1
-  fi
-  rm -f "$out"
-  return "$code"
-}
-
 suite_integration() {
   local bad=0
   prepare_npm integration || return 1
@@ -324,8 +311,8 @@ suite_integration() {
   step integration targets with_db node "$OMG_SCRIPTS/test-integration.mjs" gateway || return 1
   step integration runtime-privileges with_db node "$OMG_SCRIPTS/test-integration.mjs" runtime || bad=1
   step integration runtime-privileges-ignored with_db node "$OMG_SCRIPTS/test-integration.mjs" runtime-ignored || bad=1
-  step integration key-issuance-contention exact_probe with_db env RUST_TEST_NOCAPTURE=1 cargo test -p open-model-gateway --all-features --lib management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement -- --ignored --exact || bad=1
-  step integration anthropic-terminal exact_probe with_db cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact || bad=1
+  step integration key-issuance-contention with_db env RUST_TEST_NOCAPTURE=1 node "$OMG_SCRIPTS/test-integration.mjs" key-contention || bad=1
+  step integration anthropic-terminal with_db node "$OMG_SCRIPTS/test-integration.mjs" terminal || bad=1
   step integration tools with_loopback_db node "$OMG_SCRIPTS/test-integration.mjs" workspace || bad=1
   step integration doctests with_db cargo test -p open-model-gateway --all-features --doc || bad=1
   return "$bad"

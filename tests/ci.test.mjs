@@ -166,9 +166,9 @@ test("special probes retain sequential ACL, exact contention/terminal, Docker an
     "node .github/scripts/rust-shards.mjs --check-special-sources",
     "cargo test -p open-model-gateway --all-features --test filestore_s3",
     "cargo test -p open-model-gateway --all-features --test runtime_privileges",
-    "cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored --test-threads=1",
-    "cargo test -p open-model-gateway --all-features --lib management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement -- --ignored --exact",
-    "cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact",
+    "node deploy/spark/test-integration.mjs runtime-ignored",
+    "node deploy/spark/test-integration.mjs key-contention",
+    "node deploy/spark/test-integration.mjs terminal",
     AGE_INSTALL,
     "cargo build -p open-model-gateway --all-features --bin open-model-gateway",
     "python3 tests/backup.test.py",
@@ -193,27 +193,44 @@ test("special job validates both source paths before invoking any test", () => {
     const calls = join(dir, "calls");
     writeFileSync(cargo, `#!${process.execPath}
       import { appendFileSync } from 'node:fs';
-      appendFileSync(process.env.CALLS, process.argv.slice(2).join(' ') + '\\n');
-      console.log(process.env.METADATA);`, { mode: 0o755 });
+      appendFileSync(process.env.CALLS, JSON.stringify(process.argv.slice(2)) + '\\n');
+      console.log(process.env.METADATA);
+      if (process.env.FAIL) process.exitCode = 101;`, { mode: 0o755 });
     const command = runs(loadWorkflow().jobs["gateway-special"])[1].split(" ");
     assert.equal(command[0], "node");
-    for (const remap of ["filestore_s3", "runtime_privileges", undefined]) {
-      const meta = fixtures();
-      meta.workspace_root = "/repo";
-      for (const t of meta.packages[0].targets) {
-        t.src_path = `/repo/apps/gateway/tests/${t.name}.rs`;
-        if (t.name === remap) t.src_path = remap === "runtime_privileges"
-          ? "/repo/apps/gateway/tests/remapped_live.rs" : `/repo/elsewhere/tests/${t.name}.rs`;
-      }
+    const meta = fixtures();
+    meta.workspace_root = "/repo";
+    for (const t of meta.packages[0].targets) t.src_path = `/repo/apps/gateway/tests/${t.name}.rs`;
+    const valid = JSON.stringify(meta);
+    function mutated(name, change) {
+      const copy = structuredClone(meta);
+      const targets = copy.packages[0].targets;
+      change(targets.find(t => t.name === name), targets);
+      return JSON.stringify(copy);
+    }
+    const runtime = change => mutated("runtime_privileges", change);
+    const scenarios = [
+      [valid],
+      [mutated("filestore_s3", t => { t.src_path = "/repo/elsewhere/tests/filestore_s3.rs"; }), /unexpected filestore_s3 source path/],
+      [runtime(t => { t.src_path = "/repo/apps/gateway/tests/remapped_live.rs"; }), /unexpected runtime_privileges source path/],
+      [runtime(t => { t.kind = ["bin", "test"]; }), /Unsupported Cargo test target kind/],
+      [runtime(t => { t.kind = "test"; }), /Malformed Cargo target identity/],
+      [runtime((t, targets) => targets.push(t)), /expected one gateway test target/],
+      [runtime(t => { t.test = false; }), /expected one gateway test target/],
+      ["{", /SyntaxError/],
+      [valid, /exit=101/, "1"],
+    ];
+    for (const [metadata, error, fail = ""] of scenarios) {
       writeFileSync(calls, "");
       const result = spawnSync(process.execPath, command.slice(1), {
-        cwd: root, encoding: "utf8", env: { PATH: dir, CALLS: calls, METADATA: JSON.stringify(meta) },
+        cwd: root, encoding: "utf8", env: { PATH: dir, CALLS: calls, METADATA: metadata, FAIL: fail },
       });
-      if (remap) {
-        assert.notEqual(result.status, 0, remap);
-        assert.ok(result.stderr.includes(`unexpected ${remap} source path`), result.stderr);
+      if (error) {
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, error);
       } else assert.equal(result.status, 0, result.stderr);
-      assert.match(readFileSync(calls, "utf8"), /^--color never metadata [^\n]+\n$/);
+      assert.deepEqual(JSON.parse(readFileSync(calls, "utf8")),
+        ["--color", "never", "metadata", "--no-deps", "--all-features", "--format-version", "1", "--locked"]);
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -369,7 +386,7 @@ function syntheticCargo({ liveIgnored, corrupt = "", failAt = -1, probe = "", pr
     const name = args.includes("--lib") ? "open_model_gateway" : args[args.indexOf("--test") + 1] ?? "binary";
     const terminal = "providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence";
     const keyContention = "management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement";
-    const runtimeProbes = ["enterprise_runtime_allowlist_and_rollback_probes", "controlled_lock_stall_recovers_on_runtime_http_path"];
+    const runtimeProbes = ["enterprise_runtime_allowlist_and_rollback_probes", "controlled_lock_stall_recovers_on_runtime_http_path", "populated_verifier_both", "populated_verifier_personal", "populated_verifier_scim"];
     let entries = name === "open_model_gateway" ? Array.from({ length: 12 }, (_, i) => entry(i === 11 ? terminal : i === 10 ? keyContention : `m::test_${i}`))
       : name === "runtime_privileges" ? runtimeProbes.map(name => entry(name)) : [entry("normal"), entry("live")];
     let ignored = entries.filter(e => e.name === "live" || e.name === terminal || e.name === keyContention || (name === "runtime_privileges" && runtimeProbes.includes(e.name)));
@@ -434,6 +451,7 @@ test("orchestrator rejects each missing, renamed, unignored or non-test dedicate
     "providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence",
     "enterprise_runtime_allowlist_and_rollback_probes",
     "controlled_lock_stall_recovers_on_runtime_http_path",
+    "populated_verifier_both", "populated_verifier_personal", "populated_verifier_scim",
   ];
   for (const probe of probes) for (const probeMutation of ["remove", "rename", "unignore", "benchmark"]) {
     // Generate all listings from the same mutation: pretty counts stay valid

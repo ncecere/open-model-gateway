@@ -8,9 +8,9 @@
     {"ci": "npm ci", "suite": "lib integration web", "script": "npm ci $OMG_NPM_CI_FLAGS"},
     {"ci": "node .github/scripts/rust-shards.mjs --shard ${{ matrix.shard }} --count 4", "suite": "lib integration", "script": "'(NR - 1) % n == k'", "note": "the library by the same split; the other targets by name, in the steps below"},
     {"ci": "cargo test -p open-model-gateway --all-features --test runtime_privileges", "suite": "integration", "script": "node \"$OMG_SCRIPTS/test-integration.mjs\" runtime ||"},
-    {"ci": "cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored --test-threads=1", "suite": "integration", "script": "node \"$OMG_SCRIPTS/test-integration.mjs\" runtime-ignored ||"},
-    {"ci": "cargo test -p open-model-gateway --all-features --lib management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement -- --ignored --exact", "suite": "integration", "script": "cargo test -p open-model-gateway --all-features --lib management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement -- --ignored --exact"},
-    {"ci": "cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact", "suite": "integration", "script": "cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact"},
+    {"ci": "node deploy/spark/test-integration.mjs runtime-ignored", "suite": "integration", "script": "node \"$OMG_SCRIPTS/test-integration.mjs\" runtime-ignored ||"},
+    {"ci": "node deploy/spark/test-integration.mjs key-contention", "suite": "integration", "script": "node \"$OMG_SCRIPTS/test-integration.mjs\" key-contention ||"},
+    {"ci": "node deploy/spark/test-integration.mjs terminal", "suite": "integration", "script": "node \"$OMG_SCRIPTS/test-integration.mjs\" terminal ||"},
     {"ci": "npm run typecheck:web", "suite": "web", "script": "npm run typecheck:web"},
     {"ci": "npm run test:web", "suite": "web", "script": "npm run test --workspace @omg/web -- --maxWorkers"}
   ],
