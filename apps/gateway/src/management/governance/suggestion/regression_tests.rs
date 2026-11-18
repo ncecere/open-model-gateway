@@ -149,6 +149,39 @@ fn hostile_entries_are_bounded_and_do_not_offer_partial_prices() {
 }
 
 #[test]
+fn refused_imports_keep_the_models_token_ceilings() {
+    let model = json!({"id":"v/limited", "context_length":4096,
+        "top_provider":{"max_completion_tokens":100}, "pricing":{"prompt":"1"}});
+    let too_many = vec![Value::Null; limits::MAX_ITEMS + 1];
+    let mut oversized_model = model.clone();
+    oversized_model["pricing"]["overrides"] = json!(too_many);
+    let oversized_endpoints = json!({"endpoints":too_many});
+    for (entry, endpoints) in [
+        (&oversized_model, None),
+        (&model, Some(&oversized_endpoints)),
+    ] {
+        let out = map_with_endpoints(entry, WorkloadKind::Generation, None, endpoints, &[]);
+        assert_eq!(out["draft"]["input_token_limit"], 4096);
+        assert_eq!(out["draft"]["output_token_limit"], 100);
+        assert_eq!(
+            out["ceilings"],
+            json!({"context_length":4096,"max_completion_tokens":100,
+            "input_token_limit":4096,"output_token_limit":100})
+        );
+        assert_eq!(out["catalog_model_id"], "v/limited");
+        assert_eq!(out["needs_review"], true);
+        assert!(out.get("endpoint").is_none());
+        assert!(
+            out["draft"]["price_lines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|l| l["unknown"] == true)
+        );
+    }
+}
+
+#[test]
 fn distinct_variants_across_bounded_endpoints_still_refuse_at_the_line_budget() {
     let endpoints: Vec<_> = (0..2).map(|endpoint| json!({"pricing": (0..64).map(|n| json!({"billable":"output_image","unit":"image","cost_usd":"1","variant":format!("size-{}",endpoint*64+n)})).collect::<Vec<_>>()})).collect();
     let body = json!({"endpoints":endpoints}).to_string();

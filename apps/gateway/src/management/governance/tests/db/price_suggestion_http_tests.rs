@@ -24,8 +24,8 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
                 let tiers: Vec<_> = (1..=20_000).map(|n|json!({"min_prompt_tokens":n,"prompt":"1"})).collect();
                 ([("content-type", "application/json")], json!({"data":[
                     {"id":"v/m","context_length":4096,"top_provider":{"max_completion_tokens":100},"pricing":{"prompt":"3","completion":"3","input_cache_write":"1e400","overrides":[{"min_prompt_tokens":1,"input_cache_write":"0"}]}},
-                    {"id":"v/large","pricing":{"prompt":"1","overrides":tiers}},
-                    {"id":"v/tiers","pricing":{"prompt":"1","overrides":&tiers[..64]}}
+                    {"id":"v/large","context_length":4096,"top_provider":{"max_completion_tokens":100},"pricing":{"prompt":"1","overrides":tiers}},
+                    {"id":"v/tiers","context_length":4096,"top_provider":{"max_completion_tokens":100},"pricing":{"prompt":"1","overrides":&tiers[..64]}}
                 ]}).to_string())
             }
         }))
@@ -132,6 +132,8 @@ async fn operator_preview_is_bounded_fail_closed_and_preserves_prices(pool: PgPo
                 .iter()
                 .all(|p| p["unknown"] == true)
         );
+        assert_eq!(out["draft"]["input_token_limit"], 4096);
+        assert_eq!(out["draft"]["output_token_limit"], 100);
         assert!(out.get("endpoint").is_none());
         assert!(!out["warnings"].to_string().contains("price was used"));
     }
