@@ -85,6 +85,19 @@ function interpreterLanguage(program) {
   if (program === "python" || program === "python3") return "other";
 }
 
+function interpreterScript(args, language) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.variable || arg.text === "-") return;
+    if (arg.text === "--") return args[i + 1];
+    if (!arg.text.startsWith("-")) return arg;
+    // Each of these modes consumes code, a module, or a separate option operand.
+    if (language === "shell" && (/^-[^-]*[cos]/.test(arg.text) || ["--rcfile", "--init-file"].includes(arg.text))) return;
+    if (language === "js" && ["-e", "-p", "--eval", "--print", "-r", "--require", "--import"].includes(arg.text)) return;
+    if (language === "other" && ["-c", "-m", "-W", "-X"].includes(arg.text)) return;
+  }
+}
+
 export function cargoScanner(read, shellSources) {
   const seen = new Set();
   const runningScripts = new Set();
@@ -137,8 +150,9 @@ export function cargoScanner(read, shellSources) {
       const commands = shellCommands(scripts[event]);
       if (event === name.text && commands.length) {
         const separator = args.findIndex(word => !word.variable && word.text === "--");
-        const forwarded = separator < 0 ? args.filter(arg => !arg.text.startsWith("-")) : args.slice(separator + 1);
-        commands.at(-1).push(...forwarded);
+        const forwarded = args.filter((arg, i) => (separator >= 0 && i > separator)
+          || (i !== separator && !arg.text.startsWith("-")));
+        commands.at(-1).push(...forwarded.map(arg => ({ ...arg, forwarded: true })));
       }
       if (scanCommands(commands, ".", false)) cargo = true;
     }
@@ -159,21 +173,13 @@ export function cargoScanner(read, shellSources) {
       // Direct process calls supply argv as data. Only a script operand is executable.
       const words = direct ? [program] : command;
       for (const word of words) {
-        if (word.variable) continue;
+        if (word.variable || word.forwarded) continue;
         if (word.text === "cargo" || word.text.endsWith("/cargo")) cargo = true;
         if (follow(word, cwd)) cargo = true;
       }
       if (interpreter) {
-        let i = 0;
-        while (i < args.length && !args[i].variable && args[i].text.startsWith("-")) {
-          const flag = args[i++].text;
-          if (flag === "--") break;
-          if (["-c", "-e", "--eval", "-m", "--require", "-r", "--import", "-o"].includes(flag)) {
-            i = args.length;
-            break;
-          }
-        }
-        if (args[i] && !args[i].text.startsWith("-") && follow(args[i], cwd, interpreter)) cargo = true;
+        const script = interpreterScript(args, interpreter);
+        if (script && follow(script, cwd, interpreter)) cargo = true;
       }
     }
     return cargo;

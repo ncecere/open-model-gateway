@@ -421,3 +421,22 @@ test("removing the parent of an indexed wrapper still reports the missing file",
   assert.equal(read("scripts/absent.sh"), undefined);
   assert.throws(() => read("scripts/check.sh"), /indexed wrapper path is missing/);
 });
+
+test("shell script flags and end-of-options preserve the script operand", () => {
+  const files = new Map([["-check", "cargo test"]]);
+  for (const shell of ["sh", "bash"]) {
+    files.set("runner.js", `spawn("${shell}", ["-e", "--", "-check"])`);
+    assert.throws(() => checkInputs({ jobs: { job: credentialJob("node runner.js") } },
+      "fixture.yml", new Map(), path => files.get(path)), /env.TOKEN/);
+  }
+});
+
+test("npm forwards mixed positional arguments without treating data as executable", () => {
+  const files = new Map([["check.sh", "cargo test"], ["package.json", JSON.stringify({
+    scripts: { script: "bash", data: "cat", node: "node print.js" },
+  })], ["print.js", "console.log(process.argv)"]]);
+  const check = run => checkInputs({ jobs: { job: credentialJob(run) } }, "fixture.yml", new Map(), p => files.get(p));
+  check("npm run data -- cargo");
+  check("npm run node -- check.sh");
+  assert.throws(() => check("npm run script check.sh -- --verbose"), /env.TOKEN/);
+});
