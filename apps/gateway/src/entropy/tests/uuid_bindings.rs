@@ -74,8 +74,20 @@ impl Bindings<'_> {
             (Pat::Ident(p), _) => self.binding(&p.ident, expr, true),
             (Pat::Type(p), _) => self.pattern(&p.pat, expr),
             (Pat::Tuple(p), Expr::Tuple(values)) => {
-                for (p, value) in p.elems.iter().zip(&values.elems) {
-                    self.pattern(p, value);
+                // A rest pattern absorbs any number of tuple elements. Its two
+                // sides align independently with the start and end of the value.
+                let mut patterns = p.elems.iter();
+                let mut elements = values.elems.iter();
+                while let Some(pattern) = patterns.next() {
+                    if matches!(pattern, Pat::Rest(_)) {
+                        for (pattern, value) in patterns.rev().zip(elements.rev()) {
+                            self.pattern(pattern, value);
+                        }
+                        break;
+                    }
+                    if let Some(value) = elements.next() {
+                        self.pattern(pattern, value);
+                    }
                 }
             }
             _ => {}
@@ -285,9 +297,34 @@ fn sql_bindings_respect_expression_depth_and_identifier_case() {
             "SELECT coalesce(gen_random_uuid(), id) AS client_secret FROM t",
             vec!["client_secret"],
         ),
+        (
+            "UPDATE t SET changed = a IS DISTINCT FROM b, nonce = gen_random_uuid()",
+            vec!["nonce"],
+        ),
+        (
+            "INSERT INTO t(tags, nonce) VALUES (ARRAY[1,2], gen_random_uuid())",
+            vec!["nonce"],
+        ),
+        ("SELECT gen_random_uuid() AS nonce OFFSET 0", vec!["nonce"]),
+        (
+            r#"SELECT gen_random_uuid() AS """key_id""""#,
+            vec![r#""key_id""#],
+        ),
+        (
+            "UPDATE t SET nonce = (SELECT id FROM src WHERE id = gen_random_uuid())",
+            vec![],
+        ),
+        (
+            "UPDATE t SET nonce = (SELECT gen_random_uuid() FROM src WHERE active)",
+            vec!["nonce"],
+        ),
+        (
+            "CREATE TABLE t (nonce uuid DEFAULT NULL CHECK (id <> gen_random_uuid()), id uuid)",
+            vec![],
+        ),
         ("SELECT gen_random_uuid() FROM t AS tokens", vec![]),
         (
-            "INSERT INTO t(KEY_ID, \"key_id\", \"KEY_ID\") VALUES(gen_random_uuid(),gen_random_uuid(),gen_random_uuid())",
+            "INSERT INTO t(KEY_ID) VALUES(gen_random_uuid()); INSERT INTO t(\"key_id\", \"KEY_ID\") VALUES(gen_random_uuid(),gen_random_uuid())",
             vec!["KEY_ID"],
         ),
     ] {
@@ -307,6 +344,15 @@ fn sql_bindings_respect_expression_depth_and_identifier_case() {
 #[test]
 fn dereferenced_uuid_bytes_retain_the_binding() {
     let ast = syn::parse_file("fn f() { let nonce = *Uuid::new_v4().as_bytes(); }").unwrap();
+    assert_eq!(
+        rust("fixture.rs", &ast),
+        ["fixture.rs:1: UUID bound to nonce"]
+    );
+}
+
+#[test]
+fn rest_patterns_align_suffix_values_from_the_end() {
+    let ast = syn::parse_file("fn f() { let (id, .., nonce) = (x, y, z, Uuid::new_v4()); let (id, .., salt) = (x, y, Uuid::new_v4(), z); }").unwrap();
     assert_eq!(
         rust("fixture.rs", &ast),
         ["fixture.rs:1: UUID bound to nonce"]

@@ -1,5 +1,6 @@
 //! Recognise explicit SQL target names and positional INSERT lists in literal SQL.
 use regex::Regex;
+use std::borrow::Cow;
 use std::sync::LazyLock;
 
 static TOKEN: LazyLock<Regex> = LazyLock::new(|| {
@@ -10,19 +11,61 @@ fn generated(expr: &[&str]) -> bool {
     expr.windows(3).any(|w| w == ["gen_random_uuid", "(", ")"])
 }
 
-// Stop at the next delimiter at this expression's own depth.
-fn expression_len(tokens: &[&str]) -> usize {
-    let mut depth = 0;
-    for (i, token) in tokens.iter().enumerate() {
-        match *token {
-            "," | ")" | ";" | "from" | "where" | "returning" | "on" | "into" | "group"
-            | "order" | "having" | "limit" | "union" | "intersect" | "except"
-                if depth == 0 =>
-            {
-                return i;
+fn ends_clause(tokens: &[&str], at: usize) -> bool {
+    match tokens[at] {
+        "from" => !tokens[..at].ends_with(&["distinct"]),
+        "where" | "returning" | "on" | "into" | "group" | "order" | "having" | "limit"
+        | "offset" | "fetch" | "for" | "union" | "intersect" | "except" | "window" => true,
+        _ => false,
+    }
+}
+
+// A scalar SELECT contributes its projection. Source rows, predicates and
+// ordering may mention UUIDs without supplying the bound value.
+fn generated_value(tokens: &[&str]) -> bool {
+    let mut parents = Vec::new();
+    let (mut select, mut visible) = (false, true);
+    for (at, &token) in tokens.iter().enumerate() {
+        match token {
+            "(" | "[" => {
+                parents.push((select, visible));
+                select = false;
             }
-            "(" => depth += 1,
-            ")" => depth -= 1,
+            ")" | "]" => (select, visible) = parents.pop().unwrap_or((false, true)),
+            "select" => select = true,
+            _ if select && ends_clause(tokens, at) => visible = false,
+            "gen_random_uuid" if visible && tokens[at + 1..].starts_with(&["(", ")"]) => {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn expression_len(tokens: &[&str], column_default: bool) -> usize {
+    let mut depth = 0;
+    for (at, &token) in tokens.iter().enumerate() {
+        if depth == 0
+            && (matches!(token, "," | ")" | "]" | ";")
+                || ends_clause(tokens, at)
+                || column_default
+                    && matches!(
+                        token,
+                        "constraint"
+                            | "check"
+                            | "primary"
+                            | "unique"
+                            | "references"
+                            | "generated"
+                            | "collate"
+                    ))
+        {
+            return at;
+        }
+        match token {
+            "(" | "[" => depth += 1,
+            ")" | "]" => depth -= 1,
             _ => {}
         }
     }
@@ -33,7 +76,7 @@ fn list<'a>(tokens: &'a [&'a str]) -> (Vec<&'a [&'a str]>, usize) {
     let mut items = Vec::new();
     let mut start = 0;
     loop {
-        let end = start + expression_len(&tokens[start..]);
+        let end = start + expression_len(&tokens[start..], false);
         items.push(&tokens[start..end]);
         if tokens.get(end) != Some(&",") {
             return (items, end);
@@ -72,7 +115,7 @@ fn insert(tokens: &[&str], mut report: impl FnMut(&str)) {
         let (items, end) = list(values);
         for (column, value) in columns.iter().zip(items) {
             if let [name] = *column
-                && generated(value)
+                && generated_value(value)
             {
                 report(name);
             }
@@ -89,6 +132,13 @@ fn insert(tokens: &[&str], mut report: impl FnMut(&str)) {
 
 fn identifier(token: &str) -> bool {
     token.starts_with('"') || token.starts_with(|c: char| c == '_' || c.is_alphabetic())
+}
+
+fn identifier_name(token: &str) -> Cow<'_, str> {
+    if let Some(inner) = token.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+        return inner.replace("\"\"", "\"").into();
+    }
+    token.into()
 }
 
 pub(super) fn scan(path: &str, text: &str, problems: &mut Vec<String>) {
@@ -115,8 +165,8 @@ pub(super) fn scan(path: &str, text: &str, problems: &mut Vec<String>) {
         }
         let probe = path == "deploy/staging/verify-privileges.sql";
         let mut report = |name: &str| {
-            let name = name.trim_matches('"');
-            if super::sensitive(name) {
+            let name = identifier_name(name);
+            if super::sensitive(&name) {
                 problems.push(format!("{path}: gen_random_uuid bound to {name}"));
             }
         };
@@ -139,7 +189,7 @@ pub(super) fn scan(path: &str, text: &str, problems: &mut Vec<String>) {
                     for assignment in list(tail).0 {
                         if let [name, "=", value @ ..] = assignment
                             && identifier(name)
-                            && generated(value)
+                            && generated_value(value)
                             && !(fence_probe && *name == "lease_token")
                         {
                             report(name);
@@ -150,7 +200,7 @@ pub(super) fn scan(path: &str, text: &str, problems: &mut Vec<String>) {
                     for projection in list(tail).0 {
                         if let [value @ .., "as", name] = projection
                             && identifier(name)
-                            && generated(value)
+                            && generated_value(value)
                         {
                             report(name);
                         }
@@ -159,15 +209,17 @@ pub(super) fn scan(path: &str, text: &str, problems: &mut Vec<String>) {
                 _ if i > 0
                     && matches!(stmt[i - 1], "(" | "," | "column" | "add")
                     && identifier(token)
-                    && super::sensitive(token.trim_matches('"')) =>
+                    && super::sensitive(&identifier_name(token)) =>
                 {
                     // CREATE/ADD column ... DEFAULT, or ALTER COLUMN name SET DEFAULT.
-                    let field = &tail[..expression_len(tail)];
+                    let field = &tail[..expression_len(tail, false)];
                     let expression = field
                         .iter()
                         .position(|t| *t == "default")
                         .map(|at| &field[at + 1..]);
-                    if expression.is_some_and(generated) {
+                    if expression
+                        .is_some_and(|value| generated_value(&value[..expression_len(value, true)]))
+                    {
                         report(token);
                     }
                 }
