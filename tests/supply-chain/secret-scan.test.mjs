@@ -549,7 +549,6 @@ test("the git fixtures act on their own repository when GIT_DIR is inherited", t
 test("no test file runs git with the inherited GIT_* environment", () => {
   const files = spawnSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "tests"], { cwd: root, encoding: "utf8", env: gitEnv() });
   assert.equal(files.status, 0, files.stderr);
-  const READ_ONLY = { "tests/supply-chain/policy.mjs": 2, "tests/conflict-markers.test.mjs": 1 }; // `git ls-files` of the checkout, nothing written
   const bare = {};
   for (const file of files.stdout.split("\0").filter(name => /\.(?:[cm]?[jt]sx?)$/.test(name) && existsSync(join(root, name)))) {
     const text = readLocalFromRepo(file);
@@ -559,7 +558,7 @@ test("no test file runs git with the inherited GIT_* environment", () => {
       if (!/\benv:\s*(?:gitEnv\(\)|\{\s*\.\.\.gitEnv\(\))/.test(text.slice(match.index, end))) bare[file] = (bare[file] ?? 0) + 1;
     }
   }
-  assert.deepEqual(bare, READ_ONLY, "git calls without env: gitEnv() (listed read-only calls excepted)");
+  assert.deepEqual(bare, {}, "every git call must use env: gitEnv()");
   assert.match(readLocalFromRepo("tests/vendored-advisories.test.mjs"), /filter\(\(\[key\]\) => !key\.startsWith\("GIT_"\)\)/, "the vendored-advisories fixture drops inherited GIT_* variables");
   assert.match(readLocalFromRepo("tests/spark-env.test.py"), /for _name in \[name for name in os\.environ if name\.startswith\("GIT_"\)\]:\n    del os\.environ\[_name\]/, "the spark-env tests drop inherited GIT_* variables");
   assert.match(readLocalFromRepo("tests/spark-test.test.py"), /for _name in \[name for name in os\.environ if name\.startswith\("GIT_"\)\]:\n    del os\.environ\[_name\]/, "the spark-test tests drop inherited GIT_* variables");
