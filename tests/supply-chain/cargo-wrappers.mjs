@@ -166,9 +166,11 @@ export function cargoScanner(read, shellSources) {
     for (const command of commands) {
       let first = 0;
       while (!command[first]?.variable && ["exec", "env", "command"].includes(command[first]?.text)) {
-        first++;
+        const launcher = command[first++].text;
         if (command[first]?.text === "--") first++;
-        while (/^[A-Za-z_][A-Za-z_0-9]*=/.test(command[first]?.text ?? "")) first++;
+        if (launcher === "env") {
+          while (/^[A-Za-z_][A-Za-z_0-9]*=/.test(command[first]?.text ?? "")) first++;
+        }
       }
       const invocation = command.slice(first);
       const [program, ...args] = invocation;

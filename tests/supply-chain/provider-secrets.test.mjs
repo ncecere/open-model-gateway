@@ -444,9 +444,12 @@ test("npm forwards mixed positional arguments without treating data as executabl
 test("an npm launch script inspects the forwarded executable and its script operand", () => {
   const files = new Map([["check", "cargo test"]]);
   const check = run => checkInputs({ jobs: { job: credentialJob(run) } }, "fixture.yml", new Map(), p => files.get(p));
-  for (const launcher of ["exec", "env", "exec env"]) {
+  for (const launcher of ["exec", "command", "env", "exec env"]) {
     files.set("package.json", JSON.stringify({ scripts: { launch: launcher } }));
     check("npm run launch -- cat cargo");
+    const assignment = () => check("npm run launch -- NAME=value cargo test");
+    if (launcher.endsWith("env")) assert.throws(assignment, /env.TOKEN/);
+    else assignment();
     assert.throws(() => check("npm run launch -- cargo test"), /env.TOKEN/);
     assert.throws(() => check("npm run launch -- bash check"), /env.TOKEN/);
   }
