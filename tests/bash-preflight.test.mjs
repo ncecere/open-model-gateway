@@ -293,6 +293,14 @@ test("the process API validates inert arguments before execution (#597)", () => 
   assert.match(version.stdout, /^git version /);
 });
 
+test("checked Bash rejects caller-supplied shell options before fixture setup", async () => {
+  const { runBash } = await preflight();
+  for (const options of [{ shell: false }, { shell: true }, { shell: "/unused" }, Object.create({ shell: true })]) {
+    Object.defineProperty(options, "env", { get() { assert.fail("fixture setup began"); } });
+    assert.throws(() => runBash([], options), /shell options/);
+  }
+});
+
 test("the asynchronous process API preserves Node's promisify contract (#597)", async () => {
   const result = await promisify(safeExecFile)("git", ["--version"], { encoding: "utf8" });
   assert.match(result.stdout, /^git version /);
@@ -314,12 +322,20 @@ test("process imports are refused regardless of their local call spelling (#597)
     'process["binding"]("inert");',
     'import { checkBash as check } from "./bash-preflight.mjs";',
     'import * as preflight from "./bash-preflight.mjs";',
+    'const loader = require;',
+    'const loader = { require };',
+    'const loader = module.require;',
     'const broken = ;',
   ]) assert.ok(processViolations("fixture.ts", source).length, source);
   for (const source of [
     'const fish = "fish"; const re = /#!\\/bin\\/bash/;',
     'type Options = { shell: string }; const f = (shell: string) => shell;',
     'const value = ok ? shell : other;',
+    'const fixture = { require: false }; const value = fixture.require;',
+    'const { require: enabled } = fixture;',
+    'interface Spec { require(): boolean } type Flag = Spec["require"];',
+    'type require = boolean; const expected: require = true;',
+    'type LoaderSignature = typeof require;',
     'import { spawnSync } from "./process.mjs";',
     'const fixture = `import cp from "node:child_process";`;',
   ]) assert.deepEqual(processViolations("fixture.ts", source), [], source);

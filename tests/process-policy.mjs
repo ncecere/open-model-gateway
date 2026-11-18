@@ -5,6 +5,16 @@ import ts from "typescript";
 const trusted = new Set(["bash-preflight.mjs", "bash-preflight.test.mjs", "process.mjs"]);
 const forbidden = new Set(["child_process", "node:child_process", "module", "node:module"]);
 const escapeHatches = new Set(["binding", "_linkedBinding", "dlopen", "getBuiltinModule"]);
+function referencesRequire(node) {
+  if (!ts.isIdentifier(node) || node.text !== "require" || ts.isInTypeQuery(node)) return false;
+  const parent = node.parent;
+  if (ts.isPropertyAccessExpression(parent) && parent.name === node) {
+    const owner = ts.skipOuterExpressions(parent.expression);
+    return ts.isIdentifier(owner) && ["module", "global", "globalThis"].includes(owner.text);
+  }
+  return ts.isShorthandPropertyAssignment(parent) || ts.isExpressionNode(node);
+}
+
 export function processViolations(name, text) {
   const source = ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true,
     /\.tsx$/i.test(name) ? ts.ScriptKind.TSX : /\.[cm]?ts$/i.test(name) ? ts.ScriptKind.TS : /\.jsx$/i.test(name) ? ts.ScriptKind.JSX : ts.ScriptKind.JS);
@@ -34,7 +44,7 @@ export function processViolations(name, text) {
       if (escapeHatches.has(key) && (key !== "binding" || node.expression?.getText(source) === "process")) report(node, "native process loading is outside the test process API");
       // CommonJS loading can read JavaScript from extensions otherwise treated as
       // data. Tests use ESM; keep require (including aliases) out of executable code.
-      if (ts.isIdentifier(node) && node.text === "require") report(node, "CommonJS loading is outside the test process API");
+      if (referencesRequire(node)) report(node, "CommonJS loading is outside the test process API");
     }
     ts.forEachChild(node, visit);
   }
