@@ -3,6 +3,9 @@
 // image is pinned, every container is locked down, nothing is exposed, everything listens on
 // loopback and three environments fit the shared CPU limit.
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import net from "node:net";
+import { promisify } from "node:util";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -120,5 +123,44 @@ test("fixtures: every rule is enforced", () => {
   const forwarder = read("pg-forward.mjs");
   for (const bad of [forwarder.replace('"127.0.0.1"', '"0.0.0.0"'), forwarder.replace('server.listen(5432, "127.0.0.1");', "server.listen(5432);"), `${forwarder}\nnet.createServer().listen(8080, "127.0.0.1");`]) {
     assert.notDeepEqual(violations("demo.yaml", workloads()["demo.yaml"], bad), []);
+  }
+});
+
+test("dependent native sidecars gate schema wait and gateway startup on loopback listeners", () => {
+  const pod = load("demo.yaml").spec.template.spec;
+  for (const [name, port] of [["pg-forward", 5432], ["demo-issuer", 18084]]) {
+    const index = pod.initContainers.findIndex(c => c.name === name);
+    const sidecar = pod.initContainers[index];
+    assert.equal(sidecar.restartPolicy, "Always", name);
+    assert.ok(index < pod.initContainers.findIndex(c => c.name === "wait-for-schema"), name);
+    const probe = sidecar.startupProbe;
+    assert.ok(probe?.exec, `${name}: an in-container startup probe gates subsequent containers`);
+    assert.equal(probe.tcpSocket, undefined, "kubelet TCP probes target the Pod IP, not pod loopback");
+    assert.equal(probe.httpGet, undefined);
+    assert.deepEqual(probe.exec.command.slice(0, 2), ["node", "-e"]);
+    assert.match(probe.exec.command[2], new RegExp(`connect\\(${port}, ['"]127\\.0\\.0\\.1['"]`));
+    assert.match(probe.exec.command[2], /setTimeout/);
+    assert.match(probe.exec.command[2], /on\("error"/);
+    assert.ok(probe.timeoutSeconds > 0 && probe.failureThreshold > 0 && probe.periodSeconds > 0);
+  }
+});
+
+
+test("sidecar probe commands succeed on a loopback listener and fail after it closes", async () => {
+  for (const sidecar of load("demo.yaml").spec.template.spec.initContainers.filter(c => c.restartPolicy === "Always")) {
+    const server = net.createServer(socket => socket.end());
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    // Keep the manifest's command, substituting only an OS-assigned test port.
+    const command = sidecar.startupProbe.exec.command.slice(1);
+    command[1] = command[1].replace(/connect\(\d+,/, `connect(${server.address().port},`);
+    try {
+      await promisify(execFile)(process.execPath, command, { timeout: 5000 });
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
+    await assert.rejects(promisify(execFile)(process.execPath, command, { timeout: 5000 }), { code: 1 });
   }
 });

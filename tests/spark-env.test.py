@@ -1,4 +1,4 @@
-"""Spark test-platform script safety tests. No cluster, registry or network access."""
+"""Spark test-platform script safety tests. No cluster, registry or external network access."""
 import contextlib
 import hashlib
 import importlib.util
@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import socket
 import subprocess
 import tempfile
 import unittest
@@ -105,6 +106,33 @@ class Recorder:
 
 def silent():
     return contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO())
+
+
+class LoopbackPorts(unittest.TestCase):
+    def test_time_wait_does_not_block_a_new_forward(self):
+        # The server actively closes, leaving its local endpoint in TIME_WAIT.
+        with socket.socket() as listener:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+            listener.listen()
+            with socket.create_connection(("127.0.0.1", port), timeout=2) as client:
+                connection, _ = listener.accept()
+                connection.close()
+                self.assertEqual(client.recv(1), b"")
+        # Prove the fixture really prevents a bind without SO_REUSEADDR.
+        with socket.socket() as plain:
+            with self.assertRaises(OSError):
+                plain.bind(("127.0.0.1", port))
+        self.assertTrue(spark.port_is_free(port))
+
+    def test_active_listener_is_refused_even_when_it_allows_reuse(self):
+        for address in ("127.0.0.1", "0.0.0.0"):
+            with self.subTest(address=address), socket.socket() as listener:
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                listener.bind((address, 0))
+                listener.listen()
+                self.assertFalse(spark.port_is_free(listener.getsockname()[1]))
 
 
 class Names(unittest.TestCase):

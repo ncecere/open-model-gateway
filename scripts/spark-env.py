@@ -365,6 +365,8 @@ def job_state(job_json):
 
 def port_is_free(port):
     with socket.socket() as probe:
+        # Match the forward listener: TIME_WAIT is reusable, an active listener is not.
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             probe.bind(("127.0.0.1", port))
         except OSError:
