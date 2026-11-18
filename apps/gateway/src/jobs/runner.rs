@@ -289,7 +289,7 @@ impl Runner {
             tracing::warn!(job_id = %job.id, "batch budget hold unavailable; remaining lines will not run");
             state.hold_unavailable.store(true, Ordering::SeqCst);
         }
-        let line = self.line_run(job, engine, endpoint, &state);
+        let line = self.line_run(job, files, engine, endpoint, &state);
         let (records, receiver) = mpsc::channel::<Record>(64);
         let writer = tokio::spawn(write_segments(
             store.clone(),
@@ -366,6 +366,7 @@ impl Runner {
     fn line_run(
         &self,
         job: &JobRow,
+        files: &crate::filestore::FileStorage,
         engine: Engine,
         endpoint: BatchEndpoint,
         state: &Arc<RunState>,
@@ -381,6 +382,7 @@ impl Runner {
             claimed: Mutex::default(),
         });
         Arc::new(LineRun {
+            files: files.clone(),
             store: store.clone(),
             engine: engine.with_repository(repository.clone(), self.jobs.limits.batch_concurrency),
             repository,
@@ -550,9 +552,8 @@ impl Runner {
         };
         #[cfg(test)]
         self.jobs.finalize_hold.pause().await;
-        // A line recorded `succeeded` whose result was never stored (it sat in
-        // the segment buffer of a run that lost the batch) is listed in the
-        // error file as unavailable, so it is counted failed, not completed.
+        // Older runners could commit success before storing its segment. Such
+        // a line is listed in the error file and contributes to the failed count.
         let counted = sqlx::query_as("SELECT count(*) FILTER(WHERE state='succeeded' AND segment IS NOT NULL),count(*) FILTER(WHERE state IN('failed','interrupted') OR (state='succeeded' AND segment IS NULL)) FROM batch_lines WHERE job_id=$1")
             .bind(job.id)
             .fetch_one(&store.pool)

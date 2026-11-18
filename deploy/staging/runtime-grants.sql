@@ -382,6 +382,8 @@ GRANT SELECT,UPDATE(recorded_through) ON public.storage_usage_progress TO gatewa
 -- the UPDATE grants below allow.
 GRANT UPDATE(upstream_id,output_file_id,error_file_id,runner_id,runner_epoch,runner_lease_until,
  submit_started_at,in_progress_at,finalizing_at,last_progress_at) ON public.async_jobs TO gateway_runtime;
+-- A segment commit registers the stored file, matches the running execution,
+-- and updates the line and existing job progress columns under the claim fence.
 GRANT SELECT,INSERT ON public.batch_lines,public.batch_segments TO gateway_runtime;
 GRANT UPDATE(state,attempts,execution_id,status_code,error_code,segment,finished_at)
  ON public.batch_lines TO gateway_runtime;

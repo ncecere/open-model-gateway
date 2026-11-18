@@ -35,8 +35,7 @@ jobs/runner/line.rs :: impl LineRun::finished :: warn :: job_id=%self.job.id
 jobs/runner/line.rs :: impl RunState::lose :: warn :: job_id=%self.fence.job
 jobs/runner/renewal.rs :: spawn :: warn :: job_id=%state.fence.job
 jobs/runner/repository.rs :: impl LineRepository::refuse_ungated :: warn :: deployment_id=%deployment.id ; execution_id=%record.id
-jobs/runner/segments.rs :: store_segment :: warn :: job_id=%job.id
-jobs/runner/segments.rs :: store_segment :: warn :: job_id=%job.id
+jobs/runner/segments.rs :: write_segments :: warn :: job_id=%job.id
 jobs/schedule.rs :: impl Scheduler::record_signal :: warn :: deployment_id=%deployment
 jobs/video.rs :: impl Jobs::create_video :: error :: execution_id=%request_id
 protocols/realtime.rs :: handle :: error :: -

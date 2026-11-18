@@ -1,8 +1,25 @@
 //! A provider answer is charged once across either side of the result commit.
 use super::*;
+use super::{
+    fence::{lapse, start},
+    http_support::{Resolver, Server, client},
+};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-async fn run_case(pool: PgPool, before: bool, crash: bool, size: usize) {
+#[derive(Clone, Copy)]
+enum Loss {
+    Crash,
+    Takeover,
+}
+#[derive(Clone, Copy)]
+enum Boundary {
+    BeforeCommit,
+    AfterCommit,
+}
+
+async fn run_case(pool: PgPool, fault: Option<(Boundary, Loss)>) {
+    let size = if fault.is_some() { 1 } else { 32 };
+    let before = matches!(fault, Some((Boundary::BeforeCommit, _)));
     let mut w = world(pool, false, false, 1).await;
     let input: Vec<_> = (0..size)
         .map(|n| chat_line(&n.to_string(), "company/smart", "test"))
@@ -51,12 +68,12 @@ async fn run_case(pool: PgPool, before: bool, crash: bool, size: usize) {
             .execute(&mut *lock)
             .await
             .unwrap();
-    } else if size == 1 {
+    } else if fault.is_some() {
         w.jobs.finalize_hold.arm();
     }
     let started = std::time::Instant::now();
-    let old = super::super::super::fence::start(&w);
-    if size == 1 {
+    let old = start(&w);
+    if let Some((_, loss)) = fault {
         if before {
             tokio::time::timeout(Duration::from_secs(20),async {
                 loop {
@@ -66,7 +83,9 @@ async fn run_case(pool: PgPool, before: bool, crash: bool, size: usize) {
                 }
             }).await.unwrap();
         } else {
-            w.jobs.finalize_hold.reached().await;
+            tokio::time::timeout(Duration::from_secs(20), w.jobs.finalize_hold.reached())
+                .await
+                .unwrap();
         }
         let row:(String,Option<i32>,i32) = sqlx::query_as("SELECT l.state,l.segment,j.request_completed FROM batch_lines l JOIN async_jobs j ON j.id=l.job_id WHERE j.id=$1").bind(job.id).fetch_one(&w.f.store.pool).await.unwrap();
         let cost = crate::governance::batch::batch_cost(&w.f.store, job.id)
@@ -78,11 +97,16 @@ async fn run_case(pool: PgPool, before: bool, crash: bool, size: usize) {
         } else {
             assert_eq!(row, ("succeeded".into(), Some(0), 1));
         }
-        if crash {
-            old.abort();
-        }
-        super::super::super::fence::lapse(&w, &job).await;
-        let owner = super::super::super::fence::start(&w);
+        let surviving_runner = match loss {
+            Loss::Crash => {
+                old.abort();
+                assert!(old.await.unwrap_err().is_cancelled());
+                None
+            }
+            Loss::Takeover => Some(old),
+        };
+        lapse(&w, &job).await;
+        let owner = start(&w);
         tokio::time::timeout(Duration::from_secs(10), async {
             while sqlx::query_scalar::<_, i64>("SELECT runner_epoch FROM async_jobs WHERE id=$1")
                 .bind(job.id)
@@ -98,9 +122,7 @@ async fn run_case(pool: PgPool, before: bool, crash: bool, size: usize) {
         .unwrap();
         lock.rollback().await.unwrap();
         w.jobs.finalize_hold.release();
-        if crash {
-            assert!(old.await.unwrap_err().is_cancelled());
-        } else {
+        if let Some(old) = surviving_runner {
             assert!(old.await.unwrap().unwrap());
         }
         assert!(owner.await.unwrap().unwrap());
@@ -155,6 +177,13 @@ async fn run_case(pool: PgPool, before: bool, crash: bool, size: usize) {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     assert_eq!(records.len(), size);
+    let ids: std::collections::HashSet<_> = records
+        .iter()
+        .map(|r| r["custom_id"].as_str().unwrap())
+        .collect();
+    for n in 0..size {
+        assert!(ids.contains(n.to_string().as_str()));
+    }
     if before {
         assert_eq!(records[0]["error"]["code"], "result_unavailable");
     } else {
@@ -169,21 +198,21 @@ async fn run_case(pool: PgPool, before: bool, crash: bool, size: usize) {
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn crash_before(pool: PgPool) {
-    run_case(pool, true, true, 1).await;
+    run_case(pool, Some((Boundary::BeforeCommit, Loss::Crash))).await;
 }
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn takeover_before(pool: PgPool) {
-    run_case(pool, true, false, 1).await;
+    run_case(pool, Some((Boundary::BeforeCommit, Loss::Takeover))).await;
 }
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn crash_after(pool: PgPool) {
-    run_case(pool, false, true, 1).await;
+    run_case(pool, Some((Boundary::AfterCommit, Loss::Crash))).await;
 }
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn takeover_after(pool: PgPool) {
-    run_case(pool, false, false, 1).await;
+    run_case(pool, Some((Boundary::AfterCommit, Loss::Takeover))).await;
 }
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn serial_results(pool: PgPool) {
-    run_case(pool, false, false, 32).await;
+    run_case(pool, None).await;
 }

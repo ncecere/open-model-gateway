@@ -126,6 +126,7 @@ pub(super) struct Record {
 pub(super) struct LineRun {
     pub(super) store: Store,
     pub(super) engine: Engine,
+    pub(super) files: crate::filestore::FileStorage,
     pub(super) repository: Arc<LineRepository>,
     pub(super) scheduler: Arc<Scheduler>,
     pub(super) job: JobRow,
@@ -133,53 +134,58 @@ pub(super) struct LineRun {
     pub(super) state: Arc<RunState>,
 }
 impl LineRun {
-    async fn emit(&self, records: &mpsc::Sender<Record>, line: i32, error: bool, value: Value) {
+    async fn emit_error(&self, records: &mpsc::Sender<Record>, line: i32, value: Value) {
         // A closed writer means the batch is stopping; the line is then
         // reported as unavailable at finalization. A run that lost the batch
         // has nothing to store.
         if self.state.fenced.load(Ordering::SeqCst) {
             return;
         }
-        let _ = records.send(Record { line, error, value }).await;
+        let _ = records
+            .send(Record {
+                line,
+                error: true,
+                value,
+            })
+            .await;
     }
-    async fn finished(
+    async fn finished_error(
         &self,
         line: i32,
         execution: Uuid,
-        ok: bool,
         status: Option<u16>,
         code: Option<&str>,
     ) {
-        let fence = &self.state.fence;
-        match self.state.written(
-            fence
-                .finish_line(&self.store, line, ok, status, code, true)
-                .await,
-        ) {
+        let result = self
+            .state
+            .fence
+            .fail_line(&self.store, line, status, code, true)
+            .await;
+        self.finished(line, execution, false, result);
+    }
+
+    fn finished(&self, line: i32, execution: Uuid, success: bool, result: FenceResult<bool>) {
+        match self.state.written(result) {
             Ok(Some(true)) => {
                 #[cfg(test)]
                 if self.state.soft_loss.swap(false, Ordering::SeqCst) {
                     self.state.lost.store(true, Ordering::SeqCst);
                 }
-                let (c, f) = if ok { (1, 0) } else { (0, 1) };
                 crate::metrics::METRICS.observe_batch_lines(
                     "gateway",
                     &self.job.provider,
-                    c as u64,
-                    f as u64,
+                    u64::from(success),
+                    u64::from(!success),
                 );
             }
-            // Already moved out of `running` (interrupted by the claim that
-            // took the batch over): it is counted once, by that move.
             Ok(Some(false)) => {}
-            // Refused: the attempt ran and settles at its real cost, but its
-            // outcome is not recorded. Ids only, so a charged line the batch
-            // reports unavailable can be attributed.
             Ok(None) => {
                 tracing::warn!(execution_id = %execution, line, "batch line outcome not recorded: the runner no longer holds the batch");
             }
             Err(_) => {
-                tracing::warn!(job_id = %self.job.id, "batch line state not recorded");
+                // A new claim interrupts unresolved attempts without re-execution.
+                self.state.lost.store(true, Ordering::SeqCst);
+                tracing::warn!(job_id = %self.job.id, "batch line state not confirmed");
             }
         }
     }
@@ -198,16 +204,10 @@ impl LineRun {
             Err(_) => {
                 let custom_id = lines::custom_id(&raw).unwrap_or_default();
                 let error = InferenceError::InvalidRequest;
-                self.finished(
-                    n,
-                    execution,
-                    false,
-                    Some(400),
-                    Some("invalid_request_error"),
-                )
-                .await;
+                self.finished_error(n, execution, Some(400), Some("invalid_request_error"))
+                    .await;
                 let value = lines::failure_line(&custom_id, Some(execution), self.endpoint, error);
-                self.emit(&records, n, true, value).await;
+                self.emit_error(&records, n, value).await;
                 return;
             }
         };
@@ -222,9 +222,8 @@ impl LineRun {
                     self.state.succeeded();
                     match lines::response_body(self.endpoint, execution, &model, response) {
                         Ok(body) => {
-                            self.finished(n, execution, true, Some(200), None).await;
                             let value = lines::success_line(&line.custom_id, Some(execution), body);
-                            self.emit(&records, n, false, value).await;
+                            self.store_success(n, execution, value).await;
                         }
                         Err(e) => self.fail(n, &line.custom_id, execution, e, &records).await,
                     }
@@ -233,10 +232,10 @@ impl LineRun {
                 Err(e) if e.is_budget_denial() => {
                     // Admission refused: the line never ran. The batch stops.
                     self.state.budget.store(true, Ordering::SeqCst);
-                    self.finished(n, execution, false, None, Some("budget_exceeded"))
+                    self.finished_error(n, execution, None, Some("budget_exceeded"))
                         .await;
                     let value = lines::not_run_line(&line.custom_id, NotRun::BudgetExceeded);
-                    self.emit(&records, n, true, value).await;
+                    self.emit_error(&records, n, value).await;
                     return;
                 }
                 Err(e) => {
@@ -263,7 +262,7 @@ impl LineRun {
                         let recorded = self
                             .state
                             .fence
-                            .finish_line(&self.store, n, false, Some(status), Some(e.code()), false)
+                            .fail_line(&self.store, n, Some(status), Some(e.code()), false)
                             .await;
                         let _ = self.state.written(recorded);
                         tokio::time::sleep(Duration::from_secs(1u64 << attempt)).await;
@@ -278,7 +277,7 @@ impl LineRun {
                         let _ = self.state.written(counted);
                         let value =
                             lines::failure_line(&line.custom_id, Some(execution), self.endpoint, e);
-                        self.emit(&records, n, true, value).await;
+                        self.emit_error(&records, n, value).await;
                         return;
                     }
                     self.fail(n, &line.custom_id, execution, e, &records).await;
@@ -286,6 +285,31 @@ impl LineRun {
                 }
             }
         }
+    }
+
+    /// Keep the route permit until the durable segment and success counter commit.
+    async fn store_success(&self, line: i32, execution: Uuid, value: Value) {
+        let record = Record {
+            line,
+            error: false,
+            value,
+        };
+        let result = match segments::encode_record(&record) {
+            Ok(body) => {
+                segments::store_segment(
+                    &self.store,
+                    &self.files,
+                    &self.job,
+                    &self.state,
+                    execution,
+                    body,
+                    super::super::fence::SegmentLines::Success { line, execution },
+                )
+                .await
+            }
+            Err(_) => Err(FenceError::Storage),
+        };
+        self.finished(line, execution, true, result.map(|()| true));
     }
 
     async fn fail(
@@ -297,10 +321,10 @@ impl LineRun {
         records: &mpsc::Sender<Record>,
     ) {
         let (status, _) = crate::protocols::batch_line_error(false, error);
-        self.finished(n, execution, false, Some(status), Some(error.code()))
+        self.finished_error(n, execution, Some(status), Some(error.code()))
             .await;
         let value = lines::failure_line(custom_id, Some(execution), self.endpoint, error);
-        self.emit(records, n, true, value).await;
+        self.emit_error(records, n, value).await;
     }
 
     /// Claim an explicit retry: on its route, within the route's concurrency

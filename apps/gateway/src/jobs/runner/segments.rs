@@ -2,7 +2,7 @@
 use super::*;
 
 /// One finished line as a JSON record, newline-terminated.
-fn encode_record(r: &Record) -> Result<Vec<u8>, InferenceError> {
+pub(super) fn encode_record(r: &Record) -> Result<Vec<u8>, InferenceError> {
     let mut bytes = serde_json::to_vec(&json!({"n": r.line, "e": r.error, "r": r.value}))
         .map_err(|_| InferenceError::Storage)?;
     bytes.push(b'\n');
@@ -13,56 +13,40 @@ fn encode_record(r: &Record) -> Result<Vec<u8>, InferenceError> {
 /// (taken in the database, inside the fence). A segment that is not stored or
 /// recorded leaves its lines reported unavailable; one the run is no longer
 /// allowed to record is deleted and ends the run's work.
-async fn store_segment(
+pub(super) async fn store_segment(
     store: &Store,
     files: &crate::filestore::FileStorage,
     job: &JobRow,
     state: &RunState,
-    part: u32,
+    part: impl std::fmt::Display,
     body: Vec<u8>,
-    held: &[i32],
-) {
-    let mut sink = LazySink::new(
-        files,
-        io::batch_file(
-            true,
-            job.workspace_id,
-            job.api_key_id,
-            job.user_id,
-            format!(
-                "batch_{}_part_{}_{part}.jsonl",
-                job.id.simple(),
-                state.fence.epoch
-            ),
+    held: super::super::fence::SegmentLines<'_>,
+) -> FenceResult<()> {
+    let template = io::batch_file(
+        true,
+        job.workspace_id,
+        job.api_key_id,
+        job.user_id,
+        format!(
+            "batch_{}_part_{}_{part}.jsonl",
+            job.id.simple(),
+            state.fence.epoch
         ),
     );
-    let stored = async {
-        sink.raw(body).await?;
-        sink.finish().await
+    let stream = futures_util::stream::once(async move { Ok(axum::body::Bytes::from(body)) });
+    let file = files
+        .create(template, Box::pin(stream))
+        .await
+        .map_err(|_| FenceError::Storage)?
+        .id;
+    let recorded = state
+        .fence
+        .insert_segment(store, job.workspace_id, file, held)
+        .await;
+    if matches!(recorded, Err(FenceError::Stale | FenceError::Storage)) {
+        let _ = files.delete(file, Some(job.workspace_id)).await;
     }
-    .await;
-    match stored {
-        Ok(Some(file)) => {
-            let recorded = state
-                .fence
-                .insert_segment(store, job.workspace_id, file, held)
-                .await;
-            match state.written(recorded) {
-                Ok(Some(_)) => {}
-                // Refused: `written` ended the run's work and said so.
-                Ok(None) => {
-                    let _ = files.delete(file, Some(job.workspace_id)).await;
-                }
-                Err(_) => {
-                    let _ = files.delete(file, Some(job.workspace_id)).await;
-                    tracing::warn!(job_id = %job.id, "batch segment not recorded; its lines are reported unavailable");
-                }
-            }
-        }
-        _ => {
-            tracing::warn!(job_id = %job.id, "batch segment not stored; its lines are reported unavailable");
-        }
-    }
+    recorded.map(|_| ())
 }
 
 /// Store finished lines in encrypted segments as they complete.
@@ -106,7 +90,19 @@ pub(super) async fn write_segments(
         // A run the fence refused stores nothing more; what it holds is
         // dropped (the owner reports those lines unavailable).
         if !state.fenced.load(Ordering::SeqCst) {
-            store_segment(&store, &files, &job, &state, part, body, &held).await;
+            let result = store_segment(
+                &store,
+                &files,
+                &job,
+                &state,
+                part,
+                body,
+                super::super::fence::SegmentLines::Failed(&held),
+            )
+            .await;
+            if state.written(result).is_err() {
+                tracing::warn!(job_id = %job.id, "batch error segment unavailable");
+            }
             part += 1;
         }
     }
@@ -142,7 +138,7 @@ impl Probe {
         self.records
             .send(Record {
                 line,
-                error: false,
+                error: true,
                 value,
             })
             .await
