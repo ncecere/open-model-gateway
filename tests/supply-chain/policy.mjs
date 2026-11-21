@@ -106,6 +106,9 @@ export function containerPinViolations(file, data, allowed = CONTAINER_IMAGE_EXP
 // - no `target` (the last stage, the runtime image, is built), no `build-contexts`
 //   (`<name>=docker-image://<image>` replaces a stage or base image) and no `BUILDKIT_*`
 //   build argument (`BUILDKIT_SYNTAX` loads another Dockerfile frontend);
+// - literal `no-cache: true`, no cache imports/exports or stage-only bypass. GHA
+//   scopes do not authenticate the producing job; even read-only jobs can write
+//   through the Actions runtime token. Renaming a scope cannot make it trusted;
 // - an expression in any input but `labels` is one of BUILD_INPUT_EXPRESSIONS. `env.*`,
 //   `steps.*`, `needs.*` and `inputs.*` are refused: an earlier step can write env through
 //   $GITHUB_ENV (a cache scope of `x,url=https://...` redirects the cache), and the others
@@ -149,6 +152,10 @@ const matrixKeys = job => {
 function buildStepViolations(where, inputs, job) {
   const out = [];
   if (!isMapping(inputs)) return [`${where}: a build step needs a literal with: mapping`];
+  if (inputs["no-cache"] !== true && inputs["no-cache"] !== "true") out.push(`${where}: no-cache must be literal true; image builds must not reuse cached layers`);
+  for (const key of ["cache-from", "cache-to", "no-cache-filters"]) {
+    if (key in inputs) out.push(`${where}: ${key} is not allowed; image builds must have no cache import, export or stage-only bypass`);
+  }
   if ("build-contexts" in inputs) out.push(`${where}: build-contexts can replace a stage or base image of the Dockerfile; it is not allowed`);
   if ("target" in inputs) out.push(`${where}: target '${inputs.target}' builds another stage than the runtime image; it is not allowed`);
   if ("build-args" in inputs) {
