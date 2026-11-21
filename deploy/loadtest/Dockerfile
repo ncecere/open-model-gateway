@@ -7,6 +7,8 @@ FROM mirror.gcr.io/library/rust:1.100.0-bookworm@sha256:ade39a710ef85f3506cffcfe
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY apps/gateway/ apps/gateway/
+COPY crates/ crates/
+COPY vendor/ vendor/
 # Embedded by `open-model-gateway grants apply|verify`.
 COPY deploy/staging/runtime-grants.sql deploy/staging/verify-privileges.sql deploy/staging/
 COPY tools/ tools/
