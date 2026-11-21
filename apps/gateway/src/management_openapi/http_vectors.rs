@@ -743,7 +743,7 @@ fn relaxed(
     let cache_key = format!(
         "{:p} {key}={bound} {}",
         document,
-        serde_json::to_string(schema)?
+        responses::value_key(schema)
     );
     if let Some(found) = CACHE
         .get_or_init(Default::default)
@@ -1991,7 +1991,7 @@ impl Walk<'_> {
                 } else {
                     ""
                 },
-                serde_json::to_string(&body)?
+                responses::value_key(&body)
             ))
         {
             return Ok(());
@@ -2477,8 +2477,8 @@ fn distinct_variants(
     let mut seen: BTreeSet<String> = taken
         .iter()
         .chain([template])
-        .map(serde_json::to_string)
-        .collect::<Result<_, _>>()?;
+        .map(responses::value_key)
+        .collect();
     let mut queue: std::collections::VecDeque<Value> = taken.iter().cloned().collect();
     queue.push_back(template.clone());
     let mut found = Vec::new();
@@ -2489,7 +2489,7 @@ fn distinct_variants(
     {
         for candidate in mutate(&base) {
             budget = budget.saturating_sub(1);
-            if found.len() >= need || !seen.insert(serde_json::to_string(&candidate)?) {
+            if found.len() >= need || !seen.insert(responses::value_key(&candidate)) {
                 continue;
             }
             if validator.is_valid(&candidate) {

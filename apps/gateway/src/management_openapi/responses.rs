@@ -162,6 +162,49 @@ pub(super) fn is_artifact_node(value: &Value) -> bool {
     artifact_nodes().contains(&(std::ptr::from_ref(value) as usize))
 }
 
+/// A text that is equal for two JSON values exactly when the values are equal:
+/// every encoding is self-delimiting (a string carries its byte length instead
+/// of escapes, a number its `Display` text up to `;`), so concatenations decode
+/// uniquely. It is a key, not JSON: the vector planner and the validator cache
+/// build one per candidate body or schema fragment, where `serde_json::to_string`
+/// was the largest single cost of planning in the unoptimized test profile.
+pub(super) fn value_key(value: &Value) -> String {
+    use std::fmt::Write;
+    fn text(out: &mut String, text: &str) {
+        let _ = write!(out, "\"{}:", text.len());
+        out.push_str(text);
+    }
+    fn write_value(out: &mut String, value: &Value) {
+        match value {
+            Value::Null => out.push('n'),
+            Value::Bool(true) => out.push('t'),
+            Value::Bool(false) => out.push('f'),
+            Value::Number(number) => {
+                let _ = write!(out, "#{number};");
+            }
+            Value::String(string) => text(out, string),
+            Value::Array(items) => {
+                out.push('[');
+                for item in items {
+                    write_value(out, item);
+                }
+                out.push(']');
+            }
+            Value::Object(map) => {
+                out.push('{');
+                for (key, item) in map {
+                    text(out, key);
+                    write_value(out, item);
+                }
+                out.push('}');
+            }
+        }
+    }
+    let mut out = String::new();
+    write_value(&mut out, value);
+    out
+}
+
 /// The validator cache key: the schema's serialized content. A node of the
 /// committed artifact (immutable and `'static`, so its address is stable and
 /// never reused) has its key serialized once and remembered by address; any
@@ -174,7 +217,7 @@ pub(super) fn cache_key(schema: &Value) -> Result<std::sync::Arc<str>> {
     > = std::sync::OnceLock::new();
     let serialize = || -> Result<std::sync::Arc<str>> {
         KEY_SERIALIZATIONS.with(|n| n.set(n.get() + 1));
-        Ok(serde_json::to_string(schema)?.into())
+        Ok(value_key(schema).into())
     };
     let address = std::ptr::from_ref(schema) as usize;
     if !artifact_nodes().contains(&address) {
