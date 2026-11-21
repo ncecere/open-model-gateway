@@ -549,16 +549,6 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     }));
     slice6_verdict(&failed, coverage.is_ok());
 }
-#[dbtest::test]
-async fn management_openapi_slice6_fixtures_shard_2(pool: PgPool) {
-    let (observed, failed) = slice6_fixtures(pool, 1).await;
-    // Every vector and coverage gap is reported by one run (panic messages
-    // name only operations, kinds, pointers and statuses).
-    let coverage = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        observed.finish(openapi::responses::SLICE6_AREAS)
-    }));
-    slice6_verdict(&failed, coverage.is_ok());
-}
 fn slice6_verdict(failed: &[String], coverage_passed: bool) {
     assert!(
         failed.is_empty() && coverage_passed,
@@ -568,7 +558,7 @@ fn slice6_verdict(failed: &[String], coverage_passed: bool) {
 /// The slice 6 journey as shard `shard` of [`SLICE6_SHARDS`] parallel runs (see
 /// `PositiveFixtures::sharded`): the observations and the operations whose
 /// vector run failed, for the calling test's gates.
-const SLICE6_SHARDS: usize = 2;
+const SLICE6_SHARDS: usize = 1;
 async fn slice6_fixtures(pool: PgPool, shard: usize) -> (PositiveFixtures, Vec<String>) {
     let f = fixture(&pool).await;
     let owner = browser(&pool, &f.owner).await;

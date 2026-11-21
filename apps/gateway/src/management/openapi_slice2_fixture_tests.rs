@@ -411,24 +411,6 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     }));
     slice2_verdict(failures, gates);
 }
-#[dbtest::test]
-async fn management_openapi_slice2_fixtures_shard_2(pool: PgPool) {
-    let (failures, observed) = slice2_on_a_large_stack(pool, 1).await;
-    // The coverage gates last: they judge every positive and vector set above.
-    let gates = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        observed.finish(SLICE2_AREAS);
-    }));
-    slice2_verdict(failures, gates);
-}
-#[dbtest::test]
-async fn management_openapi_slice2_fixtures_shard_3(pool: PgPool) {
-    let (failures, observed) = slice2_on_a_large_stack(pool, 2).await;
-    // The coverage gates last: they judge every positive and vector set above.
-    let gates = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        observed.finish(SLICE2_AREAS);
-    }));
-    slice2_verdict(failures, gates);
-}
 
 /// The slice 2 journey as shard `shard` of [`SLICE2_SHARDS`] parallel runs (see
 /// `PositiveFixtures::sharded`).
@@ -438,7 +420,7 @@ async fn management_openapi_slice2_fixtures_shard_3(pool: PgPool) {
 /// the future does not shrink a poll frame). It runs on its own thread with a
 /// larger stack and a current-thread runtime; a panic is re-raised here, so a
 /// failure is reported exactly as before.
-const SLICE2_SHARDS: usize = 3;
+const SLICE2_SHARDS: usize = 1;
 async fn slice2_on_a_large_stack(pool: PgPool, shard: usize) -> (Vec<String>, PositiveFixtures) {
     let in_range = shard < SLICE2_SHARDS;
     assert!(in_range, "no such slice 2 shard");

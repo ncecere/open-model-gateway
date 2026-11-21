@@ -891,15 +891,9 @@ async fn inference_openapi_generation_real_handler_fixtures_shard_3(pool: PgPool
         .await
         .finish(r::GENERATION_AREAS);
 }
-#[dbtest::test]
-async fn inference_openapi_generation_real_handler_fixtures_shard_4(pool: PgPool) {
-    generation_real_handler_fixtures(pool, 3)
-        .await
-        .finish(r::GENERATION_AREAS);
-}
 /// The generation journey as shard `shard` of [`GENERATION_SHARDS`] parallel
 /// runs (see `PositiveFixtures::sharded`).
-const GENERATION_SHARDS: usize = 4;
+const GENERATION_SHARDS: usize = 3;
 async fn generation_real_handler_fixtures(pool: PgPool, shard: usize) -> Fixtures {
     let (app, keys) = generation_gateway(&pool).await;
     let key = keys.personal_key.token;
