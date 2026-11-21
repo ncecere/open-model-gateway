@@ -24,6 +24,7 @@ use syn::{Attribute, ImplItem, Item, Meta, TraitItem, ext::IdentExt, visit::Visi
 /// One parsed production file; `path` is relative to `src/`, with `/`.
 pub(super) struct Source {
     pub path: String,
+    pub module: String,
     pub file: syn::File,
     /// Part of the binary crate (`main.rs` and below), not the library: the
     /// library cannot call into it.
@@ -48,11 +49,22 @@ pub(super) fn load_tree(
     bin: bool,
 ) -> Vec<Source> {
     let mut out = Vec::new();
-    load(read, Path::new(entry), bin, &mut out);
+    let entry = Path::new(entry);
+    let module = entry
+        .with_extension("")
+        .to_string_lossy()
+        .replace('/', "::");
+    load(read, entry, module, bin, &mut out);
     out
 }
 
-fn load(read: &dyn Fn(&Path) -> Option<String>, rel: &Path, bin: bool, out: &mut Vec<Source>) {
+fn load(
+    read: &dyn Fn(&Path) -> Option<String>,
+    rel: &Path,
+    module: String,
+    bin: bool,
+    out: &mut Vec<Source>,
+) {
     let text = read(rel).unwrap_or_else(|| panic!("{}: cannot read", rel.display()));
     let mut file = syn::parse_file(&text).unwrap_or_else(|e| panic!("{}: {e}", rel.display()));
     if cfg_excludes(&file.attrs) {
@@ -72,14 +84,23 @@ fn load(read: &dyn Fn(&Path) -> Option<String>, rel: &Path, bin: bool, out: &mut
         parent.join(rel.file_stem().unwrap_or_default())
     };
     let mut files = Vec::new();
-    declared(&file.items, parent, &children, read, rel, &mut files);
+    declared(
+        &file.items,
+        parent,
+        &children,
+        &module,
+        read,
+        rel,
+        &mut files,
+    );
     out.push(Source {
         path: rel.to_string_lossy().replace('\\', "/"),
+        module,
         file,
         bin,
     });
-    for child in files {
-        load(read, &child, bin, out);
+    for (child, module) in files {
+        load(read, &child, module, bin, out);
     }
 }
 
@@ -197,18 +218,21 @@ fn declared(
     items: &[Item],
     base: &Path,
     dir: &Path,
+    parent_module: &str,
     read: &dyn Fn(&Path) -> Option<String>,
     from: &Path,
-    out: &mut Vec<PathBuf>,
+    out: &mut Vec<(PathBuf, String)>,
 ) {
     for item in items {
         let Item::Mod(module) = item else { continue };
         let ident = module.ident.unraw().to_string();
+        let module_path = format!("{parent_module}::{ident}");
         if let Some((_, inner)) = &module.content {
             declared(
                 inner,
                 &base.join(&ident),
                 &dir.join(&ident),
+                &module_path,
                 read,
                 from,
                 out,
@@ -236,7 +260,7 @@ fn declared(
             .find(|candidate| read(candidate).is_some())
         };
         match found {
-            Some(path) if read(&path).is_some() => out.push(path),
+            Some(path) if read(&path).is_some() => out.push((path, module_path)),
             _ => panic!(
                 "{}: cannot resolve `mod {ident};` (the source rules fail closed)",
                 from.display()
@@ -539,6 +563,7 @@ pub(super) fn parse_fixture(path: &str, source: &str) -> Source {
     let bin = path == "main.rs" || path == "commands.rs" || path.starts_with("commands/");
     Source {
         path: path.to_owned(),
+        module: path.trim_end_matches(".rs").replace('/', "::"),
         file,
         bin,
     }
