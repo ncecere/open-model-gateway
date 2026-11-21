@@ -45,8 +45,9 @@ impl Family {
         Templates::from_env(&self.prefix, migrator)
     }
 
-    fn database(&self, label: &str) -> String {
-        format!("{}x{label}", self.prefix)
+    /// A test path of the family; its database is named from it by sqlx's rule.
+    fn path(&self, label: &str) -> &'static str {
+        Box::leak(format!("{}x{label}", self.prefix).into_boxed_str())
     }
 
     /// Remove everything the family created, whatever state it is in.
@@ -102,11 +103,11 @@ async fn template_is_built_once_under_contention() {
     let tasks = (0..8)
         .map(|n| {
             let templates = templates.clone();
-            let database = family.database(&n.to_string());
+            let path = family.path(&n.to_string());
             tokio::spawn(async move {
                 let template = templates.ensure().await.unwrap();
-                templates
-                    .create_test_database(&template.name, &database, "contention")
+                let database = templates
+                    .create_test_database(&template.name, path)
                     .await
                     .unwrap();
                 let mut conn = PgConnection::connect_with(&templates.database_options(&database))
@@ -193,6 +194,39 @@ async fn changed_migration_set_gets_another_template_and_leased_ones_survive() {
 }
 
 #[tokio::test]
+async fn a_leftover_another_process_is_using_is_not_dropped() {
+    let family = Family::new();
+    let templates = family.templates(&[SEEDED]);
+    let template = templates.ensure().await.unwrap();
+    let path = family.path("collision");
+
+    let first = templates
+        .create_test_database(&template.name, path)
+        .await
+        .unwrap();
+    let busy = PgConnection::connect_with(&templates.database_options(&first))
+        .await
+        .unwrap();
+    let second = templates
+        .create_test_database(&template.name, path)
+        .await
+        .unwrap();
+    let mut conn = templates.maintenance_connection().await.unwrap();
+    let outcome = (
+        first == second,
+        database_exists(&mut conn, &first).await,
+        database_exists(&mut conn, &second).await,
+        recorded(&mut conn, &second).await,
+    );
+    busy.close().await.unwrap();
+    templates.drop_test_database(&first).await.unwrap();
+    templates.drop_test_database(&second).await.unwrap();
+    drop(template);
+    family.cleanup(&templates).await;
+    assert_eq!(outcome, (false, true, true, true));
+}
+
+#[tokio::test]
 async fn half_built_templates_are_rebuilt_never_cloned() {
     for leftover in ["scratch", "unmarked", "connectable"] {
         let family = Family::new();
@@ -221,9 +255,8 @@ async fn half_built_templates_are_rebuilt_never_cloned() {
 
         let template = templates.ensure().await.unwrap();
         assert!(template.built, "{leftover}: rebuilt");
-        let clone = family.database("clone");
-        templates
-            .create_test_database(&template.name, &clone, "half_built")
+        let clone = templates
+            .create_test_database(&template.name, family.path("half_built"))
             .await
             .unwrap();
         let mut copy = PgConnection::connect_with(&templates.database_options(&clone))
@@ -235,6 +268,7 @@ async fn half_built_templates_are_rebuilt_never_cloned() {
                 .await
                 .unwrap();
         copy.close().await.unwrap();
+        templates.drop_test_database(&clone).await.unwrap();
         drop(template);
         family.cleanup(&templates).await;
         assert_eq!(half_built, None, "{leftover}: leftover content is gone");

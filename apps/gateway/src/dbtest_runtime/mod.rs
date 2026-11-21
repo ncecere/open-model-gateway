@@ -402,8 +402,8 @@ impl Templates {
         Fut: Future,
         Fut::Output: TestTermination,
     {
-        let db_name = <Postgres as TestSupport>::db_name(&TestArgs::new(test_path));
-        self.create_test_database(template, &db_name, test_path)
+        let db_name = self
+            .create_test_database(template, test_path)
             .await
             .expect("failed to create the test database");
         let pool = PgPoolOptions::new()
@@ -441,18 +441,33 @@ impl Templates {
         }
     }
 
-    /// Replace any leftover of the same test, record the database, clone it.
+    /// Clone the template into the database named for the test, recorded as
+    /// sqlx records it, and return its name. A leftover of the same test is
+    /// replaced. When something still uses the leftover (another process
+    /// running the same test against this server), the test gets a name of its
+    /// own instead of dropping a database that is in use.
     /// `ensure` has created the bookkeeping schema by the time a template exists.
     pub(crate) async fn create_test_database(
         &self,
         template: &str,
-        db_name: &str,
-        test_path: &str,
-    ) -> Result<(), sqlx::Error> {
+        test_path: &'static str,
+    ) -> Result<String, sqlx::Error> {
+        let mut db_name = <Postgres as TestSupport>::db_name(&TestArgs::new(test_path));
         let mut conn = self.maintenance().await?;
-        remove_test_database(&mut conn, db_name, false).await?;
+        match remove_test_database(&mut conn, &db_name, false).await {
+            Ok(()) => {}
+            Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some(OBJECT_IN_USE) => {
+                db_name = format!(
+                    "_sqlx_test_p{}_{}",
+                    std::process::id(),
+                    &hex::encode(Sha256::digest(test_path.as_bytes()))[..24]
+                );
+                remove_test_database(&mut conn, &db_name, false).await?;
+            }
+            Err(error) => return Err(error),
+        }
         query("insert into _sqlx_test.databases(db_name, test_path) values ($1, $2)")
-            .bind(db_name)
+            .bind(&db_name)
             .bind(test_path)
             .execute(&mut conn)
             .await?;
@@ -460,13 +475,13 @@ impl Templates {
             &mut conn,
             &format!(
                 "create database {} template {}",
-                quote(db_name),
+                quote(&db_name),
                 quote(template)
             ),
         )
         .await;
         let _ = conn.close().await;
-        created
+        created.map(|()| db_name)
     }
 
     /// Drop a passed test's database. `force` ends sessions a detached task
