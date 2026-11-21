@@ -8,8 +8,10 @@
 //! Invariants:
 //! - A template is named after the migrations it holds, so a changed or added
 //!   migration is a different template and a stale one is never cloned. The
-//!   name also carries the server's UTC date (migrations seed time-relative
-//!   state such as partition coverage) and the maintenance database's name
+//!   name also carries the server's UTC hour (migrations seed time-relative
+//!   state such as partition coverage and rollup watermarks; a process that
+//!   outlives the hour asks for the new hour's template) and the maintenance
+//!   database's name
 //!   (advisory locks are per database, and the lock below must see every
 //!   builder of this name).
 //! - A template exists under its final name only when it is complete. It is
@@ -34,7 +36,7 @@
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::str::FromStr;
-use std::sync::OnceLock;
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use futures::FutureExt;
@@ -75,19 +77,21 @@ const SQLX_BOOKKEEPING_LOCK: i64 = 8_318_549_251_334_697_844;
 
 /// Run one database test: a database cloned from the process's template, a
 /// pool on it, the body, then the database dropped when the body succeeded.
-/// The same single-threaded runtime `#[sqlx::test]` used drives it.
+/// The same single-threaded runtime `#[sqlx::test]` used drives it. Futures are
+/// boxed so a large test future lives on the heap, not on the test thread's
+/// small stack.
 pub(crate) fn run<Fut>(test_path: &'static str, test_fn: fn(PgPool) -> Fut) -> Fut::Output
 where
     Fut: Future,
     Fut::Output: TestTermination,
 {
-    sqlx::test_block_on(async move {
+    sqlx::test_block_on(Box::pin(async move {
         let process = process_template();
         process
             .templates
             .run_test(&process.template, test_path, test_fn)
             .await
-    })
+    }))
 }
 
 struct ProcessTemplate {
@@ -95,43 +99,57 @@ struct ProcessTemplate {
     template: String,
 }
 
-/// The template this process clones, built (or found) on first use. A thread
-/// that outlives every test runtime owns the lease connection, so the shared
-/// lock lasts until the process exits.
+/// The template this process clones: the current hour's, built (or found) on
+/// first use and again when the hour changes under a long run. A thread that
+/// outlives every test runtime owns each lease connection, so the shared locks
+/// last until the process exits.
 fn process_template() -> &'static ProcessTemplate {
-    static PROCESS: OnceLock<Result<ProcessTemplate, String>> = OnceLock::new();
-    PROCESS
-        .get_or_init(|| {
-            let (sender, receiver) = std::sync::mpsc::channel();
-            std::thread::Builder::new()
-                .name("dbtest-template".into())
-                .spawn(move || {
-                    sqlx::test_block_on(async move {
-                        let templates =
-                            Templates::from_env(TEMPLATE_PREFIX, &ENTERPRISE_MIGRATIONS);
-                        match templates.ensure().await {
-                            Ok(template) => {
-                                let name = template.name.clone();
-                                let _ = sender.send(Ok(ProcessTemplate {
-                                    templates,
-                                    template: name,
-                                }));
-                                let _lease = template;
-                                std::future::pending::<()>().await;
-                            }
-                            Err(error) => {
-                                let _ = sender.send(Err(error.to_string()));
-                            }
-                        }
-                    });
-                })
-                .expect("spawn the template thread");
-            receiver
-                .recv()
-                .unwrap_or_else(|_| Err("the template thread ended without a result".into()))
+    static CURRENT: Mutex<Option<(u64, &'static ProcessTemplate)>> = Mutex::new(None);
+    let hour = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs() / 3600);
+    // A failed setup panics while the lock is held; the next test retries.
+    let mut current = CURRENT.lock().unwrap_or_else(PoisonError::into_inner);
+    match *current {
+        Some((built_for, template)) if built_for == hour => template,
+        _ => {
+            let template: &'static ProcessTemplate =
+                Box::leak(Box::new(prepare_process_template().unwrap_or_else(
+                    |error| panic!("cannot prepare the template database: {error}"),
+                )));
+            *current = Some((hour, template));
+            template
+        }
+    }
+}
+
+fn prepare_process_template() -> Result<ProcessTemplate, String> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("dbtest-template".into())
+        .spawn(move || {
+            sqlx::test_block_on(async move {
+                let templates = Templates::from_env(TEMPLATE_PREFIX, &ENTERPRISE_MIGRATIONS);
+                match templates.ensure().await {
+                    Ok(template) => {
+                        let name = template.name.clone();
+                        let _ = sender.send(Ok(ProcessTemplate {
+                            templates,
+                            template: name,
+                        }));
+                        let _lease = template;
+                        std::future::pending::<()>().await;
+                    }
+                    Err(error) => {
+                        let _ = sender.send(Err(error.to_string()));
+                    }
+                }
+            });
         })
-        .as_ref()
-        .unwrap_or_else(|error| panic!("cannot prepare the template database: {error}"))
+        .map_err(|error| format!("spawn the template thread: {error}"))?;
+    receiver
+        .recv()
+        .unwrap_or_else(|_| Err("the template thread ended without a result".into()))
 }
 
 /// A complete template and the connection that keeps it from being collected.
@@ -175,23 +193,24 @@ impl Templates {
     }
 
     /// The template's name: prefix, then the digest of the format, the
-    /// maintenance database, the server's UTC date and every migration's
+    /// maintenance database, the server's UTC hour and every migration's
     /// version, description, kind, transaction mode and checksum (the checksum
-    /// covers the SQL). The date is part of it because migrations seed state
+    /// covers the SQL). The hour is part of it because migrations seed state
     /// relative to the moment they run (the history partitions cover the
-    /// months from then on, with no default partition): a template is at most
-    /// a day older than the database a test would have migrated itself.
+    /// months from then on with no default partition, and the rollup and
+    /// storage watermarks start at the current hour): a template is at most an
+    /// hour older than the database a test would have migrated itself.
     pub(crate) async fn template_name(
         &self,
         conn: &mut PgConnection,
     ) -> Result<String, sqlx::Error> {
-        let (database, day): (String, String) = sqlx::query_as(
-            "select current_database()::text, ((now() at time zone 'utc')::date)::text",
+        let (database, hour): (String, String) = sqlx::query_as(
+            "select current_database()::text, to_char(now() at time zone 'utc', 'YYYY-MM-DD\"T\"HH24')",
         )
         .fetch_one(&mut *conn)
         .await?;
         let mut digest = Sha256::new();
-        for part in [TEMPLATE_FORMAT, database.as_str(), day.as_str()] {
+        for part in [TEMPLATE_FORMAT, database.as_str(), hour.as_str()] {
             digest.update((part.len() as u64).to_be_bytes());
             digest.update(part.as_bytes());
         }
@@ -395,7 +414,9 @@ impl Templates {
             .connect_with(self.options().database(&db_name))
             .await
             .expect("failed to connect the test pool");
-        let outcome = AssertUnwindSafe(test_fn(pool.clone())).catch_unwind().await;
+        let outcome = AssertUnwindSafe(Box::pin(test_fn(pool.clone())))
+            .catch_unwind()
+            .await;
         if tokio::time::timeout(Duration::from_secs(10), pool.close())
             .await
             .is_err()
