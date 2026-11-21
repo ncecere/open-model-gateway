@@ -40,6 +40,7 @@ CROSS_CUTTING = (
     "apps/gateway/src/db/",
     "apps/gateway/src/dbtest_runtime/",
     "apps/gateway/Cargo.toml",
+    "apps/gateway/build.rs",
     "apps/gateway/enterprise_migrations/",
     "apps/gateway/migrations/",
     "Cargo.toml",
@@ -66,6 +67,13 @@ SMALL_MODULE = 400
 # whole tree, so any source change can trip them.
 ALWAYS = ("source_rules::",)
 
+# Changes the fast tier has no test for: named in the plan and at the end, so
+# a run that passed is not read as covering them.
+NOT_COVERED = "NOT COVERED: "
+CI_ONLY = (
+    ("deploy/staging/runtime-grants.sql", "the runtime_privileges target (gateway-special in CI)"),
+)
+
 # Non-Rust areas and the npm scripts that cover them.
 NPM_AREAS = (
     (("apps/web/",), ("typecheck:web", "test:web")),
@@ -81,7 +89,7 @@ NPM_AREAS = (
 
 def is_contract_fixture(name):
     """The OpenAPI contract fixtures: thousands of request vectors per test."""
-    return "fixtures" in name.rsplit("::", 1)[-1]
+    return "openapi" in name and "fixtures" in name.rsplit("::", 1)[-1]
 
 
 def module_candidates(path):
@@ -120,6 +128,9 @@ def select(changed, tests, everything=False, contract=False):
         for prefixes, names in NPM_AREAS:
             if path.startswith(prefixes):
                 scripts.extend(name for name in names if name not in scripts)
+        for prefix, owner in CI_ONLY:
+            if path.startswith(prefix):
+                reasons.append(f"{NOT_COVERED}{path}: run by {owner}")
         if path.startswith(CONTRACT_SURFACE):
             contract = True
             reasons.append(f"{path}: contract surface, contract fixtures included")
@@ -133,6 +144,17 @@ def select(changed, tests, everything=False, contract=False):
             if target not in targets:
                 targets.append(target)
             reasons.append(f"{path}: integration target {target}")
+            continue
+        if path.startswith("apps/gateway/tests/"):
+            # `tests/<target>/...` is that target's own module tree; anything
+            # else (`tests/common/`) is shared by several targets.
+            target = path[len("apps/gateway/tests/"):].split("/")[0]
+            if (REPO / "apps/gateway/tests" / f"{target}.rs").is_file():
+                if target not in targets:
+                    targets.append(target)
+                reasons.append(f"{path}: integration target {target}")
+            else:
+                reasons.append(f"{NOT_COVERED}{path}: shared by the integration targets, which CI runs")
             continue
         if not (path.startswith(GATEWAY_SRC) and path.endswith(".rs")):
             continue
@@ -230,7 +252,7 @@ def main(argv=None):
 
     changed = changed_files(args.base)
     touches_rust = args.all or any(
-        path.startswith((GATEWAY_SRC, "apps/gateway/tests/") + CROSS_CUTTING) for path in changed)
+        path.startswith((GATEWAY_SRC,) + CROSS_CUTTING + CONTRACT_SURFACE) for path in changed)
     tests = list_tests(args.jobs) if touches_rust else []
     selected, reasons, targets, scripts = select(changed, tests, everything=args.all, contract=args.contract)
 
@@ -261,7 +283,13 @@ def main(argv=None):
     if failed:
         print("FAILED: " + ", ".join(failed))
         return 1
-    print("fast tier passed; the full suite runs in CI")
+    uncovered = [reason[len(NOT_COVERED):] for reason in reasons if reason.startswith(NOT_COVERED)]
+    if not (selected or targets or scripts):
+        print("the fast tier has no test for this change; CI is the check")
+    elif uncovered:
+        print("fast tier passed for what it covers; left to CI: " + "; ".join(uncovered))
+    else:
+        print("fast tier passed; the full suite runs in CI")
     return 0
 
 

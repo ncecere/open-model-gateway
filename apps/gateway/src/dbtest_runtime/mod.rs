@@ -104,23 +104,29 @@ struct ProcessTemplate {
 /// outlives every test runtime owns each lease connection, so the shared locks
 /// last until the process exits.
 fn process_template() -> &'static ProcessTemplate {
-    static CURRENT: Mutex<Option<(u64, &'static ProcessTemplate)>> = Mutex::new(None);
+    type Prepared = Result<&'static ProcessTemplate, &'static str>;
+    static CURRENT: Mutex<Option<(u64, Prepared)>> = Mutex::new(None);
     let hour = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs() / 3600);
-    // A failed setup panics while the lock is held; the next test retries.
-    let mut current = CURRENT.lock().unwrap_or_else(PoisonError::into_inner);
-    match *current {
-        Some((built_for, template)) if built_for == hour => template,
-        _ => {
-            let template: &'static ProcessTemplate =
-                Box::leak(Box::new(prepare_process_template().unwrap_or_else(
-                    |error| panic!("cannot prepare the template database: {error}"),
-                )));
-            *current = Some((hour, template));
-            template
+    // A failed setup is remembered like a finished one: every test of the
+    // hour fails at once with the same reason instead of each repeating the
+    // build (a broken migration would otherwise cost a build per test).
+    let prepared = {
+        let mut current = CURRENT.lock().unwrap_or_else(PoisonError::into_inner);
+        match *current {
+            Some((built_for, prepared)) if built_for == hour => prepared,
+            _ => {
+                let prepared: Prepared = match prepare_process_template() {
+                    Ok(template) => Ok(Box::leak(Box::new(template))),
+                    Err(error) => Err(Box::leak(error.into_boxed_str())),
+                };
+                *current = Some((hour, prepared));
+                prepared
+            }
         }
-    }
+    };
+    prepared.unwrap_or_else(|error| panic!("cannot prepare the template database: {error}"))
 }
 
 fn prepare_process_template() -> Result<ProcessTemplate, String> {
@@ -229,7 +235,16 @@ impl Templates {
             digest.update(&*migration.checksum);
         }
         let digest = hex::encode(digest.finalize());
-        Ok(format!("{}_{}", self.prefix, &digest[..24]))
+        // The family (everything before the last underscore) names the
+        // maintenance database too: collection lists one family, and its
+        // leases are advisory locks that only this database's sessions see.
+        let family = hex::encode(Sha256::digest(database.as_bytes()));
+        Ok(format!(
+            "{}_{}_{}",
+            self.prefix,
+            &family[..8],
+            &digest[..24]
+        ))
     }
 
     /// Return the complete template for these migrations, building it first
@@ -328,8 +343,10 @@ impl Templates {
     /// including a scratch build a killed process left (builds happen only
     /// under the build lock this runs under). A lease is a shared advisory
     /// lock, so the exclusive try fails exactly while a live process uses the
-    /// template. No database of another purpose may begin with the family's
-    /// prefix and an underscore.
+    /// template. The family is the prefix and this maintenance database:
+    /// templates built through another maintenance database have leases this
+    /// session cannot see, and are left to their own processes. No database
+    /// of another purpose may begin with the family and an underscore.
     async fn collect_templates(
         &self,
         conn: &mut PgConnection,
@@ -340,7 +357,7 @@ impl Templates {
              where starts_with(datname, $1) and datname <> $2 \
              order by datname",
         )
-        .bind(format!("{}_", self.prefix))
+        .bind(format!("{}_", family_of(keep)))
         .bind(keep)
         .fetch_all(&mut *conn)
         .await?;
@@ -402,8 +419,8 @@ impl Templates {
         Fut: Future,
         Fut::Output: TestTermination,
     {
-        let db_name = self
-            .create_test_database(template, test_path)
+        let (db_name, created) = self
+            .create_owned(template, test_path)
             .await
             .expect("failed to create the test database");
         let pool = PgPoolOptions::new()
@@ -426,7 +443,7 @@ impl Templates {
         }
         match outcome {
             Ok(result) if result.is_success() => {
-                if let Err(error) = self.drop_test_database(&db_name).await {
+                if let Err(error) = self.drop_owned(&db_name, created).await {
                     eprintln!("failed to delete database {db_name:?}: {error}");
                 }
                 result
@@ -453,6 +470,17 @@ impl Templates {
         template: &str,
         test_path: &'static str,
     ) -> Result<String, sqlx::Error> {
+        Ok(self.create_owned(template, test_path).await?.0)
+    }
+
+    /// [`Self::create_test_database`], with the new database's OID: the
+    /// identity of this creation, which a later database of the same name
+    /// does not share.
+    async fn create_owned(
+        &self,
+        template: &str,
+        test_path: &'static str,
+    ) -> Result<(String, sqlx::postgres::types::Oid), sqlx::Error> {
         let mut db_name = <Postgres as TestSupport>::db_name(&TestArgs::new(test_path));
         let mut conn = self.maintenance().await?;
         match remove_test_database(&mut conn, &db_name, false).await {
@@ -481,8 +509,41 @@ impl Templates {
             ),
         )
         .await;
+        let oid = match created {
+            Ok(()) => {
+                query_scalar("select oid from pg_database where datname = $1")
+                    .bind(&db_name)
+                    .fetch_one(&mut conn)
+                    .await
+            }
+            Err(error) => Err(error),
+        };
         let _ = conn.close().await;
-        created.map(|()| db_name)
+        oid.map(|oid| (db_name, oid))
+    }
+
+    /// Drop a passed test's database when it is still the one this test
+    /// created. Once the test's pool is closed, another process running the
+    /// same test may replace the database under the same name; a forced drop
+    /// by name would then end that process's test.
+    async fn drop_owned(
+        &self,
+        db_name: &str,
+        created: sqlx::postgres::types::Oid,
+    ) -> Result<(), sqlx::Error> {
+        let mut conn = self.maintenance().await?;
+        let current: Option<sqlx::postgres::types::Oid> =
+            query_scalar("select oid from pg_database where datname = $1")
+                .bind(db_name)
+                .fetch_optional(&mut conn)
+                .await?;
+        let removed = if current == Some(created) {
+            remove_test_database(&mut conn, db_name, true).await
+        } else {
+            Ok(())
+        };
+        let _ = conn.close().await;
+        removed
     }
 
     /// Drop a passed test's database. `force` ends sessions a detached task
@@ -594,6 +655,13 @@ async fn execute_retrying(conn: &mut PgConnection, sql: &str) -> Result<(), sqlx
             Err(error) => return Err(error),
         }
     }
+}
+
+/// The family of a template name: everything before its migration digest.
+fn family_of(template: &str) -> &str {
+    template
+        .rsplit_once('_')
+        .map_or(template, |(family, _)| family)
 }
 
 /// The advisory-lock key of a name.

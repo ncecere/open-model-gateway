@@ -965,6 +965,7 @@ impl PositiveFixtures {
     /// journey and the valid requests, which every shard makes, so each shard's
     /// `finish` judges the complete group; a coverage item that only one planned
     /// vector provides fails the gate of the shards that do not send it.
+    #[track_caller]
     pub(crate) fn sharded(index: usize, count: usize) -> Self {
         Self {
             _shard: Some(super::http_vectors::divide(index, count)),

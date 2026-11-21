@@ -416,6 +416,31 @@ async fn sent_bodies(app: &Router, document: &Value) -> Vec<String> {
     sent.into_inner()
 }
 
+/// Ownership by ordinal is only a division while the shards plan alike: a
+/// shard whose plan differs from an earlier shard's of the same journey fails.
+#[test]
+#[should_panic(expected = "planned different vectors")]
+fn management_openapi_http_vectors_shards_that_plan_differently_fail() {
+    for index in 0..2 {
+        let scope = super::http_vectors::divide(index, 2);
+        for _ in 0..=index {
+            super::http_vectors::owns_next("minimum", "/amount");
+        }
+        drop(scope);
+    }
+}
+
+/// The same number of vectors at another location is a different plan too.
+#[test]
+#[should_panic(expected = "planned different vectors")]
+fn management_openapi_http_vectors_shards_that_plan_other_locations_fail() {
+    for location in ["/amount", "/name"] {
+        let scope = super::http_vectors::divide(0, 3);
+        super::http_vectors::owns_next("minimum", location);
+        drop(scope);
+    }
+}
+
 /// Shards divide the planned vectors and nothing else: every shard sends the
 /// run's valid request first, and across the shards each other vector is sent
 /// exactly once, so the shards together make the undivided run.

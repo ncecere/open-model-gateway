@@ -28,6 +28,7 @@ TESTS = BIG + [
     "governance::tests::db::admits",
     "source_rules::money_float::tests::no_float",
     "store::tests::migrates",
+    "filestore::tests::format_v1_fixtures_from_earlier_releases_still_decrypt",
 ]
 
 
@@ -103,6 +104,48 @@ class Selection(unittest.TestCase):
         self.assertIn("governance::settlement", fast.module_candidates(SRC + "governance/settlement_tests.rs"))
         self.assertEqual(fast.keyword(SRC + "management/access_reviews.rs"), "access_review")
         self.assertIsNone(fast.keyword(SRC + "management/mod.rs"))
+
+    def test_only_openapi_fixtures_are_contract_fixtures(self):
+        name = "filestore::tests::format_v1_fixtures_from_earlier_releases_still_decrypt"
+        self.assertFalse(fast.is_contract_fixture(name))
+        chosen, _, _, _ = select([SRC + "filestore.rs"])
+        self.assertIn(name, chosen)
+        chosen, _, _, _ = select([], everything=True)
+        self.assertIn(name, chosen)
+
+    def test_files_under_an_integration_target_select_it_and_shared_ones_are_named(self):
+        _, reasons, targets, _ = select(["apps/gateway/tests/runtime_privileges/probes.rs",
+                                         "apps/gateway/tests/common/mod.rs",
+                                         "deploy/staging/runtime-grants.sql"])
+        self.assertEqual(targets, ["runtime_privileges"])
+        uncovered = [reason for reason in reasons if reason.startswith(fast.NOT_COVERED)]
+        self.assertEqual(len(uncovered), 2)
+        self.assertTrue(any("tests/common/mod.rs" in reason for reason in uncovered))
+        self.assertTrue(any("runtime-grants.sql" in reason for reason in uncovered))
+
+    def test_main_lists_the_tests_for_a_contract_document_or_build_script_change(self):
+        import contextlib
+        import io
+        for path, expected in (("docs/openapi/management/operations.json", 3),
+                               ("apps/gateway/build.rs", len(TESTS) - 2)):
+            fast.changed_files = lambda base, path=path: [path]
+            fast.list_tests = lambda jobs: TESTS
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(fast.main(["--plan"]), 0)
+            self.assertIn(f"selected: {expected} of {len(TESTS)} lib tests", out.getvalue())
+
+    def test_a_run_that_covers_nothing_does_not_say_passed(self):
+        import contextlib
+        import io
+        fast.changed_files = lambda base: ["apps/gateway/tests/common/mod.rs"]
+        fast.list_tests = lambda jobs: TESTS
+        fast.run = lambda command: 0
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(fast.main([]), 0)
+        self.assertIn("no test for this change", out.getvalue())
+        self.assertNotIn("passed", out.getvalue())
 
 
 if __name__ == "__main__":

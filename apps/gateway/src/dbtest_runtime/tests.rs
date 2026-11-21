@@ -451,13 +451,15 @@ async fn snapshot(pool: &PgPool) -> Vec<String> {
     }
     let tables: Vec<(String, String)> = user_tables(pool).await;
     for (schema, table) in tables {
-        // The rows these three tables get from a migration carry the moment it
-        // ran (and the installation's random id), so any two migrated databases
+        // The rows these tables get from a migration carry the moment it ran
+        // (and the installation's random id), so any two migrated databases
         // differ in exactly those columns.
         let volatile: Vec<String> = if [
             "installation",
             "installation_settings",
             "history_partitions",
+            "storage_usage_progress",
+            "usage_rollup_progress",
         ]
         .contains(&table.as_str())
         {

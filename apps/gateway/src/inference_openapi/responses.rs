@@ -442,6 +442,7 @@ pub(crate) struct Fixtures(PositiveFixtures);
 impl Fixtures {
     /// Shard `index` of `count` parallel runs of one fixture journey (see
     /// `PositiveFixtures::sharded`).
+    #[track_caller]
     pub(crate) fn sharded(index: usize, count: usize) -> Self {
         Self(PositiveFixtures::sharded(index, count))
     }

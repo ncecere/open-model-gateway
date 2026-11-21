@@ -1757,7 +1757,7 @@ pub(crate) async fn run_query_with<C>(
     }
     let mut accepted_seen = false;
     for (case, kind, location, expected) in plan {
-        if case.is_some() && !owns_next() {
+        if case.is_some() && !owns_next(kind, &location) {
             continue;
         }
         let (context, mut pairs) = fresh().await;
@@ -2000,7 +2000,7 @@ impl Walk<'_> {
         // encoding vectors are classified by every shard: they decide whether
         // the vector exists, and their seed rule is a check of the plan.
         let integer = kind.starts_with("integer encoding ");
-        if !integer && !owns_next() {
+        if !integer && !owns_next(kind, &pointer(path)) {
             return Ok(());
         }
         let accept = accepts(self.document, self.root_schema, &body)?;
@@ -2016,7 +2016,7 @@ impl Walk<'_> {
             "integer encoding vector at {} needs a whole-request-valid integer seed",
             pointer(path)
         );
-        if integer && !owns_next() {
+        if integer && !owns_next(kind, &pointer(path)) {
             return Ok(());
         }
         self.out.push(BodyCase {
@@ -2667,34 +2667,87 @@ pub(super) async fn run_body(
 }
 
 thread_local! {
-    /// `(index, count)` of the fixture journey being divided, and how many
-    /// planned vectors this thread has met so far.
+    /// `(index, count)` of the fixture journey being divided, how many planned
+    /// vectors this thread has met so far, and a digest of what they were.
     static SHARD: std::cell::Cell<Option<(usize, usize)>> = const { std::cell::Cell::new(None) };
     static PLANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static PLAN_DIGEST: std::cell::Cell<u64> = const { std::cell::Cell::new(PLAN_DIGEST_START) };
 }
+/// FNV-1a, 64 bits.
+const PLAN_DIGEST_START: u64 = 0xcbf2_9ce4_8422_2325;
 /// Keeps a journey divided into shards for as long as it lives (see
 /// [`PositiveFixtures::sharded`]).
-pub(crate) struct ShardScope;
+pub(crate) struct ShardScope {
+    journey: &'static std::panic::Location<'static>,
+    index: usize,
+    count: usize,
+}
 impl Drop for ShardScope {
     fn drop(&mut self) {
+        let plan = (PLANNED.get(), PLAN_DIGEST.get());
         SHARD.set(None);
         PLANNED.set(0);
+        PLAN_DIGEST.set(PLAN_DIGEST_START);
+        // A journey that already failed stopped part-way through its plan.
+        if std::thread::panicking() {
+            return;
+        }
+        // Ownership by ordinal divides the vectors only while every shard of a
+        // journey plans the same vectors in the same order. The shards of one
+        // journey that run in this process must therefore agree on the number
+        // of planned vectors and on their kinds and locations.
+        /// The journey (where it is divided, and into how many) and the first
+        /// shard seen with its plan (vectors planned, their digest).
+        type Plans = std::collections::BTreeMap<(&'static str, u32, usize), (usize, (usize, u64))>;
+        static PLANS: std::sync::Mutex<Plans> =
+            std::sync::Mutex::new(std::collections::BTreeMap::new());
+        let key = (self.journey.file(), self.journey.line(), self.count);
+        let first = *PLANS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(key)
+            .or_insert((self.index, plan));
+        assert!(
+            first.1 == plan,
+            "shards {} and {} of the journey at {} planned different vectors \
+             ({} and {} planned): vectors are owned by ordinal, so some were sent twice or not at all",
+            first.0,
+            self.index,
+            self.journey,
+            first.1.0,
+            plan.0,
+        );
     }
 }
+/// The caller's location names the journey: shards of one journey are divided
+/// at the same place.
+#[track_caller]
 pub(crate) fn divide(index: usize, count: usize) -> ShardScope {
     assert!(index < count, "shard index out of range");
     SHARD.set(Some((index, count)));
     PLANNED.set(0);
-    ShardScope
+    PLAN_DIGEST.set(PLAN_DIGEST_START);
+    ShardScope {
+        journey: std::panic::Location::caller(),
+        index,
+        count,
+    }
 }
-/// Whether this shard owns the next planned vector. Every shard plans the same
-/// vectors in the same order, so the n-th belongs to shard `n % count` in all of
-/// them: each is sent by exactly one. (The valid request of a run is not a
-/// planned vector: every shard sends it.)
-fn owns_next() -> bool {
+/// Whether this shard owns the next planned vector, which `kind` and
+/// `location` describe. Every shard plans the same vectors in the same order,
+/// so the n-th belongs to shard `n % count` in all of them: each is sent by
+/// exactly one. (The valid request of a run is not a planned vector: every
+/// shard sends it.) The description excludes the vector's values: identifiers
+/// differ between the shards' databases.
+pub(super) fn owns_next(kind: &str, location: &str) -> bool {
     let Some((index, count)) = SHARD.get() else {
         return true;
     };
+    let mut digest = PLAN_DIGEST.get();
+    for byte in kind.bytes().chain([0]).chain(location.bytes()).chain([0]) {
+        digest = (digest ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    PLAN_DIGEST.set(digest);
     let ordinal = PLANNED.get();
     PLANNED.set(ordinal + 1);
     ordinal % count == index
