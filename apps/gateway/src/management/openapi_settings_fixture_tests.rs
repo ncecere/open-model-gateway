@@ -236,22 +236,10 @@ async fn management_openapi_slice5_fixtures_shard_2(pool: PgPool) {
         .await
         .finish(openapi::responses::SLICE5_AREAS);
 }
-#[dbtest::test]
-async fn management_openapi_slice5_fixtures_shard_3(pool: PgPool) {
-    slice5_fixtures(pool, 2)
-        .await
-        .finish(openapi::responses::SLICE5_AREAS);
-}
-#[dbtest::test]
-async fn management_openapi_slice5_fixtures_shard_4(pool: PgPool) {
-    slice5_fixtures(pool, 3)
-        .await
-        .finish(openapi::responses::SLICE5_AREAS);
-}
 /// The slice 5 journey as shard `shard` of [`SLICE5_SHARDS`] parallel runs (see
 /// `PositiveFixtures::sharded`): the observations are returned for the coverage
 /// gate, which the calling test applies.
-const SLICE5_SHARDS: usize = 4;
+const SLICE5_SHARDS: usize = 2;
 async fn slice5_fixtures(pool: PgPool, shard: usize) -> PositiveFixtures {
     let mut observed = PositiveFixtures::sharded(shard, SLICE5_SHARDS);
     let mut f = fixture(&pool).await;

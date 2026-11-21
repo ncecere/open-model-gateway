@@ -411,7 +411,8 @@ impl Templates {
             .max_connections(5)
             // Idle connections would keep the database from being dropped.
             .idle_timeout(Some(Duration::from_secs(1)))
-            .connect_with(self.options().database(&db_name))
+            // Just-in-time compilation only costs a test here: its queries run once, on a few rows.
+            .connect_with(self.options().database(&db_name).options([("jit", "off")]))
             .await
             .expect("failed to connect the test pool");
         let outcome = AssertUnwindSafe(Box::pin(test_fn(pool.clone())))

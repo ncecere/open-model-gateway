@@ -67,10 +67,10 @@ fn keys_stay_content_based() {
 }
 
 #[test]
-fn memoized_keys_equal_the_serialized_content() {
+fn memoized_keys_equal_the_content_key() {
     let schemas = artifact()["components"]["schemas"].as_object().unwrap();
     for schema in schemas.values().take(200) {
-        let expected = serde_json::to_string(schema).unwrap();
+        let expected = responses::value_key(schema);
         for _ in 0..2 {
             assert_eq!(&*responses::cache_key(schema).unwrap(), expected);
         }

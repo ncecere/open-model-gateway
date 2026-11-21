@@ -452,40 +452,10 @@ async fn management_openapi_slice4_money_fixtures_shard_5(pool: PgPool) {
         .await
         .finish(openapi::responses::SLICE4_AREAS);
 }
-#[dbtest::test]
-async fn management_openapi_slice4_money_fixtures_shard_6(pool: PgPool) {
-    slice4_money_fixtures(pool, 5)
-        .await
-        .finish(openapi::responses::SLICE4_AREAS);
-}
-#[dbtest::test]
-async fn management_openapi_slice4_money_fixtures_shard_7(pool: PgPool) {
-    slice4_money_fixtures(pool, 6)
-        .await
-        .finish(openapi::responses::SLICE4_AREAS);
-}
-#[dbtest::test]
-async fn management_openapi_slice4_money_fixtures_shard_8(pool: PgPool) {
-    slice4_money_fixtures(pool, 7)
-        .await
-        .finish(openapi::responses::SLICE4_AREAS);
-}
-#[dbtest::test]
-async fn management_openapi_slice4_money_fixtures_shard_9(pool: PgPool) {
-    slice4_money_fixtures(pool, 8)
-        .await
-        .finish(openapi::responses::SLICE4_AREAS);
-}
-#[dbtest::test]
-async fn management_openapi_slice4_money_fixtures_shard_10(pool: PgPool) {
-    slice4_money_fixtures(pool, 9)
-        .await
-        .finish(openapi::responses::SLICE4_AREAS);
-}
 /// The slice 4 journey as shard `shard` of [`SLICE4_SHARDS`] parallel runs (see
 /// `PositiveFixtures::sharded`): the observations are returned for the coverage
 /// gate, which the calling test applies.
-const SLICE4_SHARDS: usize = 10;
+const SLICE4_SHARDS: usize = 5;
 async fn slice4_money_fixtures(pool: PgPool, shard: usize) -> PositiveFixtures {
     let f = fixture(&pool).await;
     let admin = browser(&pool, &f.admin).await;

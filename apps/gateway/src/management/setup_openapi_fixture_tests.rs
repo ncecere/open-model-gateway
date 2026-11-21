@@ -988,34 +988,10 @@ async fn management_openapi_slice3_fixtures_shard_5(pool: PgPool) {
 async fn management_openapi_slice3_fixtures_shard_6(pool: PgPool) {
     slice3_fixtures(pool, 5).await.finish(SLICE3_AREAS);
 }
-#[dbtest::test]
-async fn management_openapi_slice3_fixtures_shard_7(pool: PgPool) {
-    slice3_fixtures(pool, 6).await.finish(SLICE3_AREAS);
-}
-#[dbtest::test]
-async fn management_openapi_slice3_fixtures_shard_8(pool: PgPool) {
-    slice3_fixtures(pool, 7).await.finish(SLICE3_AREAS);
-}
-#[dbtest::test]
-async fn management_openapi_slice3_fixtures_shard_9(pool: PgPool) {
-    slice3_fixtures(pool, 8).await.finish(SLICE3_AREAS);
-}
-#[dbtest::test]
-async fn management_openapi_slice3_fixtures_shard_10(pool: PgPool) {
-    slice3_fixtures(pool, 9).await.finish(SLICE3_AREAS);
-}
-#[dbtest::test]
-async fn management_openapi_slice3_fixtures_shard_11(pool: PgPool) {
-    slice3_fixtures(pool, 10).await.finish(SLICE3_AREAS);
-}
-#[dbtest::test]
-async fn management_openapi_slice3_fixtures_shard_12(pool: PgPool) {
-    slice3_fixtures(pool, 11).await.finish(SLICE3_AREAS);
-}
 /// The slice 3 journey as shard `shard` of [`SLICE3_SHARDS`] parallel runs (see
 /// `PositiveFixtures::sharded`): the completed observations are returned for the
 /// coverage gate, which the calling test applies.
-const SLICE3_SHARDS: usize = 12;
+const SLICE3_SHARDS: usize = 6;
 async fn slice3_fixtures(pool: PgPool, shard: usize) -> PositiveFixtures {
     let mut f = fixture(&pool).await;
     f.s = f.s.with_secret_allowlists(
