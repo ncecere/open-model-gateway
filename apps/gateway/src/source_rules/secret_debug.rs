@@ -79,7 +79,9 @@ impl Visit<'_> for Aliases {
 
 fn derives_debug(meta: &Meta, aliases: &Aliases) -> bool {
     let Meta::List(list) = meta else { return false };
-    let attr = list.path.get_ident().map(IdentExt::unraw);
+    // The last segment, as `tree::kept` reads attributes: `core::prelude::v1::derive`
+    // is the same attribute as `derive`.
+    let attr = list.path.segments.last().map(|s| s.ident.unraw());
     if attr.as_ref().is_some_and(|name| name == "derive") {
         return list
             .parse_args_with(Punctuated::<syn::Path, Token![,]>::parse_terminated)
@@ -280,6 +282,7 @@ fn planted_derived_and_manual_debug_are_refused() {
         #[derive(Debug)] struct Keyboard { monkey: String, clientAPIKey: String, clientKEYs: String, APIkey: String }
         #[cfg(test)] #[derive(Debug)] struct TestOnly { token: String }
         #[cfg_attr(test, derive(Debug))] struct OnlyTestDebug { credential: String }
+        #[core::prelude::v1::derive(Debug)] struct Pathed { password: String }
     "#;
     let implementation = r#"
         use core::fmt::Debug as Inspect;
@@ -308,6 +311,7 @@ fn planted_derived_and_manual_debug_are_refused() {
         "lib.rs::<file>::Keyboard::clientAPIKey: String".into(),
         "lib.rs::<file>::Keyboard::clientKEYs: String".into(),
         "lib.rs::<file>::Login::password: String".into(),
+        "lib.rs::<file>::Pathed::password: String".into(),
         "lib.rs::<file>::Settings::Local::client_secret: String".into(),
         "lib.rs::<file>::Settings::Local::credentials: String".into(),
         "lib.rs::<file>::Refresh::refresh_token: String".into(),

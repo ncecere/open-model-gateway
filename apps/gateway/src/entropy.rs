@@ -35,7 +35,9 @@
 //! claim fencing tokens compared in SQL, multipart boundaries and event ids.
 //! A value that must be unguessable to protect anything (a credential, a
 //! token that authorizes on its own, a key or a nonce) is drawn here, never
-//! from a UUID. The source gate checks direct secret-named bindings; indirect flows require review.
+//! from a UUID. The source gate checks direct secret-named bindings; indirect flows require review
+//! (a UUID reaching the name through another binding, a `static`, a branch, closure,
+//! macro body or `format!`, and SQL through an implicit alias, a CTE or a function).
 //!
 //! The scan reads source text. A path assembled at run time is not seen:
 //! `Path::join`, `format!`, slices joined with `join("/")`, text read with

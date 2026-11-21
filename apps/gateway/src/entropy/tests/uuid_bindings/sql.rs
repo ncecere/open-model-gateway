@@ -206,8 +206,16 @@ pub(super) fn scan(path: &str, text: &str, problems: &mut Vec<String>) {
                         }
                     }
                 }
+                // A column name follows `(`, `,`, ADD [COLUMN] [IF NOT EXISTS] or
+                // ALTER [COLUMN]. `CREATE TABLE IF NOT EXISTS name` and
+                // `ALTER TABLE name` name a table: neither is preceded by ADD or
+                // COLUMN, nor followed by SET DEFAULT.
                 _ if i > 0
-                    && matches!(stmt[i - 1], "(" | "," | "column" | "add")
+                    && (matches!(stmt[i - 1], "(" | "," | "column" | "add")
+                        || (stmt[..i].ends_with(&["if", "not", "exists"])
+                            && i > 3
+                            && matches!(stmt[i - 4], "column" | "add"))
+                        || (stmt[i - 1] == "alter" && tail.starts_with(&["set", "default"])))
                     && identifier(token)
                     && super::sensitive(&identifier_name(token)) =>
                 {

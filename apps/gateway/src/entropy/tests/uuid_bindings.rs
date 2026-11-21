@@ -248,6 +248,22 @@ fn sql_values_are_matched_to_their_target_columns() {
             &[],
         ),
         (
+            "ALTER TABLE t ADD COLUMN IF NOT EXISTS session_token uuid DEFAULT gen_random_uuid(), ADD IF NOT EXISTS api_secret uuid DEFAULT gen_random_uuid()",
+            &["session_token", "api_secret"],
+        ),
+        (
+            "ALTER TABLE t ALTER session_token SET DEFAULT gen_random_uuid()",
+            &["session_token"],
+        ),
+        (
+            "CREATE TABLE IF NOT EXISTS token_records(id uuid PRIMARY KEY DEFAULT gen_random_uuid(), salt text)",
+            &[],
+        ),
+        (
+            "ALTER TABLE token_records ADD COLUMN id uuid DEFAULT gen_random_uuid()",
+            &[],
+        ),
+        (
             "UPDATE t SET salt='gen_random_uuid()' /* token=gen_random_uuid() */",
             &[],
         ),
