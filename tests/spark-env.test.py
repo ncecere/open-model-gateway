@@ -209,7 +209,8 @@ with contextlib.redirect_stdout(sys.stderr):
         wrapper.communicate(timeout=5)
 
     def test_parent_only_signals_reap_owned_child_and_allow_immediate_reforward(self):
-        for signum, mode in ((signal.SIGINT, "normal"), (signal.SIGTERM, "normal"), (signal.SIGTERM, "ignore")):
+        for signum, mode in ((signal.SIGINT, "normal"), (signal.SIGTERM, "normal"), (signal.SIGTERM, "ignore"),
+                             (signal.SIGHUP, "normal")):
             with self.subTest(signal=signum, mode=mode), socket.socket() as unrelated:
                 unrelated.bind(("127.0.0.1", 0))
                 unrelated.listen()
@@ -224,7 +225,7 @@ with contextlib.redirect_stdout(sys.stderr):
                     if mode == "ignore":
                         wrapper.send_signal(signum)
                         wrapper.send_signal(signum)
-                    self.assertEqual(wrapper.wait(timeout=9), 0 if signum == signal.SIGINT else 143)
+                    self.assertEqual(wrapper.wait(timeout=9), 0 if signum == signal.SIGINT else 128 + signum)
                     with self.assertRaises(ProcessLookupError):
                         os.kill(child_pid, 0)  # gone, including no unreaped zombie
                     self.assertIsNone(sentinel.poll(), "an unrelated disposable process survives")

@@ -184,7 +184,8 @@ def launch_forward(command):
         if received is None:
             received = signum
 
-    handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    # SIGHUP too: the child has its own session, so a closed terminal reaches only this process.
+    handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
     try:
         # Record signals before spawning so a signal during Popen cannot lose the child handle.
         for sig in handlers:

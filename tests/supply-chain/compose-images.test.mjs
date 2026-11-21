@@ -36,8 +36,8 @@ function violations(file, data) {
   return found;
 }
 
-test("every upstream Compose service image in the root and deploy stacks has a digest", () => {
-  const files = [...checkedComposeFiles()].filter(file => !file.includes("/") || file.startsWith("deploy/"));
+test("every upstream Compose service image in every tracked Compose file has a digest", () => {
+  const files = [...checkedComposeFiles()];
   assert.deepEqual(files.flatMap(file => violations(file, toData(parseStrict(readLocalFromRepo(file), file)))), []);
 });
 
