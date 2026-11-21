@@ -28,13 +28,6 @@ permissions:
 # backup tests, the secret-scan job's gitleaks). No job installs operating-system
 # packages at run time (#491).
 
-# Test and lint builds carry no debug information: nothing in CI reads it, and
-# it is a large share of the gateway's compile and link time. A failing test
-# still reports its panic location, which is compiled in.
-env:
-  CARGO_PROFILE_DEV_DEBUG: "0"
-  CARGO_PROFILE_TEST_DEBUG: "0"
-
 jobs:
   gateway-lint:
     runs-on: ubuntu-24.04
@@ -102,6 +95,11 @@ jobs:
     env:
       DATABASE_URL: postgres://gateway:gateway@localhost:5432/gateway
       DATETIME_PG_URL: postgres://gateway:gateway@localhost:5432/gateway
+      # No debug information in test builds: nothing in CI reads it, and it is
+      # a large share of the gateway's compile and link time. A failing test
+      # still reports its panic location, which is compiled in.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # 1.99.1, matches rust-toolchain.toml
@@ -134,6 +132,11 @@ jobs:
     env:
       DATABASE_URL: postgres://gateway:gateway@localhost:5432/gateway
       DATETIME_PG_URL: postgres://gateway:gateway@localhost:5432/gateway
+      # No debug information in test builds: nothing in CI reads it, and it is
+      # a large share of the gateway's compile and link time. A failing test
+      # still reports its panic location, which is compiled in.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Exact version from rust-toolchain.toml, not the floating 'stable' channel (#354);
