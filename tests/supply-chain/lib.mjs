@@ -98,7 +98,7 @@ export function containerImagesIn(data) {
 }
 
 
-export const APPROVED_RUST = "mirror.gcr.io/library/rust:1.99.1-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c";
+export const APPROVED_RUST = "mirror.gcr.io/library/rust:1.100.0-bookworm@sha256:ade39a710ef85f3506cffcfec3e8a24ba090badef1dff2fb798f71d878833fea";
 
 export const SHA = n => String(n).repeat(40);
 export const wf = body => `name: fixture\non: push\n${body}\n`;
