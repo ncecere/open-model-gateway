@@ -265,7 +265,7 @@ pub async fn run(pool: PgPool) {
         .execute(&mut *role_lock)
         .await
         .unwrap();
-    sqlx::raw_sql("DO $$ BEGIN IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='gateway_runtime') THEN CREATE ROLE gateway_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; END IF; END $$; REVOKE CONNECT ON DATABASE postgres FROM PUBLIC,gateway_runtime; REVOKE CONNECT ON DATABASE template1 FROM PUBLIC,gateway_runtime;")
+    sqlx::raw_sql(concat!(include_str!("../common/ensure_runtime_role.sql"), "REVOKE CONNECT ON DATABASE postgres FROM PUBLIC,gateway_runtime; REVOKE CONNECT ON DATABASE template1 FROM PUBLIC,gateway_runtime;"))
         .execute(&mut *role_lock).await.unwrap();
     let database: String = sqlx::query_scalar("SELECT current_database()")
         .fetch_one(&mut *role_lock)

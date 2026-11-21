@@ -97,8 +97,10 @@ struct Gateway {
 impl Gateway {
     async fn start(pool: &PgPool, issuer: &Issuer) -> Self {
         // Same grants as production, in the sqlx test's freshly migrated database.
-        sqlx::raw_sql("DO $$ BEGIN IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='gateway_runtime') THEN CREATE ROLE gateway_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; END IF; EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$")
-            .execute(pool).await.unwrap();
+        sqlx::raw_sql(include_str!("common/ensure_runtime_role.sql"))
+            .execute(pool)
+            .await
+            .unwrap();
         assert!(sqlx::query_scalar::<_,bool>("SELECT NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls FROM pg_roles WHERE rolname='gateway_runtime'").fetch_one(pool).await.unwrap());
         Store::new(pool.clone())
             .apply_runtime_grants()

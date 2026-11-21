@@ -44,7 +44,7 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         .execute(&mut *connection)
         .await
         .unwrap();
-    sqlx::raw_sql("DO $$ BEGIN IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='gateway_runtime') THEN CREATE ROLE gateway_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; END IF; END $$; REVOKE CONNECT ON DATABASE postgres FROM PUBLIC,gateway_runtime; REVOKE CONNECT ON DATABASE template1 FROM PUBLIC,gateway_runtime;")
+    sqlx::raw_sql(concat!(include_str!("common/ensure_runtime_role.sql"), "REVOKE CONNECT ON DATABASE postgres FROM PUBLIC,gateway_runtime; REVOKE CONNECT ON DATABASE template1 FROM PUBLIC,gateway_runtime;"))
         .execute(&mut *connection).await.unwrap();
     // Run TEMP regressions before this fixture's legacy REVOKE ALL below can
     // mask grants apply's responsibility for PostgreSQL's default PUBLIC TEMP.

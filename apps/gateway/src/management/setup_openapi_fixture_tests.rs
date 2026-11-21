@@ -1016,7 +1016,7 @@ async fn slice3_fixtures(pool: PgPool, shard: usize) -> PositiveFixtures {
     // ceilings and prices, and each non-chat workload's units are all real
     // catalog shapes.
     let catalog_models = json!({"data":[
-        {"id":"contract/model","context_length":8192,"top_provider":{"max_completion_tokens":1024},"pricing":{"prompt":"0.000000123","completion":"0.000000456"}},
+        {"id":"contract/model","context_length":8192,"top_provider":{"max_completion_tokens":1024},"pricing":{"prompt":"0.000000123","completion":"0.000000456","request":"0"}},
         {"id":"contract/catalog-only","context_length":8192,"top_provider":{"max_completion_tokens":1024},"pricing":{"prompt":"0.000000123","completion":"0.000000456","input_cache_read":"0.00000001","input_cache_write":"0.000000125","input_cache_write_1h":"0.0000002","overrides":[{"min_prompt_tokens":4000,"prompt":"0.0000005","completion":"0.0000025","input_cache_read":"0.00000005","input_cache_write":"0.000000625","input_cache_write_1h":"0.000001"}]}},
         {"id":"contract/bare","pricing":{}},
         {"id":"contract/embed","context_length":8192,"pricing":{"prompt":"0.00000002"}},
@@ -1027,7 +1027,7 @@ async fn slice3_fixtures(pool: PgPool, shard: usize) -> PositiveFixtures {
         {"id":"contract/tts-minute","pricing":{"prompt":"0.000015","completion":"0.0001"}},
         {"id":"contract/tts-hour","pricing":{"prompt":"0.000015","completion":"0.0000000025"}}
     ]});
-    let model_endpoints = json!({"data":{"id":"contract/model","endpoints":[{"provider_name":"Contract Cheap","status":0,"pricing":{"prompt":"0.000000123","completion":"0.000000456"}},{"provider_name":"Contract Dear","status":0,"pricing":{"prompt":"0.000000246","completion":"0.000000912"}}]}});
+    let model_endpoints = json!({"data":{"id":"contract/model","endpoints":[{"provider_name":"Contract Cheap","status":0,"pricing":{"prompt":"0.000000123","completion":"0.000000456","request":"0"}},{"provider_name":"Contract Dear","status":0,"pricing":{"prompt":"0.000000246","completion":"0.000000912","request":"0"}}]}});
     let image_endpoints = json!({"data":{"endpoints":[{"pricing":[{"billable":"output_image","unit":"image","cost_usd":0.041,"variant":"768"},{"billable":"output_image","unit":"image","cost_usd":0.06,"variant":"1024"}]}]}});
     // An image model priced per size with more sizes than a price may carry (64
     // valued lines): the draft's own lines fail PriceLines validation, so the
