@@ -144,9 +144,21 @@ export function validateRun(output, selected) {
 export async function runShard(index, count, run = runCargo, log = console.log) {
   validateShard(index, count);
   const started = performance.now();
-  const output = await run(["test", "--workspace", "--all-features", "--no-run", "--message-format=json"]);
   const metadata = JSON.parse(await run(["metadata", "--no-deps", "--all-features", "--format-version", "1"]));
-  const targets = discoverTargets(metadata, output);
+  if (!Array.isArray(metadata?.workspace_members) || !metadata.workspace_members.length
+      || new Set(metadata.workspace_members).size !== metadata.workspace_members.length) fail("Malformed Cargo workspace metadata");
+  // One build per package, with the same package selection as every later
+  // invocation for its targets. Cargo unifies features over the selected
+  // packages, so a `--workspace` build here would build the gateway against the
+  // vendored crates' full feature sets and each `-p` run below would build it
+  // again against the features it asks for (measured: every shard compiled the
+  // gateway library tests twice).
+  const targets = [];
+  for (const id of metadata.workspace_members) {
+    const output = await run(["test", "-p", id, "--all-features", "--no-run", "--message-format=json"]);
+    targets.push(...discoverTargets({ ...metadata, workspace_members: [id] }, output));
+  }
+  targets.sort((a, b) => compare(a.key, b.key));
   for (const target of targets) {
     const args = targetArgs(target);
     target.entries = parseListing(await run([...args, "--", "--list", "--format", "terse", "--color", "never"]));
@@ -187,7 +199,11 @@ export async function runShard(index, count, run = runCargo, log = console.log) 
   }
   if (index === 0) {
     const start = performance.now();
-    await run(["test", "--workspace", "--all-features", "--doc"], { echo: true });
+    // Per package for the same reason as the builds above. Cargo refuses
+    // `--doc` for a package with no documented library, so only those run.
+    const documented = metadata.packages.filter(p => metadata.workspace_members.includes(p.id) && p.targets.some(t => t.doctest === true));
+    if (!documented.length) fail("No workspace package has doctests enabled");
+    for (const p of documented) await run(["test", "-p", p.id, "--all-features", "--doc"], { echo: true });
     log(`workspace doctests: owner=shard0 duration=${((performance.now() - start) / 1000).toFixed(2)}s`);
   }
   log(`shard=${index}/${count} total-duration=${((performance.now() - started) / 1000).toFixed(2)}s (includes build/discovery)`);

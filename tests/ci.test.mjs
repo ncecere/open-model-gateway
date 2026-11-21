@@ -209,7 +209,7 @@ test("aggregate executable accepts only the exact dependency set with every resu
 });
 
 // Synthetic Cargo/libtest output only: these tests must never build or run Rust.
-const target = (name, kind = ["test"]) => ({ name, kind, test: true });
+const target = (name, kind = ["test"]) => ({ name, kind, test: true, doctest: kind.some(k => ["lib", "rlib", "proc-macro"].includes(k)) });
 const gateway = "path+file:///repo/apps/gateway#open-model-gateway@0.9.0";
 const fixtures = () => ({
   workspace_members: [gateway, "path+file:///repo/tools/new#new@0.1.0"],
@@ -326,7 +326,7 @@ function syntheticCargo({ corrupt = "", failAt = -1, probe = "", probeMutation =
     calls.push(args);
     if (calls.length === failAt) throw new Error("cargo failed");
     if (args[0] === "metadata") return JSON.stringify(meta);
-    if (args.includes("--no-run")) return cargoOutput(artifacts(meta));
+    if (args.includes("--no-run")) return cargoOutput(artifacts({ packages: meta.packages.filter(p => p.id === args[args.indexOf("-p") + 1]) }));
     if (args.includes("--doc")) return "doctests passed\n";
     const name = args.includes("--lib") ? "open_model_gateway" : args[args.indexOf("--test") + 1] ?? "binary";
     const terminal = "providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence";
@@ -362,7 +362,11 @@ test("orchestrator runs selected lib names once after -- --exact, runs doctests 
     const fake = syntheticCargo();
     const logs = [];
     await runShard(shard, 4, fake.run, text => logs.push(text));
-    assert.equal(fake.calls.filter(c => c.includes("--doc")).length, shard === 0 ? 1 : 0);
+    // One doctest run per package with a documented library (the gateway and
+    // the proc macro), each selected like its build: never `--workspace`.
+    assert.deepEqual(fake.calls.filter(c => c.includes("--doc")).map(c => c[c.indexOf("-p") + 1]), shard === 0 ? fixtures().workspace_members : []);
+    assert.deepEqual(fake.calls.filter(c => c.includes("--no-run")).map(c => c.slice(0, 3)), fixtures().workspace_members.map(id => ["test", "-p", id]));
+    assert.ok(!fake.calls.some(c => c.includes("--workspace")), "a workspace build unifies features differently from the -p runs");
     const libRuns = fake.calls.filter(c => c.includes("--lib") && !c.includes("--list") && c[c.indexOf("-p") + 1] === gateway);
     assert.equal(libRuns.length, 1);
     const args = libRuns[0];

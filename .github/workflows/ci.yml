@@ -28,6 +28,13 @@ permissions:
 # backup tests, the secret-scan job's gitleaks). No job installs operating-system
 # packages at run time (#491).
 
+# Test and lint builds carry no debug information: nothing in CI reads it, and
+# it is a large share of the gateway's compile and link time. A failing test
+# still reports its panic location, which is compiled in.
+env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+
 jobs:
   gateway-lint:
     runs-on: ubuntu-24.04
@@ -84,7 +91,10 @@ jobs:
           POSTGRES_DB: gateway
         ports:
           - 5432:5432
+        # The data directory is memory: every test database is thrown away,
+        # and the runner's disk was the slowest part of creating one.
         options: >-
+          --tmpfs /var/lib/postgresql/data
           --health-cmd "pg_isready -U gateway -d gateway"
           --health-interval 5s
           --health-timeout 3s
