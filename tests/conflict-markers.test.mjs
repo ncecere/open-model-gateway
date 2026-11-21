@@ -72,8 +72,10 @@ export function trackedTextFiles(cwd = root) {
       let buf;
       try {
         buf = readFileSync(join(cwd, f));
-      } catch {
-        return false; // e.g. a broken symlink; nothing to check
+      } catch (error) {
+        // A tracked path can disappear when an unstaged edit replaces its parent.
+        if (error.code === "ENOENT" || error.code === "ENOTDIR") return false;
+        throw new Error(`Cannot inspect tracked file ${JSON.stringify(f)}: ${error.message}`, { cause: error });
       }
       return !looksBinary(buf);
     });
@@ -138,17 +140,16 @@ test("fixtures: binary files are skipped by the NUL-byte heuristic", () => {
   assert.equal(looksBinary(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d, 0x0a])), true);
 });
 
-test("fixtures: node_modules and target paths are excluded from the tracked-file list", () => {
-  const files = ["src/lib.rs", "node_modules/pkg/index.js", "apps/web/node_modules/x.ts", "target/debug/build", "docs/readme.md"];
-  const kept = files.filter(f => !/(^|\/)(node_modules|target)\//.test(f));
-  assert.deepEqual(kept, ["src/lib.rs", "docs/readme.md"]);
-});
-
-test("tracked text discovery uses its own Git index and preserves literal filenames", t => {
+function trackedFixture(t) {
   const dir = mkdtempSync(join(tmpdir(), "omg-conflict-git-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const git = (...args) => execFileSync("git", args, { cwd: dir, env: gitEnv() });
   git("init", "-q");
+  return { dir, git };
+}
+
+test("tracked text discovery uses its own Git index and preserves literal filenames", t => {
+  const { dir, git } = trackedFixture(t);
   writeFileSync(join(dir, ".gitignore"), "ignored.txt\n");
   for (const file of ["tracked.txt", "space name\nline.txt", "ignored.txt", "untracked.txt"]) writeFileSync(join(dir, file), "text\n");
   git("add", ".gitignore", "tracked.txt", "space name\nline.txt");
@@ -162,6 +163,39 @@ test("tracked text discovery uses its own Git index and preserves literal filena
   } finally {
     if (before === undefined) delete process.env.GIT_INDEX_FILE; else process.env.GIT_INDEX_FILE = before;
   }
+});
+
+test("tracked text discovery skips absent files, binary files and generated directories", t => {
+  const { dir, git } = trackedFixture(t);
+  for (const name of ["target", "node_modules", "apps/web/node_modules"]) {
+    mkdirSync(join(dir, name), { recursive: true });
+    writeFileSync(join(dir, name, "generated.txt"), "generated text");
+  }
+  writeFileSync(join(dir, "binary.bin"), Buffer.from([0, 1]));
+  mkdirSync(join(dir, "src"));
+  writeFileSync(join(dir, "src", "old.txt"), "removed with its parent");
+  writeFileSync(join(dir, "absent.txt"), "removed after staging");
+  writeFileSync(join(dir, "kept.txt"), "tracked text");
+  git("add", "-f", ".");
+  rmSync(join(dir, "src"), { recursive: true });
+  writeFileSync(join(dir, "src"), "replacement file");
+  rmSync(join(dir, "absent.txt"));
+  assert.deepEqual(trackedTextFiles(dir), ["kept.txt"]);
+});
+
+test("tracked text discovery reports the path and cause of unexpected read errors", t => {
+  const { dir, git } = trackedFixture(t);
+  const path = join(dir, "unreadable.txt");
+  writeFileSync(path, "tracked text");
+  git("add", "unreadable.txt");
+  rmSync(path);
+  mkdirSync(path);
+  assert.throws(() => trackedTextFiles(dir), error => {
+    assert.match(error.message, /unreadable\.txt/);
+    assert.match(error.message, /EISDIR/);
+    assert.equal(error.cause.code, "EISDIR");
+    return true;
+  });
 });
 
 test("tracked text discovery fails on Git invocation errors", t => {
