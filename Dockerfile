@@ -14,7 +14,7 @@ RUN npm run build:web
 # compiler also supports edition 2024; do not use the manifest MSRV blindly when
 # updating Cargo.lock. Bookworm sets the build's glibc baseline; compatibility
 # with the supported Debian 13 runtime must pass native build/runtime gates.
-FROM mirror.gcr.io/library/rust:1.99.1-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS build
+FROM mirror.gcr.io/library/rust:1.100.0-bookworm@sha256:ade39a710ef85f3506cffcfec3e8a24ba090badef1dff2fb798f71d878833fea AS build
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY apps/gateway/ apps/gateway/
