@@ -11,6 +11,7 @@ mod governance_locks;
 mod log_fields;
 mod money_float;
 mod review_history;
+mod secret_debug;
 mod serve_no_migrate;
 mod telemetry_fields;
 

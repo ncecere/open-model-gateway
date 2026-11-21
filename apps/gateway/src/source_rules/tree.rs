@@ -324,7 +324,11 @@ fn cfg_excludes(attrs: &[Attribute]) -> bool {
     })
 }
 
-fn kept(attrs: &[Attribute]) -> bool {
+pub(super) fn possible_in_production(predicate: &Meta) -> bool {
+    cfg_holds(predicate) != Tri::False
+}
+
+pub(super) fn kept(attrs: &[Attribute]) -> bool {
     attrs.iter().all(|attr| {
         let last = attr
             .path()
@@ -334,7 +338,7 @@ fn kept(attrs: &[Attribute]) -> bool {
         match (&attr.meta, last.as_deref()) {
             (Meta::List(list), Some("cfg")) => list
                 .parse_args::<Meta>()
-                .map(|m| cfg_holds(&m) != Tri::False)
+                .map(|m| possible_in_production(&m))
                 .unwrap_or(true),
             (_, Some("test")) => false,
             _ => true,
@@ -342,7 +346,7 @@ fn kept(attrs: &[Attribute]) -> bool {
     })
 }
 
-fn item_attrs(item: &Item) -> &[Attribute] {
+pub(super) fn item_attrs(item: &Item) -> &[Attribute] {
     match item {
         Item::Const(i) => &i.attrs,
         Item::Enum(i) => &i.attrs,
@@ -447,6 +451,46 @@ pub(super) fn dropped_spans(file: &syn::File) -> Vec<SpanRange> {
     out
 }
 
+/// Match both interpretations of capital runs: APIkey contains "apikey",
+/// while clientAPIKey contains the adjacent words "api" and "key".
+pub(super) fn word_forms(ident: &str) -> impl Iterator<Item = Vec<String>> {
+    [false, true]
+        .into_iter()
+        .map(move |split_acronyms| words(ident, split_acronyms))
+}
+
+fn words(ident: &str, split_acronyms: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut word = String::new();
+    let mut chars = ident.chars().peekable();
+    let mut previous: Option<char> = None;
+    while let Some(c) = chars.next() {
+        if !c.is_alphanumeric() {
+            if !word.is_empty() {
+                out.push(std::mem::take(&mut word));
+            }
+            previous = None;
+            continue;
+        }
+        let starts_word = previous.is_some_and(|p| {
+            p.is_lowercase()
+                || p.is_ascii_digit()
+                || (split_acronyms
+                    && p.is_uppercase()
+                    && chars.peek().is_some_and(|next| next.is_lowercase()))
+        });
+        if c.is_uppercase() && starts_word {
+            out.push(std::mem::take(&mut word));
+        }
+        previous = Some(c);
+        word.extend(c.to_lowercase());
+    }
+    if !word.is_empty() {
+        out.push(word);
+    }
+    out
+}
+
 /// The enclosing modules, impls and functions of the node being visited.
 #[derive(Default)]
 pub(super) struct Scope(Vec<String>);
@@ -478,6 +522,8 @@ pub(super) fn type_name(ty: &syn::Type) -> String {
             .map(|s| s.ident.unraw().to_string())
             .unwrap_or_default(),
         syn::Type::Reference(r) => type_name(&r.elem),
+        syn::Type::Paren(p) => type_name(&p.elem),
+        syn::Type::Group(g) => type_name(&g.elem),
         _ => "<type>".to_owned(),
     }
 }
