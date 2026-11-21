@@ -149,10 +149,11 @@ export async function runShard(index, count, run = runCargo, log = console.log) 
       || new Set(metadata.workspace_members).size !== metadata.workspace_members.length) fail("Malformed Cargo workspace metadata");
   // One build per package, with the same package selection as every later
   // invocation for its targets. Cargo unifies features over the selected
-  // packages, so a `--workspace` build here would build the gateway against the
-  // vendored crates' full feature sets and each `-p` run below would build it
-  // again against the features it asks for (measured: every shard compiled the
-  // gateway library tests twice).
+  // packages: `--workspace --all-features` turns on every member's features
+  // (the datetime crate's `postgres-tests`, which the gateway does not ask
+  // for), so a workspace build here compiles the gateway against one set of
+  // dependencies and each `-p` run below compiles it again against another
+  // (measured: every shard compiled the gateway library tests twice).
   const targets = [];
   for (const id of metadata.workspace_members) {
     const output = await run(["test", "-p", id, "--all-features", "--no-run", "--message-format=json"]);
