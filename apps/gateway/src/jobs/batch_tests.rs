@@ -1238,10 +1238,8 @@ async fn multi_route_unpinned_line_is_sized_and_runs_on_the_accepting_route(pool
     // Sized exactly like a batch of one ordinary valid line: not excluded,
     // because openai still accepts it.
     assert_eq!(reservation(f, job.execution_id).await.1, solo_held);
-    // Between planning and dispatch the route planning sized against stops
-    // serving the model (disabled - the same kind of drift the runner's own
-    // periodic replan already anticipates): dispatch must still succeed,
-    // through the other authorized candidate.
+    // Disable the preferred route after planning. The explicit-maximum
+    // line can still dispatch on the authorized route that accepts it.
     sqlx::query("UPDATE deployments SET enabled=false WHERE id=$1")
         .bind(w.claude_deployment)
         .execute(&f.store.pool)
@@ -1343,9 +1341,7 @@ async fn scheduler_skips_a_rejecting_route_and_claims_the_accepting_one_with_bot
             .await
             .unwrap();
     assert_eq!(line_deployment, Some(openai_route));
-    // The rejecting route recorded no execution and no reservation of its
-    // own for this line (only the planning-time envelope reservation, keyed
-    // by `job.execution_id`, ever touched it).
+    // The rejecting route has no child reservation.
     let anthropic_line_reservations: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id WHERE e.batch_job_id=$1 AND r.deployment_id=$2",
     )
@@ -1404,7 +1400,7 @@ async fn ungated_dispatch_never_admits_when_a_route_starts_accepting_before_exec
     assert_eq!(job.mode(), Some(BatchMode::Gateway));
     assert_eq!(job.request_total, Some(2));
     // Armed only after creation: creation's own exclusion check
-    // (`every_candidate_route_refuses`) must see both routes reject
+    // (`explicit_chat_route`) must see both routes reject
     // "strict-tool" exactly as they will at the runner's own planning,
     // not an openai already flipped permissive.
     w.openai.script.lock().unwrap().accept_after_first_check = true;
@@ -1698,7 +1694,7 @@ async fn multi_route_all_candidates_reject_with_differing_kinds_is_invalid_reque
 async fn batch_planning_memoizes_model_level_lookups_within_one_scan(pool: PgPool) {
     // #238 follow-up (adversarial re-review, medium): with configuration
     // caches bypassed (the test default - `ConfigVersions::new` starts
-    // disabled until `enable()`/`start()`), `every_candidate_route_refuses`
+    // disabled until `enable()`/`start()`), `explicit_chat_route`
     // must fetch `company/claude`'s candidate deployments and classify its
     // universal refusal at most once per scan, not once per
     // explicit-maximum line. Without memoization this upload of 50
@@ -3220,6 +3216,7 @@ async fn memoized_refusal_classification_stays_per_line(pool: PgPool) {
     consistent(f).await;
 }
 
+mod bedrock;
 mod envelope;
 mod fence;
 

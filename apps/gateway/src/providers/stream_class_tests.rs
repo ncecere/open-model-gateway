@@ -257,6 +257,7 @@ pub(crate) fn request(messages: bool) -> ChatRequest {
             content: Some("hello".into()),
             tool_calls: vec![],
             tool_call_id: None,
+            tool_result_is_error: false,
         }],
         tools: vec![],
         tool_choice: None,

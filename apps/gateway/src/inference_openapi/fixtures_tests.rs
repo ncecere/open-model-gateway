@@ -1023,8 +1023,8 @@ async fn inference_openapi_generation_refusals_and_beta_headers(pool: PgPool) {
         ),
         (
             "/v1/messages",
-            json!({"model":"company/smart","max_tokens":32,"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_0","content":"translated","is_error":true}]}]}),
-            StatusCode::NOT_IMPLEMENTED,
+            json!({"model":"company/smart","max_tokens":32,"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_0","content":"translated","is_error":null}]}]}),
+            StatusCode::BAD_REQUEST,
         ),
     ] {
         let response = app

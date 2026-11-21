@@ -165,7 +165,6 @@ pub struct MessagesOptions {
     /// Validated native message/tool envelopes; no caller transport or metadata.
     pub native_messages: Vec<serde_json::Value>,
     pub native_tools: Vec<serde_json::Value>,
-    pub error_results: bool,
     pub system: Option<serde_json::Value>,
     pub cache_controls: Vec<serde_json::Value>,
     pub thinking: Option<serde_json::Value>,
@@ -180,6 +179,12 @@ pub struct MessagesOptions {
     pub stop_sequences: Option<Vec<String>>,
 }
 impl ChatRequest {
+    pub(crate) fn has_failed_tool_result(&self) -> bool {
+        self.messages
+            .iter()
+            .any(|message| message.tool_result_is_error)
+    }
+
     pub fn response_limit(&self) -> usize {
         if self.messages_options.is_some() {
             16 * 1024 * 1024
@@ -205,6 +210,8 @@ pub struct Message {
     pub content: Option<String>,
     pub tool_calls: Vec<ToolCall>,
     pub tool_call_id: Option<String>,
+    /// Failure of this correlated tool result; never inferred from result text.
+    pub tool_result_is_error: bool,
 }
 
 #[derive(Clone)]

@@ -357,6 +357,12 @@ pub(super) fn encode(model: &str, request: &ChatRequest) -> Value {
         .iter()
         .map(|message| {
             let mut value = json!({"role": message.role, "content": message.content});
+            if message.role == Role::Tool && message.tool_result_is_error {
+                value["content"] = json!(format!(
+                    "[tool_error]\n{}",
+                    message.content.as_deref().unwrap_or("")
+                ));
+            }
             if let Some(id) = &message.tool_call_id {
                 value["tool_call_id"] = json!(id);
             }

@@ -5,7 +5,7 @@
 //! * It never panics. Its only errors are `InvalidRequest` (malformed or
 //!   out-of-bounds input), `Unsupported` (a capability Bedrock's Converse
 //!   mapping cannot carry: a strict tool, `tool_choice: none`, the developer
-//!   role, error-marked tool results) and `InvalidField(name)` (a Messages
+//!   role) and `InvalidField(name)` (a Messages
 //!   option this provider class refuses: image, strict, top_k, output_config
 //!   format, a bad or denied beta header). Each fault below is refused with its
 //!   own class, not a catch-all.
@@ -139,6 +139,7 @@ fn msg(role: Role, content: Option<String>) -> Message {
         content,
         tool_calls: vec![],
         tool_call_id: None,
+        tool_result_is_error: false,
     }
 }
 
@@ -460,7 +461,6 @@ enum Fault {
     OptionStrict,
     OptionImages,
     OptionTopK,
-    OptionErrorResults,
     OptionOutputFormat,
     OptionBadBeta(String),
 }
@@ -503,7 +503,6 @@ fn fault() -> impl Strategy<Value = Fault> {
         Fault::OptionStrict,
         Fault::OptionImages,
         Fault::OptionTopK,
-        Fault::OptionErrorResults,
         Fault::OptionOutputFormat,
     ]);
     let limits = prop_oneof![
@@ -749,10 +748,6 @@ fn inject(r: &mut ChatRequest, fault: &Fault) -> InferenceError {
             options(r).top_k = Some(5);
             InvalidField("top_k")
         }
-        Fault::OptionErrorResults => {
-            options(r).error_results = true;
-            Unsupported
-        }
         Fault::OptionOutputFormat => {
             options(r).output_config = Some(json!({"format": {"type": "json_schema"}}));
             InvalidField("output_config.format")
@@ -958,7 +953,7 @@ proptest! {
 /// messages, a system value, deferred loading, history thinking, an output
 /// config without a format, and a valid beta header. None of them is a refused
 /// option (`validate` refuses `image`, `strict`, `top_k`, an output format,
-/// error-marked results and bad or denied beta headers).
+/// and bad or denied beta headers).
 fn add_extras(r: &mut ChatRequest) {
     let o = options(r);
     o.thinking = Some(json!({"type": "enabled", "budget_tokens": 1024}));

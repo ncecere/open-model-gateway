@@ -728,12 +728,6 @@
             "trigger": "unknown fields, invalid types, bounds, malformed JSON or unsupported request field"
           },
           {
-            "status": 501,
-            "envelope": "AnthropicErrorEnvelope",
-            "code": null,
-            "trigger": "tool_result.is_error:true on translated routes"
-          },
-          {
             "status": 400,
             "envelope": "AnthropicErrorEnvelope",
             "code": null,

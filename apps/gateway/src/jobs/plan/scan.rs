@@ -1,28 +1,14 @@
-//! Per-line batch checks: parse, model, price, engine support and the
-//! adapter's deterministic refusal; then sizing and copying an accepted line.
+//! Per-line route selection, price preview and sizing for batch admission.
 use super::*;
 
-/// A line that passed every per-line check.
-pub(super) struct CheckedLine {
-    model: String,
-    resolved: Arc<Resolved>,
-    /// The line's own output maximum (`Some(0)` for embeddings).
-    requested: Option<u32>,
-    price_id: Uuid,
-    max: u32,
-    deterministic_reject: Option<InferenceError>,
-}
-
 impl Jobs {
-    /// Every per-line check, in order: shape, unique `custom_id`, model,
-    /// price and bound, native/engine support and the adapter's own
-    /// deterministic refusal.
+    /// Size an executable line and return the pin required for its private copy.
     pub(super) async fn check_line(
         &self,
         scope: ScanScope<'_>,
         state: &mut ScanState,
         raw: &[u8],
-    ) -> Result<Result<CheckedLine, LineError>, PlanError> {
+    ) -> Result<Result<Option<lines::LinePlan>, LineError>, PlanError> {
         let line = match parse_line(raw, scope.endpoint) {
             Ok(l) => l,
             Err(e) => return Ok(Err(e)),
@@ -38,6 +24,27 @@ impl Jobs {
         let requested = match &line.request {
             BatchRequest::Chat(r) => r.max_output_tokens,
             BatchRequest::Embeddings(_) => Some(0),
+        };
+        let resolved = if let BatchRequest::Chat(request) = &line.request
+            && requested.is_some()
+            && !matches!(&resolved, PreferredRoute::Ready(route) if route.legacy)
+        {
+            match self
+                .explicit_chat_route(scope, resolved, request, &mut state.route_memo)
+                .await
+            {
+                Ok(Ok(route)) => route,
+                Err(JobError::Inference(InferenceError::ModelUnavailable)) => {
+                    return Ok(Err(LineError::ModelNotFound));
+                }
+                Err(error) => return Err(error.into()),
+                Ok(Err(error)) => {
+                    state.deterministic_rejects.push((state.physical, error));
+                    return Ok(Ok(None));
+                }
+            }
+        } else {
+            resolved.live()?
         };
         let (price_id, max) = match self
             .price_line(scope, state, &line.request, &resolved, requested)
@@ -59,38 +66,39 @@ impl Jobs {
                 Ok(coarse_ok) => coarse_ok,
                 Err(e) => return Ok(Err(e)),
             };
-        let mut checked = CheckedLine {
-            model,
-            resolved,
-            requested,
-            price_id,
-            max,
-            deterministic_reject: None,
-        };
-        checked.deterministic_reject = self
-            .deterministic_reject(
-                scope,
-                &mut state.refusal_memo,
-                &checked,
-                &execution_request,
-                coarse_ok,
-            )
-            .await?;
-        Ok(Ok(checked))
+        let pin = requested.is_none().then_some(lines::LinePlan {
+            deployment: resolved.deployment.id,
+            price: price_id,
+            output: max,
+        });
+        if pin.is_some()
+            && coarse_ok
+            && !resolved.legacy
+            && let BatchRequest::Chat(r) = &execution_request
+            && let Err(error) = resolved.adapter.validate_chat_request(r).and_then(|()| {
+                resolved
+                    .adapter
+                    .validate_tool_result_target(&resolved.deployment, r.has_failed_tool_result())
+            })
+        {
+            state.deterministic_rejects.push((state.physical, error));
+        } else if state.issues.is_empty() {
+            state.record(scope.endpoint, &resolved, model, max, pin.map(|p| p.price));
+        }
+        Ok(Ok(pin))
     }
 
     /// The model's deployment for this key, resolved at most once per scan.
     async fn resolve_once(
         &self,
         scope: ScanScope<'_>,
-        models: &mut HashMap<String, Result<Arc<Resolved>, LineError>>,
+        models: &mut HashMap<String, Result<PreferredRoute, LineError>>,
         model: &str,
-    ) -> Result<Result<Arc<Resolved>, LineError>, PlanError> {
+    ) -> Result<Result<PreferredRoute, LineError>, PlanError> {
         if let std::collections::hash_map::Entry::Vacant(slot) = models.entry(model.to_owned()) {
             slot.insert(
                 self.resolve(scope.principal, model, scope.endpoint, scope.request_id)
-                    .await?
-                    .map(Arc::new),
+                    .await?,
             );
         }
         Ok(models[model].clone())
@@ -138,76 +146,16 @@ impl Jobs {
             LinePreview::Unpriced | LinePreview::Unbounded => Err(LineError::Unpriced),
         })
     }
-
-    /// The adapter's deterministic refusal of this exact line, if any.
-    async fn deterministic_reject(
-        &self,
-        scope: ScanScope<'_>,
-        memo: &mut RefusalMemo,
-        line: &CheckedLine,
-        execution_request: &BatchRequest,
-        coarse_ok: bool,
-    ) -> Result<Option<InferenceError>, JobError> {
-        // The coarse bool can pass while an adapter's own pure encoder
-        // still refuses this exact body (a strict function tool, an
-        // out-of-range sampling parameter, a tool result with no
-        // matching call, ...): the same deterministic check
-        // `Engine::execute_protocol` runs before admission (#228). A
-        // model set up only for native batches (`resolved.legacy`) never
-        // reaches the generic engine, so it is exempt.
-        //
-        // An omitted maximum pins this line to `resolved.deployment` for
-        // both sizing and dispatch (`lines::LinePlan`, below): judge it
-        // on that route alone. An explicit maximum is copied with no pin;
-        // the runner may schedule it onto any authorized,
-        // protocol-capable candidate route for the model at dispatch
-        // (`jobs::runner::Runner::plan_route_inner`), so excluding it
-        // from the envelope here is correct only when *every* such
-        // candidate would refuse it too - the same per-adapter/provider
-        // enumeration `Engine::execute_protocol` runs, reused here
-        // read-only (no admission, no routing-health writes).
-        let resolved = &line.resolved;
-        if resolved.legacy {
-            return Ok(None);
-        }
-        Ok(match execution_request {
-            BatchRequest::Chat(r) => {
-                if line.requested.is_none() {
-                    coarse_ok
-                        .then(|| resolved.adapter.validate_chat_request(r).err())
-                        .flatten()
-                } else {
-                    self.every_candidate_route_refuses(
-                        scope.principal,
-                        &line.model,
-                        scope.endpoint.protocol(),
-                        scope.request_id,
-                        r,
-                        memo,
-                    )
-                    .await?
-                }
-            }
-            BatchRequest::Embeddings(_) => None,
-        })
-    }
 }
 
-/// Copy an accepted line to the work file.
+/// Only omitted maxima carry a price and deployment pin into dispatch.
 pub(super) async fn copy_line(
     work: &mut LazySink,
     raw: Vec<u8>,
-    line: &CheckedLine,
+    pin: Option<lines::LinePlan>,
 ) -> Result<(), PlanError> {
-    let mut copy = if line.requested.is_none() {
-        lines::planned_copy(
-            raw,
-            lines::LinePlan {
-                deployment: line.resolved.deployment.id,
-                price: line.price_id,
-                output: line.max,
-            },
-        )?
+    let mut copy = if let Some(plan) = pin {
+        lines::planned_copy(raw, plan)?
     } else {
         raw
     };
@@ -228,9 +176,10 @@ impl ScanState {
         resolved: &Resolved,
     ) -> Result<bool, LineError> {
         // Can this line run natively, and can the engine run it?
-        let encodable = resolved
-            .adapter
-            .native_batch(&resolved.deployment, endpoint)
+        let encodable = !resolved.pricing_only
+            && resolved
+                .adapter
+                .native_batch(&resolved.deployment, endpoint)
             && resolved
                 .adapter
                 .encode_native_line(&resolved.deployment, endpoint, "l0", execution_request)
@@ -252,43 +201,38 @@ impl ScanState {
         Ok(coarse_ok)
     }
 
-    /// Size an accepted line into its deployment's group, or set it aside
-    /// as a deterministic rejection.
-    pub(super) fn record(&mut self, endpoint: BatchEndpoint, line: &CheckedLine) {
-        let resolved = &line.resolved;
-        if let Some(error) = line.deterministic_reject {
-            // The engine refuses this line before it ever admits or
-            // reserves anything for it (zero cost, #228): it must not
-            // size or reserve the parent envelope either. It is still
-            // copied below, so it still runs and is refused per line, at
-            // the same classification as an interactive request, when
-            // the batch dispatches (`jobs::runner`).
-            self.deterministic_rejects.push((self.physical, error));
-        } else {
-            match self
-                .groups
-                .iter_mut()
-                .find(|g| g.group.deployment.id == resolved.deployment.id)
-            {
-                Some(g) => {
-                    *g.group.outputs.entry(line.max).or_insert(0) += 1;
-                    if line.requested.is_none() {
-                        g.group.price_id = Some(line.price_id);
-                    }
+    /// Size a runnable line into its selected deployment's parent envelope.
+    fn record(
+        &mut self,
+        endpoint: BatchEndpoint,
+        resolved: &Resolved,
+        model: String,
+        max: u32,
+        pinned_price: Option<Uuid>,
+    ) {
+        match self
+            .groups
+            .iter_mut()
+            .find(|g| g.group.deployment.id == resolved.deployment.id)
+        {
+            Some(g) => {
+                *g.group.outputs.entry(max).or_insert(0) += 1;
+                if pinned_price.is_some() {
+                    g.group.price_id = pinned_price;
                 }
-                None => self.groups.push(PendingGroup {
-                    group: LineGroup {
-                        deployment: resolved.deployment.clone(),
-                        model: line.model.clone(),
-                        protocol: endpoint.protocol(),
-                        outputs: BTreeMap::from([(line.max, 1)]),
-                        price_id: line.requested.is_none().then_some(line.price_id),
-                    },
-                    first_line: self.physical,
-                    adapter: resolved.adapter.clone(),
-                    legacy: resolved.legacy,
-                }),
             }
+            None => self.groups.push(PendingGroup {
+                group: LineGroup {
+                    deployment: resolved.deployment.clone(),
+                    model,
+                    protocol: endpoint.protocol(),
+                    outputs: BTreeMap::from([(max, 1)]),
+                    price_id: pinned_price,
+                },
+                first_line: self.physical,
+                adapter: resolved.adapter.clone(),
+                legacy: resolved.legacy,
+            }),
         }
     }
 }

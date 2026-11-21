@@ -207,7 +207,7 @@ pub struct Jobs {
     /// Approved local endpoints: batch scheduling reads server load signals
     /// only from their origins (pinned addresses).
     pub(crate) approvals: Option<Arc<crate::providers::local::endpoints::ApprovedEndpoints>>,
-    /// Test-only counters proving `plan::every_candidate_route_refuses`'s
+    /// Test-only counters proving `plan::explicit_chat_route`'s
     /// model-level lookups are memoized at most once per scan (#238
     /// follow-up), not once per explicit-maximum line. Never read outside
     /// tests; production builds never allocate or touch this.

@@ -87,6 +87,7 @@ async fn pending_local_embeddings_and_chat_stream_drop_cancel_http_body() {
                     content: Some("hello".into()),
                     tool_calls: vec![],
                     tool_call_id: None,
+                    tool_result_is_error: false,
                 }],
                 tools: vec![],
                 tool_choice: None,

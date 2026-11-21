@@ -85,7 +85,7 @@ impl Mock {
             let complete = complete.clone();
             let frames = frames.clone();
             async move {
-                let stream = uri.path().ends_with("converse-stream");
+                let stream = status == 200 && uri.path().ends_with("converse-stream");
                 capture.lock().unwrap().push(Captured {
                     headers,
                     uri,
@@ -166,6 +166,7 @@ fn message(role: Role, text: &str) -> Message {
         content: Some(text.into()),
         tool_calls: Vec::new(),
         tool_call_id: None,
+        tool_result_is_error: false,
     }
 }
 fn request() -> ChatRequest {
@@ -539,6 +540,7 @@ async fn tool_history_preserves_json_input_and_result_text() {
         role: Role::Assistant,
         content: None,
         tool_call_id: None,
+        tool_result_is_error: false,
         tool_calls: vec![
             ToolCall {
                 id: "call_1".into(),
@@ -558,6 +560,7 @@ async fn tool_history_preserves_json_input_and_result_text() {
             content: Some("{ \"temp\": 20 }".into()),
             tool_calls: Vec::new(),
             tool_call_id: Some(id.into()),
+            tool_result_is_error: false,
         });
     }
     mock.adapter()
@@ -1022,4 +1025,156 @@ async fn a_stream_corrupt_at_its_first_frame_fails_in_the_stream_without_done() 
         events_seen.push(event.is_ok());
     }
     assert_eq!(events_seen, [false], "one error, no content and no Done");
+}
+
+#[tokio::test]
+async fn error_tool_results_use_converse_status_without_changing_text() {
+    let mock = Mock::serve(complete(false), wire(events(false)), 200).await;
+    let adapter = mock.adapter();
+    for model in [
+        "test-model",
+        "amazon.nova-pro-v1:0",
+        "apac.amazon.nova-2-lite-v1:0",
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "global.anthropic.claude-opus-4-1-20250805-v1:0",
+        "arn:aws:bedrock:us-east-1:123456789012:custom-model-deployment/meta.llama3",
+        "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-haiku-20240307-v1:0",
+        "arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.anthropic.claude-sonnet-4-20250514-v1:0",
+    ] {
+        let mut deployment = target();
+        deployment.upstream_model = model.into();
+        for (request, error, text) in super::super::contract::error_tool_result_requests() {
+            adapter.execute(&deployment, request).await.unwrap();
+            let capture = mock.requests.lock().unwrap();
+            let results = &capture.last().unwrap().body["messages"][2]["content"];
+            assert_eq!(results[0]["toolResult"]["toolUseId"], "second-call");
+            assert_eq!(results[0]["toolResult"]["content"], json!([{"text":text}]));
+            assert_eq!(
+                results[0]["toolResult"].get("status"),
+                error.then_some(&json!("error"))
+            );
+            assert_eq!(
+                results[1]["toolResult"],
+                json!({"toolUseId":"first-call","content":[{"text":"unchanged"}]})
+            );
+        }
+    }
+}
+
+#[cfg(feature = "integration-tests")]
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn error_tool_sdk_bedrock(pool: sqlx::PgPool) {
+    let mock = Mock::serve(complete(false), wire(events(false)), 200).await;
+    super::super::contract::assert_error_tool_sdk(pool, Arc::new(mock.adapter()), target()).await;
+    let capture = mock.requests.lock().unwrap();
+    assert_eq!(capture.len(), 6);
+    for (captured, (_, error, text)) in capture
+        .iter()
+        .zip(super::super::contract::error_tool_result_requests())
+    {
+        let results = &captured.body["messages"][2]["content"];
+        assert_eq!(results[0]["toolResult"]["toolUseId"], "second-call");
+        assert_eq!(results[0]["toolResult"]["content"], json!([{"text":text}]));
+        assert_eq!(
+            results[0]["toolResult"].get("status"),
+            error.then_some(&json!("error"))
+        );
+        assert!(results[1]["toolResult"].get("status").is_none());
+    }
+}
+
+#[tokio::test]
+async fn error_tool_result_refused_for_identifiable_unsupported_models() {
+    let mock = Mock::serve(complete(false), wire(events(false)), 200).await;
+    let adapter = mock.adapter();
+    for model in [
+        "meta.llama3-1-70b-instruct-v1:0",
+        "us.meta.llama3-1-70b-instruct-v1:0",
+        "anthropic.claude-v2:1",
+        "arn:aws:bedrock:us-east-1::foundation-model/cohere.command-r-v1:0",
+        "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.meta.llama3-1-70b-instruct-v1:0",
+    ] {
+        let mut target = target();
+        target.upstream_model = model.into();
+        for (request, failed, text) in super::super::contract::error_tool_result_requests() {
+            let result = adapter.execute(&target, request).await;
+            if failed {
+                assert!(
+                    matches!(result, Err(InferenceError::Unsupported)),
+                    "{model}"
+                );
+            } else {
+                result.unwrap();
+                let capture = mock.requests.lock().unwrap();
+                assert_eq!(
+                    capture.last().unwrap().body["messages"][2]["content"][0]["toolResult"],
+                    json!({"toolUseId":"second-call","content":[{"text":text}]})
+                );
+            }
+        }
+    }
+    assert_eq!(mock.requests.lock().unwrap().len(), 5 * 4);
+}
+
+#[cfg(feature = "integration-tests")]
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn error_tool_sdk_bedrock_known_refusal(pool: sqlx::PgPool) {
+    let mock = Mock::serve(complete(false), wire(events(false)), 200).await;
+    let mut deployment = target();
+    deployment.upstream_model = "us.meta.llama3-1-70b-instruct-v1:0".into();
+    super::super::contract::run_error_tool_sdk(
+        pool,
+        Arc::new(mock.adapter()),
+        deployment,
+        Some((501, InferenceError::Unsupported)),
+    )
+    .await;
+    assert!(mock.requests.lock().unwrap().is_empty());
+}
+
+#[cfg(feature = "integration-tests")]
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn error_tool_sdk_bedrock_opaque_validation_failure(pool: sqlx::PgPool) {
+    let mock = Mock::serve(
+        json!({"__type":"ValidationException","message":"unsupported toolResult.status"}),
+        vec![],
+        400,
+    )
+    .await;
+    let mut deployment = target();
+    deployment.upstream_model =
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/a1b2c3d4e5".into();
+    super::super::contract::run_error_tool_sdk(
+        pool.clone(),
+        Arc::new(mock.adapter()),
+        deployment,
+        Some((400, InferenceError::UpstreamRejected)),
+    )
+    .await;
+    // Paid requests rejected before the stream opens have no usage evidence.
+    // Each 100-input + 32-output hold remains available for reconciliation.
+    let unknown: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM governance_reservations r
+         JOIN inference_executions e ON e.id=r.execution_id
+         JOIN monetary_ledger l ON l.execution_id=e.id AND l.kind='unknown'
+         WHERE r.state='unknown' AND r.held_microusd=132 AND r.actual_microusd IS NULL
+           AND e.state='failed' AND e.error_code='upstream_rejected'
+           AND e.input_tokens IS NULL AND e.output_tokens IS NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(unknown, 2);
+    let capture = mock.requests.lock().unwrap();
+    assert_eq!(capture.len(), 2);
+    for (request, operation) in capture.iter().zip(["/converse", "/converse-stream"]) {
+        assert!(request.uri.path().ends_with(operation));
+        assert_eq!(
+            request.body["messages"][2]["content"],
+            json!([
+                {"toolResult":{"toolUseId":"second-call","status":"error","content":[{"text":"failed"}]}},
+                {"toolResult":{"toolUseId":"first-call","content":[{"text":"unchanged"}]}}
+            ])
+        );
+    }
 }

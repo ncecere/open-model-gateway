@@ -109,6 +109,42 @@ pub async fn plan(
     candidates: &[Deployment],
     request_id: Uuid,
 ) -> Result<RoutePlan, InferenceError> {
+    let (policy, rows, seed) = plan_inputs(store, principal, model, candidates, request_id).await?;
+    order_candidates(&policy, rows, seed)
+}
+
+/// Prices for queued work may come from a cooling route. Only a live route
+/// plan can authorize dispatch. Keep the retry hint with the snapshot so a
+/// whole-model cooldown is reported from the body's own eligible set.
+pub(crate) struct BatchPriceRoutes {
+    pub(crate) deployment_ids: Vec<Uuid>,
+    pub(crate) retry_after: Option<u32>,
+}
+
+pub(crate) async fn batch_price_routes(
+    store: &Store,
+    principal: &Principal,
+    model: &str,
+    candidates: &[Deployment],
+    request_id: Uuid,
+) -> Result<BatchPriceRoutes, InferenceError> {
+    let (policy, mut rows, seed) =
+        plan_inputs(store, principal, model, candidates, request_id).await?;
+    let retry_after = filter_candidates(&policy, &mut rows)?;
+    let ranked = rank_candidates(&policy, rows, seed)?;
+    Ok(BatchPriceRoutes {
+        deployment_ids: ranked.deployment_ids,
+        retry_after,
+    })
+}
+
+async fn plan_inputs(
+    store: &Store,
+    principal: &Principal,
+    model: &str,
+    candidates: &[Deployment],
+    request_id: Uuid,
+) -> Result<(RoutingPolicy, Vec<Candidate>, [u8; 32]), InferenceError> {
     if candidates.len() > MAX_CANDIDATES {
         return Err(InferenceError::Configuration);
     }
@@ -123,7 +159,7 @@ pub async fn plan(
     seed.update(principal.workspace_id.as_bytes());
     seed.update(request_id.as_bytes());
     seed.update(model.as_bytes());
-    order_candidates(&policy, rows, seed.finalize().into())
+    Ok((policy, rows, seed.finalize().into()))
 }
 
 /// Planning inputs read live: the model's routing policy (as the workspace
@@ -308,6 +344,18 @@ fn order_candidates(
     mut candidates: Vec<Candidate>,
     seed: [u8; 32],
 ) -> Result<RoutePlan, InferenceError> {
+    if let Some(seconds) = filter_candidates(policy, &mut candidates)? {
+        return Err(InferenceError::RouteCoolingDown(seconds));
+    }
+    rank_candidates(policy, candidates, seed)
+}
+
+/// Keep policy-authorized, healthy candidates if any are available. If all
+/// remaining candidates are cooling, preserve them for price previews only.
+fn filter_candidates(
+    policy: &RoutingPolicy,
+    candidates: &mut Vec<Candidate>,
+) -> Result<Option<u32>, InferenceError> {
     policy.validate()?;
     validate_ids(
         &candidates
@@ -329,20 +377,24 @@ fn order_candidates(
                 .as_deref()
                 .is_none_or(|label| label == c.residency)
     });
-    // Routes in cooldown are skipped. If cooldown is the only reason nothing can
-    // serve the model, say so (retryable, with the soonest reopening) instead of
-    // reporting the model as missing.
-    let cooling = candidates
-        .iter()
-        .filter(|c| c.circuit_open)
-        .map(|c| c.cooldown_remaining_seconds.max(1) as u32)
-        .min();
-    candidates.retain(|c| !c.circuit_open);
-    if candidates.is_empty()
-        && let Some(seconds) = cooling
-    {
-        return Err(InferenceError::RouteCoolingDown(seconds));
+    if candidates.is_empty() {
+        return Err(InferenceError::ModelUnavailable);
     }
+    if candidates.iter().all(|c| c.circuit_open) {
+        return Ok(candidates
+            .iter()
+            .map(|c| c.cooldown_remaining_seconds.max(1) as u32)
+            .min());
+    }
+    candidates.retain(|c| !c.circuit_open);
+    Ok(None)
+}
+
+fn rank_candidates(
+    policy: &RoutingPolicy,
+    mut candidates: Vec<Candidate>,
+    seed: [u8; 32],
+) -> Result<RoutePlan, InferenceError> {
     // Stable sorting retains repository order when priority values tie.
     candidates.sort_by_key(|c| c.priority);
     let mut ordered = Vec::with_capacity(candidates.len());

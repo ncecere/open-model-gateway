@@ -18,7 +18,7 @@ jobs/mod.rs :: impl Attempt::fail :: error :: execution_id=%self.id
 jobs/mod.rs :: impl Jobs::settle :: warn :: job_id=%job.id
 jobs/native.rs :: impl Jobs::collect_native :: warn :: job_id=%job.id
 jobs/native.rs :: impl Jobs::submit_native :: warn :: job_id=%job.id
-jobs/plan.rs :: impl Jobs::every_candidate_route_refuses :: warn :: error=?other ; provider=%deployment.provider
+jobs/plan.rs :: impl Jobs::explicit_chat_route :: warn :: error=?other ; provider=%deployment.provider
 jobs/plan.rs :: impl ScanState::report_rejects :: warn :: error=?other
 jobs/poller.rs :: impl Jobs::poll_once :: warn :: job_id=%id
 jobs/poller.rs :: start :: debug :: jobs=n

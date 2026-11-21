@@ -200,7 +200,7 @@ fn malformed_native_thinking_streams_fail_without_done() {
 }
 
 #[test]
-fn translated_error_results_remain_unsupported() {
+fn translated_error_results_are_supported_without_native_images() {
     let r = native(fixture());
     for class in [
         super::super::messages::ProviderClass::OpenAi,
@@ -210,9 +210,6 @@ fn translated_error_results_remain_unsupported() {
         // Image refusal is independent of native error-result support.
         let mut r = r.clone();
         r.messages_options.as_mut().unwrap().images.clear();
-        assert!(matches!(
-            super::super::messages::validate(&r, class),
-            Err(InferenceError::Unsupported)
-        ));
+        assert!(super::super::messages::validate(&r, class).is_ok());
     }
 }

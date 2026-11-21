@@ -71,6 +71,14 @@ pub trait ProviderAdapter: Send + Sync {
             Err(InferenceError::Unsupported)
         }
     }
+    /// Pure deployment-specific check, separate from the cached provider-wide wire validation.
+    fn validate_tool_result_target(
+        &self,
+        _target: &Deployment,
+        _has_failed_result: bool,
+    ) -> Result<(), InferenceError> {
+        Ok(())
+    }
     fn supports_embedding_request(&self, _request: &EmbeddingRequest) -> bool {
         true
     }

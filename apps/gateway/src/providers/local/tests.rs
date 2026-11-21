@@ -92,6 +92,7 @@ fn request(stream: bool) -> ChatRequest {
             content: Some("hello".into()),
             tool_calls: vec![],
             tool_call_id: None,
+            tool_result_is_error: false,
         }],
         tools: vec![],
         tool_choice: None,
@@ -541,4 +542,69 @@ async fn a_request_lost_with_its_connection_is_counted_and_keeps_its_error() {
         Err(InferenceError::UpstreamUnavailable)
     ));
     assert_eq!(metrics.upstream_connection_lost_count("local"), 1);
+}
+
+#[tokio::test]
+async fn error_tool_results_use_explicit_marker_on_all_local_profiles() {
+    for profile in [
+        Profile::OpenAiCompatible,
+        Profile::Vllm,
+        Profile::Sglang,
+        Profile::Ollama,
+    ] {
+        let mock = Mock::new(200, false).await;
+        let adapter = mock.adapter(profile, Arc::new(Resolver(AtomicUsize::new(0))));
+        for (request, error, text) in super::super::contract::error_tool_result_requests() {
+            adapter
+                .execute(&mock.target(profile), request)
+                .await
+                .unwrap();
+            let capture = mock.capture.lock().unwrap();
+            super::super::contract::assert_error_tool_chat_wire(
+                &capture.last().unwrap().2,
+                error,
+                &text,
+            );
+        }
+    }
+}
+
+#[cfg(feature = "integration-tests")]
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn error_tool_sdk_local_profiles(pool: sqlx::PgPool) {
+    error_tool_sdk_profile(pool, Profile::OpenAiCompatible).await;
+}
+
+#[cfg(feature = "integration-tests")]
+async fn error_tool_sdk_profile(pool: sqlx::PgPool, profile: Profile) {
+    let mock = Mock::new(200, false).await;
+    let adapter = mock.adapter(profile, Arc::new(Resolver(AtomicUsize::new(0))));
+    super::super::contract::assert_error_tool_sdk(pool, Arc::new(adapter), mock.target(profile))
+        .await;
+    let capture = mock.capture.lock().unwrap();
+    assert_eq!(capture.len(), 6);
+    for ((_, _, body), (_, error, text)) in capture
+        .iter()
+        .zip(super::super::contract::error_tool_result_requests())
+    {
+        super::super::contract::assert_error_tool_chat_wire(body, error, &text);
+    }
+}
+
+#[cfg(feature = "integration-tests")]
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn error_tool_sdk_vllm(pool: sqlx::PgPool) {
+    error_tool_sdk_profile(pool, Profile::Vllm).await;
+}
+
+#[cfg(feature = "integration-tests")]
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn error_tool_sdk_sglang(pool: sqlx::PgPool) {
+    error_tool_sdk_profile(pool, Profile::Sglang).await;
+}
+
+#[cfg(feature = "integration-tests")]
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn error_tool_sdk_ollama(pool: sqlx::PgPool) {
+    error_tool_sdk_profile(pool, Profile::Ollama).await;
 }

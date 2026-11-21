@@ -248,12 +248,14 @@ fn empty_successful_tool_result_defaults_are_absent_only() {
             assert_eq!(r.messages[1].tool_call_id.as_deref(), Some("call-ping"));
             assert_eq!(r.messages[1].content.as_deref(), Some(""));
             assert!(r.messages[1].role == Role::Tool);
+            assert!(!r.messages[1].tool_result_is_error);
         }
     }
     let error_result = parse(request(
         json!({"type":"tool_result","tool_use_id":"call-ping","is_error":true}),
     ))
     .unwrap();
+    assert!(error_result.messages[1].tool_result_is_error);
     assert!(
         crate::providers::messages::validate(
             &error_result,
@@ -261,13 +263,13 @@ fn empty_successful_tool_result_defaults_are_absent_only() {
         )
         .is_ok()
     );
-    assert!(matches!(
+    assert!(
         crate::providers::messages::validate(
             &error_result,
             crate::providers::messages::ProviderClass::OpenAi
-        ),
-        Err(InferenceError::Unsupported)
-    ));
+        )
+        .is_ok()
+    );
     for block in [
         json!({"type":"tool_result","tool_use_id":"call-ping","content":null}),
         json!({"type":"tool_result","tool_use_id":"call-ping","content":{}}),

@@ -77,6 +77,7 @@ fn request(stream: bool) -> ChatRequest {
             content: Some("hello".into()),
             tool_calls: vec![],
             tool_call_id: None,
+            tool_result_is_error: false,
         }],
         tools: vec![],
         tool_choice: None,
@@ -341,6 +342,7 @@ fn function_tools_are_native_and_incomplete_is_preserved() {
         content: Some("ok".into()),
         tool_calls: vec![],
         tool_call_id: Some("call".into()),
+        tool_result_is_error: false,
     });
     let v = encode("private", &r);
     assert_eq!(v["tools"][0]["type"], "function");

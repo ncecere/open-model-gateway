@@ -82,6 +82,7 @@ async fn openrouter_live_chat_embeddings_rerank_systemone() {
             content: Some("Say hi".into()),
             tool_calls: vec![],
             tool_call_id: None,
+            tool_result_is_error: false,
         }],
         tools: vec![],
         tool_choice: None,
