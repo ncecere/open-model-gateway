@@ -85,9 +85,7 @@ fn money_pattern(pattern: &Value) -> bool {
     let Some(pattern) = pattern.as_str().filter(|p| !p.is_empty()) else {
         return false;
     };
-    let Ok(validator) =
-        super::validation::compile_schema(&serde_json::json!({"type":"string","pattern":pattern}))
-    else {
+    let Ok(validator) = super::validation::pattern_validator(pattern) else {
         return false;
     };
     let accepts = |v: &str| validator.is_valid(&Value::String(v.to_owned()));

@@ -346,3 +346,108 @@ fn management_openapi_hardening_notification_money_details_are_individually_sign
     // An unknown producer's money field is still an integer string (signed).
     assert!(accepts("other_microusd", "-1") && !accepts("other_microusd", "x"));
 }
+
+/// A divided fixture (`PositiveFixtures::sharded(index, COUNT)`) is complete only
+/// when every one of its `COUNT` shards runs: each refused vector is sent by
+/// exactly one of them. So for every `*_SHARDS` count the `#[sqlx::test]` runners
+/// must call the fixture's helper with each index `0..COUNT` exactly once.
+#[test]
+fn management_openapi_hardening_every_shard_of_a_divided_fixture_has_a_runner() {
+    use syn::visit::{self, Visit};
+    #[derive(Default)]
+    struct Body {
+        counts: BTreeSet<String>,
+        calls: Vec<(String, usize)>,
+    }
+    impl<'ast> Visit<'ast> for Body {
+        fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+            if let Some(last) = path.path.segments.last()
+                && last.ident.to_string().ends_with("_SHARDS")
+            {
+                self.counts.insert(last.ident.to_string());
+            }
+            visit::visit_expr_path(self, path);
+        }
+        fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+            if let syn::Expr::Path(callee) = &*call.func
+                && let Some(callee) = callee.path.segments.last()
+                && call.args.len() == 2
+                && let syn::Expr::Lit(literal) = &call.args[1]
+                && let syn::Lit::Int(index) = &literal.lit
+                && let Ok(index) = index.base10_parse::<usize>()
+            {
+                self.calls.push((callee.ident.to_string(), index));
+            }
+            visit::visit_expr_call(self, call);
+        }
+    }
+    fn sources(dir: &std::path::Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                sources(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(std::fs::read_to_string(path).unwrap());
+            }
+        }
+    }
+    let mut all = Vec::new();
+    sources(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut all,
+    );
+    let mut divided = 0;
+    for source in all.iter().filter(|s| s.contains("_SHARDS")) {
+        let file = syn::parse_file(source).unwrap();
+        let mut counts = std::collections::BTreeMap::new();
+        for item in &file.items {
+            if let syn::Item::Const(constant) = item
+                && constant.ident.to_string().ends_with("_SHARDS")
+                && let syn::Expr::Lit(literal) = &*constant.expr
+                && let syn::Lit::Int(count) = &literal.lit
+            {
+                counts.insert(
+                    constant.ident.to_string(),
+                    count.base10_parse::<usize>().unwrap(),
+                );
+            }
+        }
+        for (name, count) in counts {
+            let mut helpers = BTreeSet::new();
+            let mut runners = Vec::new();
+            for item in &file.items {
+                let syn::Item::Fn(function) = item else {
+                    continue;
+                };
+                let mut body = Body::default();
+                body.visit_block(&function.block);
+                let runner = function.attrs.iter().any(|a| {
+                    a.path()
+                        .segments
+                        .iter()
+                        .map(|s| s.ident.to_string())
+                        .eq(["sqlx".to_owned(), "test".to_owned()])
+                });
+                if runner {
+                    runners.extend(body.calls);
+                } else if body.counts.contains(&name) {
+                    helpers.insert(function.sig.ident.to_string());
+                }
+            }
+            assert!(!helpers.is_empty(), "{name} is used by no fixture helper");
+            let mut indices: Vec<usize> = runners
+                .into_iter()
+                .filter(|(callee, _)| helpers.contains(callee))
+                .map(|(_, index)| index)
+                .collect();
+            indices.sort_unstable();
+            assert_eq!(
+                indices,
+                (0..count).collect::<Vec<_>>(),
+                "{name}: each shard index needs exactly one #[sqlx::test] runner"
+            );
+            divided += 1;
+        }
+    }
+    assert_eq!(divided, 6, "divided fixtures found");
+}
