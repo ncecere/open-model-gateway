@@ -349,7 +349,8 @@ fn management_openapi_hardening_notification_money_details_are_individually_sign
 
 /// A divided fixture (`PositiveFixtures::sharded(index, COUNT)`) is complete only
 /// when every one of its `COUNT` shards runs: each refused vector is sent by
-/// exactly one of them. So for every `*_SHARDS` count the `#[sqlx::test]` runners
+/// exactly one of them. So for every `*_SHARDS` count the database-test runners
+/// (`#[dbtest::test]` or `#[sqlx::test]`)
 /// must call the fixture's helper with each index `0..COUNT` exactly once.
 #[test]
 fn management_openapi_hardening_every_shard_of_a_divided_fixture_has_a_runner() {
@@ -422,11 +423,13 @@ fn management_openapi_hardening_every_shard_of_a_divided_fixture_has_a_runner() 
                 let mut body = Body::default();
                 body.visit_block(&function.block);
                 let runner = function.attrs.iter().any(|a| {
-                    a.path()
+                    let path: Vec<String> = a
+                        .path()
                         .segments
                         .iter()
                         .map(|s| s.ident.to_string())
-                        .eq(["sqlx".to_owned(), "test".to_owned()])
+                        .collect();
+                    path == ["sqlx", "test"] || path == ["dbtest", "test"]
                 });
                 if runner {
                     runners.extend(body.calls);
@@ -444,7 +447,7 @@ fn management_openapi_hardening_every_shard_of_a_divided_fixture_has_a_runner() 
             assert_eq!(
                 indices,
                 (0..count).collect::<Vec<_>>(),
-                "{name}: each shard index needs exactly one #[sqlx::test] runner"
+                "{name}: each shard index needs exactly one database-test runner"
             );
             divided += 1;
         }
