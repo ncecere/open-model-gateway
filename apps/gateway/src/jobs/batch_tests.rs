@@ -3220,8 +3220,10 @@ async fn memoized_refusal_classification_stays_per_line(pool: PgPool) {
     consistent(f).await;
 }
 
+mod durable;
 mod envelope;
 mod fence;
+mod http_support;
 
 /// Streaming classification must not change the non-stream classes that drive
 /// explicit line retries: OpenAI invalid output is not retryable; OpenRouter's

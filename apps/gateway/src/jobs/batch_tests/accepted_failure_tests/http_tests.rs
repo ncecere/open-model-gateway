@@ -1,44 +1,7 @@
 //! Real loopback gateway + PostgreSQL, including a real adapter/mock upstream.
+use super::super::http_support::{Resolver, Server, client};
 use super::*;
-use crate::providers::{
-    openrouter::{OpenRouterAdapter, OpenRouterConfig},
-    secrets::{Secret, SecretResolver},
-};
-
-struct Server {
-    base: String,
-    task: tokio::task::JoinHandle<()>,
-}
-impl Drop for Server {
-    fn drop(&mut self) {
-        self.task.abort();
-    }
-}
-impl Server {
-    async fn start(app: axum::Router) -> Self {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let base = format!("http://{}", listener.local_addr().unwrap());
-        let task = tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
-        Self { base, task }
-    }
-}
-struct Resolver;
-impl SecretResolver for Resolver {
-    fn resolve(&self, _: &str) -> Result<Secret, InferenceError> {
-        Secret::new("mock-only-key".into())
-    }
-}
-fn client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .retry(reqwest::retry::never())
-        .build()
-        .unwrap()
-}
+use crate::providers::openrouter::{OpenRouterAdapter, OpenRouterConfig};
 
 #[dbtest::test]
 async fn running_gateway_openrouter_nonstream_200_rejection_keeps_free_zero(pool: PgPool) {

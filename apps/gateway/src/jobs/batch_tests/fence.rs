@@ -1,7 +1,7 @@
 //! A gateway-run batch's claim is a fence: once another runner has taken a
 //! batch over, the runner that lost it writes nothing more to it.
 use super::*;
-use crate::jobs::fence::{FenceError, Renewed};
+use crate::jobs::fence::{FenceError, Renewed, SegmentLines};
 
 /// `world` with one batch of `lines` (chat completions, one line each).
 async fn batch(pool: PgPool, lines: &[(&str, &str)]) -> (World, JobRow) {
@@ -19,13 +19,13 @@ async fn batch(pool: PgPool, lines: &[(&str, &str)]) -> (World, JobRow) {
 }
 
 /// Run the next claimable batch on a new runner (a process of its own).
-fn start(w: &World) -> tokio::task::JoinHandle<JobResult<bool>> {
+pub(super) fn start(w: &World) -> tokio::task::JoinHandle<JobResult<bool>> {
     let runner = Runner::new(w.jobs.clone());
     tokio::spawn(async move { runner.run_next().await })
 }
 
 /// The runner that holds the batch stops renewing: its lease lapses.
-async fn lapse(w: &World, job: &JobRow) {
+pub(super) async fn lapse(w: &World, job: &JobRow) {
     sqlx::query("UPDATE async_jobs SET runner_lease_until=now()-interval '1 second' WHERE id=$1")
         .bind(job.id)
         .execute(&w.f.store.pool)
@@ -332,13 +332,18 @@ async fn a_stale_claim_writes_nothing_and_a_current_one_everything(pool: PgPool)
     ));
     assert!(stale(old.retry_line(s, 0, 1, Uuid::new_v4()).await));
     assert!(stale(
-        old.finish_line(s, 0, true, Some(200), None, true).await
+        old.fail_line(s, 0, Some(500), Some("failed"), true).await
     ));
     assert!(stale(old.progress(s, 1, 0).await));
     assert!(stale(old.interrupt_running(s).await));
     assert!(stale(
-        old.insert_segment(s, job.workspace_id, Uuid::new_v4(), &[0])
-            .await
+        old.insert_segment(
+            s,
+            job.workspace_id,
+            Uuid::new_v4(),
+            SegmentLines::Failed(&[0])
+        )
+        .await
     ));
     assert!(stale(old.set_status(s, "finalizing").await));
     assert!(stale(old.release(s).await));
@@ -367,23 +372,31 @@ async fn a_stale_claim_writes_nothing_and_a_current_one_everything(pool: PgPool)
         ("queued", Some(0), Some(1)),
         "only the takeover's own interruption is counted"
     );
-    // The current claim's line outcome is counted once.
+    // Only the matching running attempt can commit the segment and progress.
+    let execution = Uuid::new_v4();
+    let file = job.work_file_id.unwrap();
     assert!(
-        new.claim_line(s, job.workspace_id, 1, Uuid::new_v4())
+        new.claim_line(s, job.workspace_id, 1, execution)
             .await
             .unwrap()
     );
-    assert!(
-        new.finish_line(s, 1, true, Some(200), None, true)
-            .await
-            .unwrap()
-    );
-    assert!(
-        !new.finish_line(s, 1, true, Some(200), None, true)
-            .await
-            .unwrap()
-    );
+    let record = |execution| {
+        new.insert_segment(
+            s,
+            job.workspace_id,
+            file,
+            SegmentLines::Success { line: 1, execution },
+        )
+    };
+    assert!(matches!(
+        record(Uuid::new_v4()).await,
+        Err(FenceError::Storage)
+    ));
+    assert_eq!(w.reload(&job).await.request_completed, Some(0));
+    assert_eq!(record(execution).await.unwrap(), 0);
+    assert!(matches!(record(execution).await, Err(FenceError::Storage)));
     assert_eq!(w.reload(&job).await.request_completed, Some(1));
+    assert_eq!(segments(&w, &job).await, 1);
 }
 
 /// A process that predates the epoch (or a stale writer) took the next
@@ -427,7 +440,7 @@ async fn a_taken_segment_number_never_blocks_the_owners_later_flushes(pool: PgPo
     for n in 1..=3u8 {
         seqs.push(
             fence
-                .insert_segment(&w.f.store, ws, file(n).await, &[0])
+                .insert_segment(&w.f.store, ws, file(n).await, SegmentLines::Failed(&[0]))
                 .await
                 .unwrap(),
         );
@@ -837,7 +850,7 @@ async fn a_failed_renewal_stores_the_buffered_results_at_once(pool: PgPool) {
                 .unwrap()
         );
         assert!(
-            old.finish_line(&w.f.store, line, true, Some(200), None, true)
+            old.fail_line(&w.f.store, line, Some(500), Some("failed"), true)
                 .await
                 .unwrap()
         );

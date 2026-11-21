@@ -19,8 +19,8 @@
 //! reservation and totals rows (docs/governance.md). Transactions that change
 //! the job row take it `FOR NO KEY UPDATE` at the start, so no transaction
 //! upgrades a lock it already holds; `KEY SHARE` and `NO KEY UPDATE` do not
-//! conflict, so admissions, segment writes and counter updates of one run do
-//! not queue behind each other on it.
+//! conflict, so admission can proceed while a segment or progress update holds
+//! the job row. Segment registrations serialize their sequence allocation.
 //!
 //! A frozen runner inside a fenced transaction would hold the row against
 //! every claim: each fenced transaction therefore ends the session after
@@ -79,6 +79,12 @@ pub(crate) enum Hold {
     Rows,
     /// Also changes the job row.
     Update,
+}
+
+/// Lines represented by one encrypted output file.
+pub(crate) enum SegmentLines<'a> {
+    Success { line: i32, execution: Uuid },
+    Failed(&'a [i32]),
 }
 
 impl BatchFence {
@@ -301,15 +307,14 @@ impl BatchFence {
         Ok(claimed)
     }
 
-    /// Record a line's outcome. With `count` the batch's counters move in the
+    /// Record a failed attempt. With `count` the batch's counters move in the
     /// same transaction, and only when this call is what moved the line out of
     /// `running` (a line already interrupted or finished is not counted
     /// twice). Returns whether the line changed.
-    pub(crate) async fn finish_line(
+    pub(crate) async fn fail_line(
         &self,
         store: &Store,
         line_no: i32,
-        succeeded: bool,
         status_code: Option<u16>,
         error_code: Option<&str>,
         count: bool,
@@ -317,13 +322,12 @@ impl BatchFence {
         let mut tx = self
             .begin(store, if count { Hold::Update } else { Hold::Rows })
             .await?;
-        let changed = sqlx::query("UPDATE batch_lines SET state=$3,status_code=$4,error_code=$5,finished_at=clock_timestamp() WHERE job_id=$1 AND line_no=$2 AND state='running'")
-            .bind(self.job).bind(line_no).bind(if succeeded { "succeeded" } else { "failed" })
+        let changed = sqlx::query("UPDATE batch_lines SET state='failed',status_code=$3,error_code=$4,finished_at=clock_timestamp() WHERE job_id=$1 AND line_no=$2 AND state='running'")
+            .bind(self.job).bind(line_no)
             .bind(status_code.map(|s| s as i16)).bind(error_code)
             .execute(&mut *tx).await.map_err(job_storage)?.rows_affected() == 1;
         if count && changed {
-            let (c, f) = if succeeded { (1, 0) } else { (0, 1) };
-            count_lines(&mut tx, self.job, c, f).await?;
+            count_lines(&mut tx, self.job, 0, 1).await?;
         }
         tx.commit().await.map_err(job_storage)?;
         Ok(changed)
@@ -352,15 +356,20 @@ impl BatchFence {
         store: &Store,
         workspace: Uuid,
         file: Uuid,
-        lines: &[i32],
+        lines: SegmentLines<'_>,
     ) -> FenceResult<i32> {
         // A process that predates the epoch allocates its own numbers and can
         // take ours between the read and the insert: take the next one.
+        let length = match lines {
+            SegmentLines::Success { .. } => 1,
+            SegmentLines::Failed(lines) => lines.len() as i32,
+        };
         let mut collisions = 0;
         loop {
-            let mut tx = self.begin(store, Hold::Rows).await?;
+            // Serialize the error writer and concurrently finishing success segments.
+            let mut tx = self.begin(store, Hold::Update).await?;
             let seq: Result<i32, sqlx::Error> = sqlx::query_scalar("INSERT INTO batch_segments(job_id,workspace_id,seq,file_id,lines) SELECT $1,$2,coalesce(max(seq)+1,0),$3,$4 FROM batch_segments WHERE job_id=$1 RETURNING seq")
-                .bind(self.job).bind(workspace).bind(file).bind(lines.len() as i32)
+                .bind(self.job).bind(workspace).bind(file).bind(length)
                 .fetch_one(&mut *tx).await;
             let seq = match seq {
                 Ok(seq) => seq,
@@ -370,9 +379,29 @@ impl BatchFence {
                 }
                 Err(e) => return Err(job_storage(e).into()),
             };
-            sqlx::query("UPDATE batch_lines SET segment=$2 WHERE job_id=$1 AND line_no=ANY($3) AND segment IS NULL AND state<>'running'")
-                .bind(self.job).bind(seq).bind(lines).execute(&mut *tx).await.map_err(job_storage)?;
-            tx.commit().await.map_err(job_storage)?;
+            match lines {
+                SegmentLines::Success { line, execution } => {
+                    let changed = sqlx::query("UPDATE batch_lines SET segment=$2,state='succeeded',finished_at=clock_timestamp(),status_code=200 WHERE job_id=$1 AND line_no=$3 AND execution_id=$4 AND state='running' AND segment IS NULL")
+                        .bind(self.job).bind(seq).bind(line).bind(execution)
+                        .execute(&mut *tx).await.map_err(job_storage)?.rows_affected();
+                    if changed != 1 {
+                        // The file represents a different or already finished attempt.
+                        // Rolling back also keeps it out of finalization's segment list.
+                        return Err(FenceError::Storage);
+                    }
+                    count_lines(&mut tx, self.job, 1, 0).await?;
+                }
+                SegmentLines::Failed(lines) => {
+                    sqlx::query("UPDATE batch_lines SET segment=$2 WHERE job_id=$1 AND line_no=ANY($3) AND segment IS NULL AND state='failed'")
+                        .bind(self.job).bind(seq).bind(lines).execute(&mut *tx).await.map_err(job_storage)?;
+                }
+            }
+            // Once COMMIT is sent, keep the file on any missing acknowledgement.
+            // Retention can reclaim an orphan; a committed segment still needs its file.
+            tx.commit().await.map_err(|e| {
+                job_storage(e);
+                FenceError::Unknown
+            })?;
             return Ok(seq);
         }
     }

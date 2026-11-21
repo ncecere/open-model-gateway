@@ -2678,6 +2678,9 @@ async fn async_jobs_run_as_runtime(pool: &PgPool) {
         use open_model_gateway::jobs::schedule;
         let runtime = runtime_pool(pool).await;
         let store = open_model_gateway::store::Store::new(runtime.clone());
+        let committed: i64 = sqlx::query_scalar("SELECT count(*) FROM batch_lines l JOIN batch_segments s ON (s.job_id,s.seq)=(l.job_id,l.segment) WHERE l.job_id=$1 AND l.state='succeeded' AND l.status_code=200")
+            .bind(gateway.id).fetch_one(&runtime).await.unwrap();
+        assert_eq!(committed, 1);
         let (deployment, routed): (uuid::Uuid, Option<uuid::Uuid>) = sqlx::query_as("SELECT j.deployment_id,l.deployment_id FROM async_jobs j JOIN batch_lines l ON l.job_id=j.id WHERE j.id=$1")
             .bind(gateway.id)
             .fetch_one(pool)
