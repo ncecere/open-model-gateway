@@ -3,10 +3,12 @@
 // image is pinned, every container is locked down, nothing is exposed, everything listens on
 // loopback and three environments fit the shared CPU limit.
 import assert from "node:assert/strict";
+import net from "node:net";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { parseStrict, root, toData } from "./lib.mjs";
+import { probeLoopback } from "../../deploy/spark/loopback-probe.mjs";
 
 const read = name => readFileSync(join(root, "deploy/spark", name), "utf8");
 const load = name => toData(parseStrict(read(name), name));
@@ -121,4 +123,36 @@ test("fixtures: every rule is enforced", () => {
   for (const bad of [forwarder.replace('"127.0.0.1"', '"0.0.0.0"'), forwarder.replace('server.listen(5432, "127.0.0.1");', "server.listen(5432);"), `${forwarder}\nnet.createServer().listen(8080, "127.0.0.1");`]) {
     assert.notDeepEqual(violations("demo.yaml", workloads()["demo.yaml"], bad), []);
   }
+});
+
+test("dependent native sidecars gate schema wait and gateway startup on loopback listeners", () => {
+  const pod = load("demo.yaml").spec.template.spec;
+  for (const [name, port] of [["pg-forward", 5432], ["demo-issuer", 18084]]) {
+    const index = pod.initContainers.findIndex(c => c.name === name);
+    const sidecar = pod.initContainers[index];
+    assert.equal(sidecar.restartPolicy, "Always", name);
+    assert.ok(index < pod.initContainers.findIndex(c => c.name === "wait-for-schema"), name);
+    const probe = sidecar.startupProbe;
+    assert.ok(probe?.exec, `${name}: an in-container startup probe gates subsequent containers`);
+    assert.equal(probe.tcpSocket, undefined, "kubelet TCP probes target the Pod IP, not pod loopback");
+    assert.equal(probe.httpGet, undefined);
+    assert.deepEqual(probe.exec.command, ["node", "/scripts/loopback-probe.mjs", String(port)]);
+    assert.ok(probe.timeoutSeconds > 0 && probe.failureThreshold > 0 && probe.periodSeconds > 0);
+  }
+});
+
+
+test("the shared sidecar probe succeeds on loopback and fails after the listener closes", async () => {
+  const server = net.createServer(socket => socket.end());
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const port = server.address().port;
+  try {
+    assert.equal(await probeLoopback(port), true);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+  assert.equal(await probeLoopback(port), false);
 });
