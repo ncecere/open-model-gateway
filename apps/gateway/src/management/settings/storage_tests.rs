@@ -97,7 +97,7 @@ impl FileStore for Broken {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn storage_settings_are_admin_write_auditor_read_with_safe_defaults(pool: PgPool) {
     let f = fixture(&pool).await;
     for user in [&f.admin, &f.auditor] {
@@ -164,7 +164,7 @@ async fn storage_settings_are_admin_write_auditor_read_with_safe_defaults(pool: 
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn enabling_requires_a_healthy_store_and_is_audited(pool: PgPool) {
     let f = fixture(&pool).await;
     let broken = FileStoreRuntime::from_store(Arc::new(Broken), BackendKind::S3, vec!["k1".into()]);
@@ -237,7 +237,7 @@ async fn enabling_requires_a_healthy_store_and_is_audited(pool: PgPool) {
     assert_eq!(audits[1].1["mode"], "memory");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn storage_tests_are_rate_limited(pool: PgPool) {
     let f = fixture(&pool).await;
     let rt = FileStoreRuntime::memory();

@@ -18,7 +18,7 @@ impl SecretResolver for NoSecrets {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn priced_tool_defaults_sdk_through_real_local_http(pool: sqlx::PgPool) {
     let capture = Arc::new(Mutex::new(vec![]));
     let recorded = capture.clone();

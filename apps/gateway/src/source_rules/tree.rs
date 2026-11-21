@@ -9,8 +9,8 @@
 //! is definitely False, so `#[cfg(not(feature = "x"))]`,
 //! `#[cfg(not(debug_assertions))]` and `#[cfg(not(any(test, feature = "x")))]`
 //! stay in, and `#[cfg(all(test, feature = "x"))]` and
-//! `#[cfg(not(not(test)))]` go. Functions marked `#[test]`, `#[tokio::test]`
-//! or `#[sqlx::test]` are dropped.
+//! `#[cfg(not(not(test)))]` go. Functions marked `#[test]`, `#[tokio::test]`,
+//! `#[sqlx::test]` or `#[dbtest::test]` are dropped.
 //!
 //! Fails closed (panics, so the rule tests fail) on what it cannot read: a
 //! `mod x;` it cannot find, `include!`, a `mod` declared inside a macro
@@ -647,6 +647,7 @@ mod tests {
             #[test] fn plain_test() {}
             #[tokio::test] async fn tokio_test() {}
             #[sqlx::test] async fn sqlx_test() {}
+            #[dbtest::test] async fn dbtest_test() {}
             fn plain() {}
         "#;
         assert_eq!(

@@ -50,7 +50,7 @@ async fn publish(f: &Fixture, version: i32, denied: Option<&str>) -> Uuid {
     f.cache_price(f.deployment, version, rates).await
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn native_cache_requires_pinned_ttl_prices_before_reserving_or_dispatching(
     pool: sqlx::PgPool,
 ) {

@@ -32,7 +32,7 @@ async fn revision(pool: &PgPool, d: Uuid) -> (bool, i64) {
         .unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn bulk_disable_applies_each_target_independently(pool: PgPool) {
     let f = fixture(&pool).await;
     let (a, b, c) = (
@@ -107,7 +107,7 @@ async fn bulk_disable_applies_each_target_independently(pool: PgPool) {
     assert_eq!(unlinked, 1);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn bulk_idempotency_is_actor_bound_and_never_replays(pool: PgPool) {
     let f = fixture(&pool).await;
     let a = route(&f, &pool, "idem-a").await;
@@ -176,7 +176,7 @@ async fn outcome_events(pool: &PgPool, operation: Uuid) -> Vec<Value> {
         .unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn interrupted_operations_complete_once_and_are_never_replayed(pool: PgPool) {
     let f = fixture(&pool).await;
     let a = route(&f, &pool, "interrupted-a").await;
@@ -277,7 +277,7 @@ async fn interrupted_operations_complete_once_and_are_never_replayed(pool: PgPoo
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn concurrent_requests_with_one_key_apply_once(pool: PgPool) {
     let f = fixture(&pool).await;
     let targets: Vec<Uuid> = {
@@ -324,7 +324,7 @@ async fn concurrent_requests_with_one_key_apply_once(pool: PgPool) {
     assert_eq!(events, 1);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn bulk_refuses_unbounded_or_ambiguous_requests_and_other_actors(pool: PgPool) {
     let f = fixture(&pool).await;
     let a = route(&f, &pool, "refuse-a").await;
@@ -376,7 +376,7 @@ async fn bulk_refuses_unbounded_or_ambiguous_requests_and_other_actors(pool: PgP
     assert_eq!(created, 1);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn bulk_records_are_immutable_and_links_are_bound(pool: PgPool) {
     let f = fixture(&pool).await;
     let a = route(&f, &pool, "immutable-a").await;
@@ -504,7 +504,7 @@ async fn bulk_records_are_immutable_and_links_are_bound(pool: PgPool) {
     assert!(decided && completed, "caller-chosen clocks recorded");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_slow_owner_keeps_its_outcome_when_its_lease_lapses(pool: PgPool) {
     let f = fixture(&pool).await;
     let (a, b) = (
@@ -575,7 +575,7 @@ async fn a_slow_owner_keeps_its_outcome_when_its_lease_lapses(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_target_that_waits_too_long_stops_the_operation(pool: PgPool) {
     let f = fixture(&pool).await;
     let (a, b) = (

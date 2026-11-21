@@ -8,7 +8,7 @@ async fn count(pool: &PgPool, sql: &str) -> i64 {
     sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_and_invitation_creation_fail_closed_when_the_os_rng_fails(pool: PgPool) {
     let f = fixture(&pool).await;
     let keys = count(&pool, "SELECT count(*) FROM api_keys").await;
@@ -77,7 +77,7 @@ async fn key_and_invitation_creation_fail_closed_when_the_os_rng_fails(pool: PgP
     assert_eq!(body["token"].as_str().map(str::len), Some(64));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn development_bootstrap_exits_with_an_error_when_the_os_rng_fails(pool: PgPool) {
     let store = Store::new(pool.clone());
     {

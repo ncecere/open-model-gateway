@@ -16,7 +16,7 @@ fn names(v: &Value, key: &str) -> Vec<String> {
         .collect()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn me_models_aggregates_own_workspaces_only_and_stays_bounded(pool: PgPool) {
     let f = fixture(&pool).await;
     let smart = model(&pool, "company/smart").await;
@@ -87,7 +87,7 @@ async fn me_models_aggregates_own_workspaces_only_and_stays_bounded(pool: PgPool
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn me_summary_totals_only_skips_per_workspace_detail(pool: PgPool) {
     let f = fixture(&pool).await;
     let (status, full) = call(&f.s, &f.owner, "GET", "/api/v1/me/summary", Value::Null).await;

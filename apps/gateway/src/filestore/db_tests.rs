@@ -102,7 +102,7 @@ fn filenames_and_content_types_are_sanitized() {
     assert_eq!(normalize_content_type("nonsense"), None);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn files_are_scoped_toggled_and_tracked(pool: PgPool) {
     let f = fixture(pool).await;
     let mut new = NewFile::new(Purpose::BatchInput, Some(f.ws));
@@ -238,7 +238,7 @@ async fn files_are_scoped_toggled_and_tracked(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn sweeper_honors_per_purpose_retention_and_records_failures(pool: PgPool) {
     let f = fixture(pool).await;
     enable_batch(&f.pool).await;
@@ -331,7 +331,7 @@ async fn sweeper_honors_per_purpose_retention_and_records_failures(pool: PgPool)
     assert_eq!((off.deleted, off.failed), (0, 1));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn verify_compares_metadata_with_the_store(pool: PgPool) {
     let f = fixture(pool).await;
     enable_batch(&f.pool).await;
@@ -379,7 +379,7 @@ async fn verify_compares_metadata_with_the_store(pool: PgPool) {
 }
 
 /// #75: expired files of a held workspace stay; released, they're swept.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn expiry_skips_files_on_legal_hold(pool: PgPool) {
     let f = fixture(pool).await;
     enable_batch(&f.pool).await;
@@ -451,7 +451,7 @@ async fn expiry_skips_files_on_legal_hold(pool: PgPool) {
 /// #35: `files rekey` moves every live file to the new key so the old one can
 /// be removed, leaves files being deleted to the sweeper, resumes after an
 /// interrupted run, and a dry run changes nothing.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn rekey_moves_live_files_to_the_new_key(pool: PgPool) {
     use super::{memory::MemoryBackend, rekey::rekey};
     let f = fixture(pool).await;

@@ -16,7 +16,7 @@ async fn audit_count(pool: &PgPool, action: &str) -> i64 {
         .unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn settings_are_admin_write_auditor_read(pool: PgPool) {
     let f = fixture(&pool).await;
     for path in [GENERAL, PRIVACY, EMAIL, "/api/v1/platform/settings/sign-in"] {
@@ -58,7 +58,7 @@ async fn settings_are_admin_write_auditor_read(pool: PgPool) {
     assert_eq!(sign_in["enabled_group_mappings"], 0);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn general_settings_validate_audit_and_bound_human_keys(pool: PgPool) {
     let f = fixture(&pool).await;
     let (status, v) = call(&f.s, &f.admin, "GET", GENERAL, json!({})).await;
@@ -135,7 +135,7 @@ async fn general_settings_validate_audit_and_bound_human_keys(pool: PgPool) {
     assert_eq!(err["error"]["reason"], "key_lifetime_exceeds_maximum");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn privacy_settings_follow_the_database_unless_the_environment_locks_them(pool: PgPool) {
     let f = fixture(&pool).await;
     let (status, v) = call(&f.s, &f.auditor, "GET", PRIVACY, json!({})).await;
@@ -192,7 +192,7 @@ async fn privacy_settings_follow_the_database_unless_the_environment_locks_them(
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn email_settings_validate_references_and_transport_security(pool: PgPool) {
     let f = fixture(&pool).await;
     let (_, v) = call(&f.s, &f.admin, "GET", EMAIL, json!({})).await;
@@ -253,7 +253,7 @@ async fn email_settings_validate_references_and_transport_security(pool: PgPool)
     assert_eq!(err["error"]["reason"], "email_not_configured");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn test_email_reaches_the_admin_is_audited_and_rate_limited(pool: PgPool) {
     let f = fixture(&pool).await;
     let (port, mut rx) = mock::serve(Behaviour::default()).await;
@@ -286,7 +286,7 @@ async fn test_email_reaches_the_admin_is_audited_and_rate_limited(pool: PgPool) 
     assert!(metadata.iter().all(|m| !m.to_string().contains('@')));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn failed_delivery_is_reported_as_a_category(pool: PgPool) {
     let f = fixture(&pool).await;
     let (port, _rx) = mock::serve(Behaviour {
@@ -312,7 +312,7 @@ async fn failed_delivery_is_reported_as_a_category(pool: PgPool) {
     assert_eq!(v["last_test"]["error"], "rejected");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn invitations_are_emailed_when_delivery_is_configured(pool: PgPool) {
     let f = fixture(&pool).await;
     let path = format!("/api/v1/workspaces/{}/invitations", f.team);

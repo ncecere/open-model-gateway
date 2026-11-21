@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// The unit fixture primes DB gauges manually. Also prove their REAL refresh
 /// path uses the golden keys, so a refresh-only label change cannot hide.
 #[cfg(feature = "integration-tests")]
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn db_collector_label_keys_match_golden(pool: sqlx::PgPool) {
     let out = Metrics::new().render(Some(&Store::new(pool))).await;
     for family in [

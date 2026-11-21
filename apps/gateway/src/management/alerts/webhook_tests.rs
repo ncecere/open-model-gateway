@@ -4,7 +4,7 @@ const WEBHOOKS: &str = "/api/v1/platform/alerts/webhooks";
 #[path = "webhook_delivery_api_tests.rs"]
 mod delivery_api;
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn webhook_running_gateway_sessions_scopes_rotation_and_revocation(pool: PgPool) {
     use sha2::{Digest, Sha256};
     let mut f = fixture(&pool).await;
@@ -419,7 +419,7 @@ async fn webhook_running_gateway_sessions_scopes_rotation_and_revocation(pool: P
     server.abort();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn webhook_authority_redaction_and_strict_management(pool: PgPool) {
     let f = fixture(&pool).await;
     assert_eq!(
@@ -518,7 +518,7 @@ async fn lock_fixture(pool: &PgPool) -> (Fixture, Uuid, Uuid, String) {
     (f, dest, event, format!("{WEBHOOKS}/{dest}"))
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn webhook_patch_in_flight_does_not_stall_alert_enqueue(pool: PgPool) {
     let (f, _dest, event, path) = lock_fixture(&pool).await;
     // Hold the real handler after it has taken its destination lock: its audit
@@ -577,7 +577,7 @@ async fn webhook_patch_in_flight_does_not_stall_alert_enqueue(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn webhook_patch_does_not_wait_for_an_in_flight_enqueue(pool: PgPool) {
     let (f, _dest, event, path) = lock_fixture(&pool).await;
     let mut enqueue = pool.begin().await.unwrap();

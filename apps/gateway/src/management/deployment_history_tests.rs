@@ -21,7 +21,7 @@ async fn create(f: &Fixture, pool: &PgPool) -> Uuid {
     Uuid::parse_str(body["id"].as_str().unwrap()).unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn deployment_history_writers_revisions_and_immutable_snapshots(pool: PgPool) {
     let f = fixture(&pool).await;
     let d = create(&f, &pool).await;
@@ -106,7 +106,7 @@ async fn deployment_history_writers_revisions_and_immutable_snapshots(pool: PgPo
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn deployment_history_authorization_pagination_legacy_and_detail(pool: PgPool) {
     let f = fixture(&pool).await;
     let d = create(&f, &pool).await;
@@ -222,7 +222,7 @@ async fn deployment_history_authorization_pagination_legacy_and_detail(pool: PgP
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn deployment_history_same_named_routes_never_share_identity(pool: PgPool) {
     let f = fixture(&pool).await;
     let original = create(&f, &pool).await;
@@ -260,7 +260,7 @@ async fn deployment_history_same_named_routes_never_share_identity(pool: PgPool)
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn deployment_history_setup_records_one_creation(pool: PgPool) {
     let f = fixture(&pool).await;
     let p = Uuid::new_v4();

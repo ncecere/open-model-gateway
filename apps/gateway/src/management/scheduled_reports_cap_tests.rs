@@ -1,5 +1,5 @@
 use super::*;
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_scope_caps_concurrent_boundary_resume_and_tombstones(pool: PgPool) {
     let f = fixture(&pool).await;
     let mock = crate::identity::tests::MockProvider::start(None).await;

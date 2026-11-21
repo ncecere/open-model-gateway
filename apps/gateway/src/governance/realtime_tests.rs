@@ -101,7 +101,7 @@ const U: RealtimeUsage = RealtimeUsage {
 };
 const RESPONSE: i64 = 3_228;
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn composed_validators_accept_realtime_shapes_only(pool: PgPool) {
     let valid = |sql: &'static str, v: Value| {
         let pool = pool.clone();
@@ -181,7 +181,7 @@ async fn composed_validators_accept_realtime_shapes_only(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn windows_extend_settle_and_finish_on_one_reservation(pool: PgPool) {
     let f = fixture(pool).await;
     let d = realtime_model(&f, Some(lines())).await;
@@ -321,7 +321,7 @@ async fn windows_extend_settle_and_finish_on_one_reservation(pool: PgPool) {
     assert_eq!(totals.0, (RESPONSE + WINDOW).to_string());
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn extensions_respect_budgets_tokens_per_minute_and_live_authorization(pool: PgPool) {
     let f = fixture(pool).await;
     let d = realtime_model(&f, Some(lines())).await;
@@ -460,7 +460,7 @@ async fn extensions_respect_budgets_tokens_per_minute_and_live_authorization(poo
     assert_eq!((state.0.as_str(), state.1), ("unknown", Some(WINDOW)));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn pricing_must_be_v3_and_unpriced_sessions_stay_unknown(pool: PgPool) {
     let f = fixture(pool).await;
     // Unpriced: admitted without budgets, every response unknown and unbounded.
@@ -516,7 +516,7 @@ async fn pricing_must_be_v3_and_unpriced_sessions_stay_unknown(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn lease_expiry_closes_open_responses_and_keeps_their_windows(pool: PgPool) {
     let f = fixture(pool).await;
     let d = realtime_model(&f, Some(lines())).await;
@@ -552,7 +552,7 @@ async fn lease_expiry_closes_open_responses_and_keeps_their_windows(pool: PgPool
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn context_sized_windows_settle_known_and_flag_usage_above_them(pool: PgPool) {
     let f = fixture(pool).await;
     let d = realtime_model(&f, Some(lines())).await;
@@ -732,7 +732,7 @@ async fn realtime_engine(pool: &PgPool) -> (Store, crate::inference::Engine) {
 /// `realtime_admission` (the window reservation) or `realtime_settlement`
 /// (the others), naming what it waited on: the in-process gate,
 /// a pooled connection, or the database. Before, none was counted.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn elapsed_realtime_accounting_deadlines_name_what_they_waited_on(pool: PgPool) {
     use crate::db::{
         accounting_failure::tests::{labels, signal_lines},
@@ -858,7 +858,7 @@ async fn elapsed_realtime_accounting_deadlines_name_what_they_waited_on(pool: Pg
 /// as the relay ends it (failed, `accounting_unavailable`), read from the
 /// reservation row after the finish. This decides the stage: a deadline that
 /// leaves money held until reconciliation is `realtime_settlement`.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn what_an_elapsed_realtime_deadline_leaves_held(pool: PgPool) {
     use sqlx::Connection;
     let f = fixture(pool.clone()).await;

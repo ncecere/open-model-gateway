@@ -28,7 +28,7 @@ async fn hour(pool: &PgPool, back: i64) -> UtcInstant {
         .unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn rollups_equal_raw_history_and_follow_late_changes(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     let lo = hour(&pool, 72).await;
@@ -118,7 +118,7 @@ async fn rollups_equal_raw_history_and_follow_late_changes(pool: PgPool) {
     assert_eq!(unknown, raw_unknown);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn the_bound_waits_for_running_transactions(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     // A transaction that began (here: 0 hours ago) bounds what may be rolled.
@@ -140,7 +140,7 @@ async fn the_bound_waits_for_running_transactions(pool: PgPool) {
     assert!(report.bound.unwrap() <= hour(&pool, 1).await, "{report:?}");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn spike_baseline_from_rollups_equals_the_raw_scan(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     let lo = hour(&pool, 200).await;

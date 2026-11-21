@@ -102,7 +102,7 @@ fn request(key: &str, body: &Value) -> Request<Body> {
         .body(Body::from(body.to_string()))
         .unwrap()
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn inference_openapi_chat_response_names_follow_real_upstream_decode(pool: PgPool) {
     let upstream = Upstream::start().await;
     let (app, key) = gateway(&pool, &upstream).await;
@@ -168,7 +168,7 @@ async fn inference_openapi_chat_response_names_follow_real_upstream_decode(pool:
     r::capture("POST", "/v1/chat/completions", response).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn inference_openapi_generation_model_trim_matches_real_handlers(pool: PgPool) {
     let upstream = Upstream::start().await;
     let (app, key) = gateway(&pool, &upstream).await;

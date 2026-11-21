@@ -653,7 +653,7 @@ async fn actual_prometheus_render_round_trips_without_value_loss() {
 // records into both registries; only its private writes exercise contention with
 // this refresh, parsing and encoding. Validate both privacy selections.
 #[cfg(feature = "integration-tests")]
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn db_refresh_round_trips_with_concurrent_global_recording(pool: sqlx::PgPool) {
     let m = crate::metrics::characterization_tests::fresh_registry();
     let (started, ready) = tokio::sync::oneshot::channel();

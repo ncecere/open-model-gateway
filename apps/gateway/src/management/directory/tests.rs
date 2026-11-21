@@ -1,5 +1,5 @@
 use super::*;
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn role_source_readonly_last_admin_and_owner_protection(pool: PgPool) {
     let f = fixture(&pool).await;
     let (status, users) = call(
@@ -108,7 +108,7 @@ async fn role_source_readonly_last_admin_and_owner_protection(pool: PgPool) {
     assert_eq!(effective, "auditor");
     assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM platform_role_grants WHERE user_id=$1 AND source='group' AND revoked_at IS NULL").bind(uid).fetch_one(&pool).await.unwrap(),1);
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn mutable_email_cannot_become_verified_invitation_evidence_in_an_existing_session(
     pool: PgPool,
 ) {
@@ -159,7 +159,7 @@ async fn mutable_email_cannot_become_verified_invitation_evidence_in_an_existing
     );
     // A new session can be minted only by the signature/email_verified checked OIDC callback.
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn manual_suspension_of_personal_owner_revokes_human_credentials_not_service_accounts(
     pool: PgPool,
 ) {
@@ -229,7 +229,7 @@ async fn manual_suspension_of_personal_owner_revokes_human_credentials_not_servi
             .is_none()
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn group_mapping_control_plane_disable_delete_revokes_only_its_source_immediately(
     pool: PgPool,
 ) {
@@ -327,7 +327,7 @@ async fn group_mapping_control_plane_disable_delete_revokes_only_its_source_imme
     assert_eq!(reason, "entitlement_loss");
     assert!(due);
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn shared_directory_excludes_personal_and_allocation_changes_only_future_workspace_pointer(
     pool: PgPool,
 ) {
@@ -467,7 +467,7 @@ async fn signed_in(pool: &PgPool, user: Uuid, days_ago: i32) {
         .await
         .unwrap();
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn directory_display_fields_and_filters_stay_shared_only(pool: PgPool) {
     let f = fixture(&pool).await;
     signed_in(&pool, f.owner.user_id, 3).await;

@@ -81,7 +81,7 @@ async fn request(
 
 /// Every declared workspace route must hide a foreign personal workspace just
 /// like an unknown UUID, before handler extraction (including mutations).
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn every_workspace_route_hides_foreign_personal_like_unknown(pool: PgPool) {
     let f = fixture(&pool).await;
     let owner = session(&pool, &f.owner).await;
@@ -225,7 +225,7 @@ async fn every_workspace_route_hides_foreign_personal_like_unknown(pool: PgPool)
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn deployment_preview_browser_only_origin_csrf_and_live_roles(pool: PgPool) {
     let f = fixture(&pool).await;
     let mock = MockProvider::start(None).await;
@@ -310,7 +310,7 @@ async fn deployment_preview_browser_only_origin_csrf_and_live_roles(pool: PgPool
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn deployment_history_browser_only_get_live_authorization(pool: PgPool) {
     let f = fixture(&pool).await;
     let mock = MockProvider::start(None).await;
@@ -410,7 +410,7 @@ async fn deployment_history_browser_only_get_live_authorization(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_expiry_history_and_feed_use_real_router_authorization(pool: PgPool) {
     let f = fixture(&pool).await;
     let ws_admin = user(&pool, "expiry-workspace-admin", "user").await;
@@ -516,7 +516,7 @@ async fn key_expiry_history_and_feed_use_real_router_authorization(pool: PgPool)
     server.abort();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn every_route_refuses_lower_principals_and_unverified_mutations(pool: PgPool) {
     let f = fixture(&pool).await;
     // An entitled member of another workspace is not a member of this one.

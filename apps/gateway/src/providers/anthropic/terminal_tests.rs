@@ -95,7 +95,7 @@ fn fixture_body(marker: &str, streaming: bool) -> String {
         .collect()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 #[ignore = "runtime role/maintenance ACL contract: run explicitly on a disposable PostgreSQL cluster"]
 async fn terminal_fidelity_official_sdks_and_priced_http_evidence(pool: sqlx::PgPool) {
     let f = fixture(pool.clone()).await;

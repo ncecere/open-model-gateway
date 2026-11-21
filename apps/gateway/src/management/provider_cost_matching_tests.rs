@@ -50,7 +50,7 @@ async fn scope(pool: &PgPool) -> (Uuid, Uuid) {
     (c, d)
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn provider_cost_missing_reservation_taints_matching_tiers_without_mixing_holds(
     pool: PgPool,
 ) {
@@ -138,7 +138,7 @@ async fn provider_cost_missing_reservation_taints_matching_tiers_without_mixing_
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn provider_cost_personal_matched_and_estimate_only_are_identity_free_before_freezing(
     pool: PgPool,
 ) {
@@ -221,7 +221,7 @@ async fn estimate(pool: &PgPool, f: &Fixture, ws: Uuid, deployment: Uuid, amount
     e
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn provider_cost_matching_exclusive_variance_shared_no_proration_and_archived_coverage(
     pool: PgPool,
 ) {
@@ -300,7 +300,7 @@ async fn snapshot_read(f: &Fixture, id: Uuid) -> Value {
     .1
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn provider_cost_default_scope_unsupported_categories_and_account_lineage_refusals(
     pool: PgPool,
 ) {

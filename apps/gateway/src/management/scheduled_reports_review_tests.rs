@@ -24,7 +24,7 @@ pub(super) async fn configured_call(
     (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_review_pause_survives_recipient_authority_loss(pool: PgPool) {
     let f = fixture(&pool).await;
     let mock = crate::identity::tests::MockProvider::start(None).await;
@@ -100,7 +100,7 @@ async fn scheduled_reports_review_pause_survives_recipient_authority_loss(pool: 
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_review_revision_tracks_configuration_not_noops(pool: PgPool) {
     let f = fixture(&pool).await;
     let recipient = user(&pool, "revision-recipient", "user").await;
@@ -136,7 +136,7 @@ async fn scheduled_reports_review_revision_tracks_configuration_not_noops(pool: 
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_review_pagination_order_bounds_and_scope_safety(pool: PgPool) {
     let f = fixture(&pool).await;
     let foreign_personal =

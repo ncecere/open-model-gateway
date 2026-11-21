@@ -407,7 +407,7 @@ async fn unknown_cost_attempt(pool: &PgPool, ws: Uuid, key: Uuid, deployment: Uu
 /// the future does not shrink a poll frame). It runs on its own thread with a
 /// larger stack and a current-thread runtime; a panic is re-raised here, so a
 /// failure is reported exactly as before.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn management_openapi_slice2_fixtures(pool: PgPool) {
     let (done, outcome) = tokio::sync::oneshot::channel();
     std::thread::Builder::new()

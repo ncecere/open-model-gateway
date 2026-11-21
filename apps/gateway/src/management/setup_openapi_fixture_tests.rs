@@ -964,7 +964,7 @@ fn limits(
 ) -> Value {
     json!({"requests_per_minute":rpm,"tokens_per_minute":tpm,"concurrent_requests":concurrent,"concurrent_jobs":jobs,"storage_bytes":storage,"key_issuances_per_holder":holder,"key_issuances_per_workspace":workspace,"budgets":budgets})
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn management_openapi_slice3_fixtures(pool: PgPool) {
     let mut f = fixture(&pool).await;
     f.s = f.s.with_secret_allowlists(

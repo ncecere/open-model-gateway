@@ -22,6 +22,10 @@
 !crates/datetime/Cargo.toml
 !crates/datetime/src/
 !crates/datetime/src/**
+!crates/dbtest/
+!crates/dbtest/Cargo.toml
+!crates/dbtest/src/
+!crates/dbtest/src/**
 !vendor/
 !vendor/oauth2/
 !vendor/oauth2/**

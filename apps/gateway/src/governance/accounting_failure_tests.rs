@@ -34,7 +34,7 @@ async fn admission(
     (result, capture.signals())
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn admission_without_a_pooled_connection_is_recorded_as_a_failed_start(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1).await;
@@ -50,7 +50,7 @@ async fn admission_without_a_pooled_connection_is_recorded_as_a_failed_start(poo
     assert_eq!(signals, [(Stage::PoolAcquireAndBegin, Cause::PoolTimeout)]);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_lock_timeout_inside_admission_is_recorded_as_a_failed_statement(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1).await;
@@ -76,7 +76,7 @@ async fn a_lock_timeout_inside_admission_is_recorded_as_a_failed_statement(pool:
 
 /// The first database reads of a request: with no pooled connection the
 /// lookup of the eligible deployments and the routing plan name their stage.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_route_lookup_without_a_pooled_connection_is_recorded_at_its_stage(pool: PgPool) {
     use crate::inference::repository::InferenceRepository;
     let f = fixture(pool.clone()).await;
@@ -168,7 +168,7 @@ async fn deployments_under_lock(
 
 /// The later statements of the deployment lookup (after the transaction
 /// start): each failure is one `route_lookup` signal.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_failed_later_statement_of_the_deployment_lookup_is_recorded_once(pool: PgPool) {
     use crate::inference::repository::InferenceRepository;
     let f = fixture(pool.clone()).await;
@@ -256,7 +256,7 @@ async fn plan_under_lock(
 
 /// The second statement of the live routing plan (the candidates' routing
 /// rows and health): its failure is one `route_lookup` signal.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_failed_later_statement_of_the_live_routing_plan_is_recorded_once(pool: PgPool) {
     use crate::inference::repository::InferenceRepository;
     let f = fixture(pool.clone()).await;
@@ -286,7 +286,7 @@ async fn a_failed_later_statement_of_the_live_routing_plan_is_recorded_once(pool
 /// The three statements of the cached routing plan (policy, routing rows,
 /// passive health), each on a replica whose caches are still empty: each
 /// failure is one `route_lookup` signal.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_failed_statement_of_the_cached_routing_plan_is_recorded_once(pool: PgPool) {
     use crate::inference::repository::InferenceRepository;
     let f = fixture(pool.clone()).await;
@@ -401,7 +401,7 @@ async fn elapsed_settlement(
 
 /// What an elapsed settlement deadline was waiting on: the in-process
 /// settlement gate (every permit held), or, past the gate, a pooled connection.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn an_elapsed_settlement_deadline_names_the_gate_or_the_connection_wait(pool: PgPool) {
     use crate::governance::tests::db::done;
     let f = fixture(pool.clone()).await;

@@ -2,7 +2,7 @@
 //! server, and rows carry the workspace names the pages show.
 use super::*;
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_lists_search_by_name(pool: PgPool) {
     let f = fixture(&pool).await;
     let m = model(&pool, "company/smart").await;
@@ -57,7 +57,7 @@ async fn key_lists_search_by_name(pool: PgPool) {
     assert_eq!(member["data"], json!([]));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn group_mappings_name_their_workspace(pool: PgPool) {
     let f = fixture(&pool).await;
     let (status, body) = call(&f.s, &f.admin, "POST", "/api/v1/platform/oidc/group-mappings", json!({"issuer":"https://idp.example.invalid","group_value":"eng","target_kind":"workspace","platform_role":null,"workspace_id":f.team,"workspace_role":"member","enabled":true})).await;
@@ -77,7 +77,7 @@ async fn group_mappings_name_their_workspace(pool: PgPool) {
 
 /// "Add models" and "Assign models" search only models that can still be added,
 /// so 20 matches are never all already present (R06, #68).
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn model_search_can_exclude_models_already_added(pool: PgPool) {
     let f = fixture(&pool).await;
     let added = model(&pool, "company/added").await;

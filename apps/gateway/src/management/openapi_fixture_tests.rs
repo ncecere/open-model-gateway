@@ -198,7 +198,7 @@ async fn fired_email(pool: &PgPool, event: Uuid) {
     .unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn management_openapi_completed_area_fixtures(pool: PgPool) {
     let mut observed = PositiveFixtures::default();
     crate::identity::tests::management_openapi_auth_fixtures(&pool, &mut observed).await;

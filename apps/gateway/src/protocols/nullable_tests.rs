@@ -257,11 +257,11 @@ async fn prove_nullable_defaults(pool: sqlx::PgPool, native: bool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn priced_native_responses_nullable_defaults(pool: sqlx::PgPool) {
     prove_nullable_defaults(pool, true).await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn priced_local_chat_nullable_defaults(pool: sqlx::PgPool) {
     prove_nullable_defaults(pool, false).await;
 }

@@ -171,7 +171,12 @@ fn bindings(sources: &[String]) -> BTreeSet<String> {
                 .attrs
                 .iter()
                 .any(|a| path(a) == ["cfg"] || path(a) == ["ignore"]);
-            if runs && function.attrs.iter().any(|a| path(a) == ["sqlx", "test"]) {
+            if runs
+                && function
+                    .attrs
+                    .iter()
+                    .any(|a| path(a) == ["sqlx", "test"] || path(a) == ["dbtest", "test"])
+            {
                 let mut finish = Finish::default();
                 finish.visit_block(&function.block);
                 self.0.extend(finish.0);
@@ -238,7 +243,7 @@ fn management_openapi_hardening_area_groups_have_sqlx_finish_bindings() {
         assert!(names.insert(name.clone()), "duplicate group name {name}");
         assert!(
             bound.contains(&name),
-            "{name} has no finish({name}) in a #[sqlx::test] runner"
+            "{name} has no finish({name}) in a #[sqlx::test] or #[dbtest::test] runner"
         );
     }
 }
@@ -283,12 +288,20 @@ fn management_openapi_hardening_finish_inventory_ignores_claimed_helpers() {
         // A runner that never compiles or never runs by default proves nothing.
         "#[cfg(any())] #[sqlx::test] async fn runner() { observed.finish(MISSING); }",
         "#[sqlx::test] #[ignore] async fn runner() { observed.finish(MISSING); }",
+        "#[dbtest::test] #[ignore] async fn runner() { observed.finish(MISSING); }",
+        "#[dbtest::test] async fn runner() { fn unused() { observed.finish(MISSING); } }",
     ] {
         assert!(!bindings(&[source.into()]).contains("MISSING"));
     }
     assert!(
         bindings(&[
             "#[sqlx::test] async fn runner() { observed.finish(responses::GROUP); }".into()
+        ])
+        .contains("GROUP")
+    );
+    assert!(
+        bindings(&[
+            "#[dbtest::test] async fn runner() { observed.finish(responses::GROUP); }".into()
         ])
         .contains("GROUP")
     );

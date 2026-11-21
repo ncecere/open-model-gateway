@@ -111,7 +111,7 @@ fn finished(id: Uuid, usage: Usage) -> ExecutionFinish {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn per_image_tiers_hold_n_times_highest_variant_and_settle_the_billed_tier(pool: PgPool) {
     let f = fixture(pool).await;
     let deployment = images_model(&f).await;
@@ -175,7 +175,7 @@ async fn per_image_tiers_hold_n_times_highest_variant_and_settle_the_billed_tier
     .unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn token_priced_gpt_image_holds_token_ceilings_and_settles_tokens(pool: PgPool) {
     let f = fixture(pool).await;
     let deployment = images_model(&f).await;
@@ -218,7 +218,7 @@ async fn token_priced_gpt_image_holds_token_ceilings_and_settles_tokens(pool: Pg
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn unpriced_images_are_unbounded_and_unpriced_variants_stay_unknown(pool: PgPool) {
     let f = fixture(pool).await;
     let deployment = images_model(&f).await;

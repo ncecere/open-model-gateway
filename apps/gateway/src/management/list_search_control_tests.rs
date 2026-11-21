@@ -22,7 +22,7 @@ fn lists(f: &Fixture) -> Vec<(String, &BrowserPrincipal)> {
     ]
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn list_search_refuses_control_characters(pool: PgPool) {
     let f = fixture(&pool).await;
     // Collect every case so one run reports all the routes, not just the first.
@@ -45,7 +45,7 @@ async fn list_search_refuses_control_characters(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn list_search_still_accepts_ordinary_queries(pool: PgPool) {
     let f = fixture(&pool).await;
     for (path, who) in lists(&f) {
@@ -73,7 +73,7 @@ async fn list_search_still_accepts_ordinary_queries(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn list_search_ordinary_queries_still_match(pool: PgPool) {
     let f = fixture(&pool).await;
     let (status, found) = call(
@@ -98,7 +98,7 @@ async fn list_search_ordinary_queries_still_match(pool: PgPool) {
     assert_eq!(found["data"].as_array().unwrap().len(), 1, "{found}");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn file_list_search_refuses_control_characters(pool: PgPool) {
     let f = fixture(&pool).await;
     let path = format!("/api/v1/workspaces/{}/files", f.team);
@@ -138,7 +138,7 @@ async fn file_list_search_refuses_control_characters(pool: PgPool) {
     assert!(wrong.is_empty(), "files search:\n{}", wrong.join("\n"));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn list_search_edge_inputs(pool: PgPool) {
     let f = fixture(&pool).await;
     let mut wrong = Vec::new();

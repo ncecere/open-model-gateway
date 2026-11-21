@@ -64,7 +64,7 @@ async fn get(f: &Fixture, u: &BrowserPrincipal, path: &str) -> (StatusCode, Valu
     call(&f.s, u, "GET", path, json!({})).await
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn me_summary_and_keys_are_own_scope_only(pool: PgPool) {
     let f = fixture(&pool).await;
     let r = route(&pool, "home-model", "openai").await;
@@ -173,7 +173,7 @@ async fn me_summary_and_keys_are_own_scope_only(pool: PgPool) {
     assert_eq!(admin["totals"]["current"]["known_cost_microusd"], "0");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn keys_disable_reversibly_revoked_never_and_stats_follow_lineage(pool: PgPool) {
     let f = fixture(&pool).await;
     let r = route(&pool, "stats-model", "openai").await;
@@ -335,7 +335,7 @@ async fn keys_disable_reversibly_revoked_never_and_stats_follow_lineage(pool: Pg
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn request_logs_group_attempts_paginate_and_respect_privacy(pool: PgPool) {
     let f = fixture(&pool).await;
     let r = route(&pool, "log-model", "openrouter").await;
@@ -494,7 +494,7 @@ async fn request_logs_group_attempts_paginate_and_respect_privacy(pool: PgPool) 
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn usage_overview_and_explore_are_exact_scoped_and_bounded(pool: PgPool) {
     let f = fixture(&pool).await;
     let r = route(&pool, "alpha", "openai").await;
@@ -702,7 +702,7 @@ fn reasons(v: &Value, name: &str) -> Vec<String> {
         .collect()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_layers_explain_why_models_are_unavailable(pool: PgPool) {
     let f = fixture(&pool).await;
     let ra = route(&pool, "acc-a", "openai").await;
@@ -832,7 +832,7 @@ async fn access_layers_explain_why_models_are_unavailable(pool: PgPool) {
     assert_eq!(v["layers"][0]["layer"], "type_default");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn model_catalog_filters_route_detail_and_workspace_catalog(pool: PgPool) {
     let f = fixture(&pool).await;
     let chat = route(&pool, "cat-chat", "openai").await;

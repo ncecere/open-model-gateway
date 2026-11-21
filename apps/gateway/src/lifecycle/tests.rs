@@ -31,7 +31,7 @@ async fn setup(pool: &sqlx::PgPool) -> (Store, Uuid, Uuid, Uuid) {
     (store, user, shared, mapping)
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn independent_provenance_manual_membership_and_roles_survive_group_changes(
     pool: sqlx::PgPool,
 ) {
@@ -79,7 +79,7 @@ async fn independent_provenance_manual_membership_and_roles_survive_group_change
     assert_eq!(active_groups, 0);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn loss_reactivation_cleanup_preserves_history_and_service_credentials(pool: sqlx::PgPool) {
     let (store, user, shared, _) = setup(&pool).await;
     let personal: Uuid = sqlx::query_scalar("SELECT id FROM workspaces WHERE owner_user_id=$1")
@@ -181,7 +181,7 @@ async fn loss_reactivation_cleanup_preserves_history_and_service_credentials(poo
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn shared_group_membership_loss_retires_keys_without_restoring_them_on_return(
     pool: sqlx::PgPool,
 ) {
@@ -202,7 +202,7 @@ async fn shared_group_membership_loss_retires_keys_without_restoring_them_on_ret
     assert!(member);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn platform_includes_user_without_separate_grant(pool: sqlx::PgPool) {
     let (store, user, _, _) = setup(&pool).await;
     let personal: i64 = sqlx::query_scalar(
@@ -233,7 +233,7 @@ async fn platform_includes_user_without_separate_grant(pool: sqlx::PgPool) {
 }
 
 /// #75: a held departed user isn't cleaned up until the hold is released.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn cleanup_waits_for_a_legal_hold(pool: sqlx::PgPool) {
     let store = Store::new(pool.clone());
     let user = Uuid::new_v4();

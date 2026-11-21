@@ -367,7 +367,7 @@ fn inference_openapi_areas_are_fine_grained() {
     }
 }
 
-/// A registered group is finished by an executed `#[sqlx::test]` fixture that
+/// A registered group is finished by an executed `#[dbtest::test]` fixture that
 /// calls `finish(<GROUP>)` directly: helper-only calls and comments do not count.
 #[test]
 fn inference_openapi_area_groups_are_bound_to_executed_fixtures() {
@@ -380,12 +380,13 @@ fn inference_openapi_area_groups_are_bound_to_executed_fixtures() {
         fn visit_item_fn(&mut self, function: &'ast syn::ItemFn) {
             let outer = self.in_sqlx_test;
             self.in_sqlx_test = function.attrs.iter().any(|attr| {
-                attr.path()
+                let path = attr
+                    .path()
                     .segments
                     .iter()
                     .map(|s| s.ident.to_string())
-                    .collect::<Vec<_>>()
-                    == ["sqlx", "test"]
+                    .collect::<Vec<_>>();
+                path == ["sqlx", "test"] || path == ["dbtest", "test"]
             });
             syn::visit::visit_item_fn(self, function);
             self.in_sqlx_test = outer;
@@ -421,7 +422,7 @@ fn inference_openapi_area_groups_are_bound_to_executed_fixtures() {
     for (name, _) in super::responses::AREA_GROUPS {
         assert!(
             visitor.finished.contains(*name),
-            "{name} is registered but no #[sqlx::test] calls finish({name})"
+            "{name} is registered but no #[dbtest::test] or #[sqlx::test] calls finish({name})"
         );
     }
 }

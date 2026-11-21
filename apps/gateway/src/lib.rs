@@ -26,6 +26,8 @@ mod configuration_surface_tests;
 #[cfg(test)]
 mod configuration_unsafe_tests;
 pub(crate) mod db;
+#[cfg(test)]
+mod dbtest_runtime;
 pub mod demo;
 pub mod egress;
 pub mod email;

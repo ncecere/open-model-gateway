@@ -406,27 +406,27 @@ macro_rules! per_kind {
     ($($name:ident: $kind:expr,)*) => {$(
         mod $name {
             use super::*;
-            #[sqlx::test(migrations = "./enterprise_migrations")]
+            #[dbtest::test]
             async fn in_stream_errors_end_with_the_class_of_the_same_http_error(pool: PgPool) {
                 in_stream_errors(pool, $kind, false, NAMES_UNDER_TEST).await;
             }
-            #[sqlx::test(migrations = "./enterprise_migrations")]
+            #[dbtest::test]
             async fn in_stream_rejections_on_a_free_price_never_settle_as_a_known_zero(pool: PgPool) {
                 in_stream_errors(pool, $kind, true, REJECTIONS).await;
             }
-            #[sqlx::test(migrations = "./enterprise_migrations")]
+            #[dbtest::test]
             async fn transport_failures_inside_a_stream_are_unavailable_and_count(pool: PgPool) {
                 transport_failures(pool, $kind).await;
             }
-            #[sqlx::test(migrations = "./enterprise_migrations")]
+            #[dbtest::test]
             async fn a_failed_stream_is_never_failed_over(pool: PgPool) {
                 never_failed_over(pool, $kind).await;
             }
-            #[sqlx::test(migrations = "./enterprise_migrations")]
+            #[dbtest::test]
             async fn the_breaker_follows_the_class_of_in_stream_failures(pool: PgPool) {
                 breaker(pool, $kind).await;
             }
-            #[sqlx::test(migrations = "./enterprise_migrations")]
+            #[dbtest::test]
             async fn a_client_that_goes_away_mid_stream_is_not_a_provider_failure(pool: PgPool) {
                 client_drop(pool, $kind).await;
             }
@@ -797,7 +797,7 @@ async fn client_drop(pool: PgPool, kind: Kind) {
 /// Named errors in non-stream 200 bodies retain the prior class and therefore
 /// do not gain Busy's unconditional failover. An ambiguous OpenRouter error
 /// may still fail over under its existing opt-in policy.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn non_stream_200_errors_do_not_gain_failover(pool: PgPool) {
     let mut f = fixture(pool).await;
     let token = issue_key(&mut f).await;

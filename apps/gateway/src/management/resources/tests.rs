@@ -6,7 +6,7 @@ mod bedrock_connections;
 #[path = "tests/catalog_read.rs"]
 mod catalog_read;
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn deployment_metadata_labels_do_not_expose_credential_references(pool: PgPool) {
     let f = fixture(&pool).await;
     let model = Uuid::new_v4();
@@ -51,7 +51,7 @@ async fn deployment_metadata_labels_do_not_expose_credential_references(pool: Pg
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn platform_catalog_reads_are_auditor_readonly_live_and_literal_bounded(pool: PgPool) {
     let f = fixture(&pool).await;
     let names = ["alpha%literal", "alpha_other", "zeta"];
@@ -171,7 +171,7 @@ async fn platform_catalog_reads_are_auditor_readonly_live_and_literal_bounded(po
         StatusCode::FORBIDDEN
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn model_declared_protocols_default_and_validated_distinct_subset(pool: PgPool) {
     let f = fixture(&pool).await;
     let (status, v) = call(
@@ -255,7 +255,7 @@ async fn model_declared_protocols_default_and_validated_distinct_subset(pool: Pg
         StatusCode::BAD_REQUEST
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn provider_direct_reads_never_expose_credentials_and_deployments_filter_both_foreign_keys(
     pool: PgPool,
 ) {

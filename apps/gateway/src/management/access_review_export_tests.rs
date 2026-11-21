@@ -43,7 +43,7 @@ async fn export(
     (status, headers, String::from_utf8(body.to_vec()).unwrap())
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn platform_readers_export_every_item_with_its_decision(pool: PgPool) {
     let f = fixture(&pool).await;
     // A display name a spreadsheet would run as a formula.
@@ -112,7 +112,7 @@ async fn platform_readers_export_every_item_with_its_decision(pool: PgPool) {
     assert!(matches!(token, crate::route_policy::TokenPolicy::Denied));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn each_item_says_whether_anyone_may_review_it(pool: PgPool) {
     let f = fixture(&pool).await;
     let c = start(&f).await;
@@ -194,7 +194,7 @@ async fn revoke_membership(pool: &PgPool, ws: Uuid, user: Uuid) {
     tx.commit().await.unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn reviewable_agrees_with_who_may_decide(pool: PgPool) {
     let f = fixture(&pool).await;
     let second = user(&pool, "second-member", "user").await;
@@ -282,7 +282,7 @@ async fn reviewable_agrees_with_who_may_decide(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn export_cells_are_safe_and_complete(pool: PgPool) {
     let f = fixture(&pool).await;
     // A workspace name and an email a spreadsheet would run, a name with a quote and a line break.

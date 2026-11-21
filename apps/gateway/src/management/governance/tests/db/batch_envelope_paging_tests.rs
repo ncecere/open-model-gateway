@@ -35,7 +35,7 @@ async fn observe_writes(f: &Fixture) {
         .execute(&f.store.pool).await.unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn batch_envelope_write_statements_are_bounded(pool: PgPool) {
     let f = fixture(pool).await;
     let ids = envelopes(&f, 1_025).await;
@@ -70,7 +70,7 @@ async fn batch_envelope_write_statements_are_bounded(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn batch_envelope_write_failure_rolls_back_prior_statements(pool: PgPool) {
     let f = fixture(pool).await;
     let ids = envelopes(&f, 1_025).await;
@@ -169,7 +169,7 @@ async fn lines(f: &Fixture, job: Uuid, count: i32) {
         .bind(f.principal.workspace_id).bind(f.principal.key_id).bind(f.deployment).bind(job).bind(count).execute(&f.store.pool).await.unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn batch_envelope_pages_bound_line_volume_without_splitting_jobs(pool: PgPool) {
     let f = fixture(pool).await;
     let first = envelope(&f, "gateway", true).await;
@@ -199,7 +199,7 @@ async fn duplicate_envelope(f: &Fixture, job: Uuid) {
     sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,held_microusd) SELECT e.id,e.workspace_id,e.api_key_id,e.deployment_id,e.started_at,date_trunc('minute',e.started_at,'UTC'),date_trunc('month',e.started_at,'UTC'),e.started_at,'unknown',200 FROM inference_executions e WHERE e.id=$1 AND NOT EXISTS(SELECT FROM governance_reservations r WHERE r.execution_id=e.id AND r.admitted_at=e.started_at)").bind(job).execute(&f.store.pool).await.unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn batch_envelope_oversized_history_does_not_block_later_jobs(pool: PgPool) {
     let f = fixture(pool).await;
     let oversized = envelope(&f, "gateway", true).await;
@@ -225,7 +225,7 @@ async fn batch_envelope_oversized_history_does_not_block_later_jobs(pool: PgPool
     assert!(states.contains(&(eligible, "settled".into())));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn batch_envelope_lock_wait_is_bounded_and_rolls_back(pool: PgPool) {
     let f = fixture(pool).await;
     let job = envelope(&f, "gateway", true).await;
@@ -269,7 +269,7 @@ async fn batch_envelope_lock_wait_is_bounded_and_rolls_back(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn batch_envelope_duplicate_uuid_history_is_refused(pool: PgPool) {
     let f = fixture(pool).await;
     let job = envelope(&f, "gateway", true).await;
@@ -303,7 +303,7 @@ async fn batch_envelope_duplicate_uuid_history_is_refused(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn batch_envelope_marker_refuses_duplicate_uuid_history(pool: PgPool) {
     let f = fixture(pool).await;
     let job = envelope(&f, "gateway", true).await;
@@ -315,7 +315,7 @@ async fn batch_envelope_marker_refuses_duplicate_uuid_history(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn batch_envelope_recheck_does_not_expand_the_locked_full_keys(pool: PgPool) {
     let f = fixture(pool).await;
     let job = envelope(&f, "gateway", true).await;
@@ -369,7 +369,7 @@ async fn batch_envelope_recheck_does_not_expand_the_locked_full_keys(pool: PgPoo
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn batch_envelope_lost_commit_replay_can_apply_another_page(pool: PgPool) {
     let f = fixture(pool).await;
     let seed = envelope(&f, "gateway", true).await;

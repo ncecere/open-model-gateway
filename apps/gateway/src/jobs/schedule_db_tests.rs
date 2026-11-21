@@ -345,7 +345,7 @@ async fn consistent(f: &Fixture) {
     assert!(report.consistent(), "{report:?}");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn route_concurrency_cap_and_priority_hint_on_batch_lines_only(pool: PgPool) {
     let w = world(pool).await;
     w.server.delay(150);
@@ -399,7 +399,7 @@ async fn route_concurrency_cap_and_priority_hint_on_batch_lines_only(pool: PgPoo
     consistent(&w.f).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn batch_lines_yield_to_live_traffic(pool: PgPool) {
     let w = world(pool).await;
     w.settings(RouteSettings {
@@ -448,7 +448,7 @@ async fn batch_lines_yield_to_live_traffic(pool: PgPool) {
     consistent(&w.f).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn server_metrics_busy_or_unreadable_pause_the_route(pool: PgPool) {
     let w = world(pool).await;
     let gate = MetricsGate {
@@ -512,7 +512,7 @@ async fn server_metrics_busy_or_unreadable_pause_the_route(pool: PgPool) {
     assert_eq!(w.server.requests(), 2);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn time_windows_hold_lines_and_waiting_is_not_a_stall(pool: PgPool) {
     let w = world(pool).await;
     let at = |offset: i64| {
@@ -581,7 +581,7 @@ async fn time_windows_hold_lines_and_waiting_is_not_a_stall(pool: PgPool) {
     assert_eq!(w.server.requests(), 2);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn fair_share_across_workspaces(pool: PgPool) {
     let w = world(pool).await;
     w.server.delay(40);
@@ -624,7 +624,7 @@ async fn fair_share_across_workspaces(pool: PgPool) {
     consistent(&w.f).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn expiry_keeps_partial_results_and_releases_unrun_holds(pool: PgPool) {
     let w = world(pool).await;
     w.settings(RouteSettings {
@@ -707,7 +707,7 @@ async fn expiry_keeps_partial_results_and_releases_unrun_holds(pool: PgPool) {
     consistent(&w.f).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn two_runners_resume_and_share_a_route_exactly_once(pool: PgPool) {
     let w = world(pool).await;
     w.server.delay(60);
@@ -749,7 +749,7 @@ async fn two_runners_resume_and_share_a_route_exactly_once(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn longer_completion_windows_run_gateway_side(pool: PgPool) {
     let w = world(pool).await;
     let mut body = serde_json::to_vec(&line("x", "x")).unwrap();

@@ -47,7 +47,7 @@ async fn set_expiry(s: &Seed, key: Uuid, expires: Option<UtcInstant>) {
         .unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_expiry_exact_bands_and_first_urgent_only(pool: PgPool) {
     let s = seed(pool).await;
     let now = expiry_now(&s).await;
@@ -90,7 +90,7 @@ async fn key_expiry_exact_bands_and_first_urgent_only(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_expiry_cycles_rotation_expiry_changes_and_silent_retirement(pool: PgPool) {
     let s = seed(pool).await;
     let now = expiry_now(&s).await;
@@ -178,7 +178,7 @@ async fn key_expiry_cycles_rotation_expiry_changes_and_silent_retirement(pool: P
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_expiry_workspace_rolling_cap_defers_without_starving_other_workspaces(pool: PgPool) {
     let s = seed(pool).await;
     let now = expiry_now(&s).await;
@@ -233,7 +233,7 @@ async fn key_expiry_workspace_rolling_cap_defers_without_starving_other_workspac
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_expiry_bounded_progress_does_not_starve_retirements(pool: PgPool) {
     let s = seed(pool).await;
     let now = expiry_now(&s).await;
@@ -272,7 +272,7 @@ async fn key_expiry_bounded_progress_does_not_starve_retirements(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_expiry_exclusions_and_reenable_without_replay(pool: PgPool) {
     let s = seed(pool).await;
     let now = expiry_now(&s).await;
@@ -339,7 +339,7 @@ async fn key_expiry_exclusions_and_reenable_without_replay(pool: PgPool) {
     assert_eq!(expiry_tick(&s, now).await.fired, 0, "disabled workspace");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_expiry_concurrent_evaluation_restart_and_fencing(pool: PgPool) {
     let s = seed(pool).await;
     set_expiry(
@@ -368,7 +368,7 @@ async fn key_expiry_concurrent_evaluation_restart_and_fencing(pool: PgPool) {
     assert_eq!(count(&s, "SELECT count(*) FROM alert_deliveries").await, 1);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_expiry_live_delivery_suppresses_obsolete_and_hides_secrets(pool: PgPool) {
     let s = seed(pool).await;
     let now = expiry_now(&s).await;
@@ -433,7 +433,7 @@ async fn key_expiry_live_delivery_suppresses_obsolete_and_hides_secrets(pool: Pg
     assert!(rx.try_recv().is_err());
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_expiry_send_time_loss_and_terminal_outcomes(pool: PgPool) {
     let s = seed(pool).await;
     let (port, mut rx) = mock::serve(Behaviour::default()).await;
@@ -560,7 +560,7 @@ async fn key_expiry_send_time_loss_and_terminal_outcomes(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_expiry_service_recipients_are_current_owners_admins_not_platform_roles(pool: PgPool) {
     let s = seed(pool).await;
     let sa = Uuid::new_v4();
@@ -658,7 +658,7 @@ async fn key_expiry_service_recipients_are_current_owners_admins_not_platform_ro
     assert!(rx.try_recv().is_err());
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_expiry_schema_rejects_ambiguous_shapes_and_mutable_attribution(pool: PgPool) {
     let s = seed(pool).await;
     let now = expiry_now(&s).await;
@@ -701,7 +701,7 @@ async fn key_expiry_schema_rejects_ambiguous_shapes_and_mutable_attribution(pool
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_expiry_job_transaction_itself_holds_fence_and_advisory_lock(pool: PgPool) {
     let s = seed(pool).await;
     set_expiry(
@@ -725,7 +725,7 @@ async fn key_expiry_job_transaction_itself_holds_fence_and_advisory_lock(pool: P
     assert_eq!((report.fired, report.failed_rules), (1, 0), "{report:?}");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_expiry_uses_database_time_in_its_own_job_not_before_rules(pool: PgPool) {
     let s = seed(pool).await;
     set_expiry(
@@ -758,7 +758,7 @@ async fn key_expiry_uses_database_time_in_its_own_job_not_before_rules(pool: PgP
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_expiry_rechecks_authority_between_smtp_recipients(pool: PgPool) {
     let s = seed(pool).await;
     let delegate = Uuid::new_v4();
@@ -989,7 +989,7 @@ async fn count(s: &Seed, sql: &str) -> i64 {
     sqlx::query_scalar(sql).fetch_one(&s.pool).await.unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn budget_thresholds_escalate_once_and_resolve(pool: PgPool) {
     let s = seed(pool).await;
     budget(&s, "local", Some(s.team), "month", 10_000_000).await;
@@ -1096,7 +1096,7 @@ async fn budget_thresholds_escalate_once_and_resolve(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn budgets_follow_layers_holds_keys_and_never_platform_scan_personal(pool: PgPool) {
     let s = seed(pool).await;
     // Pending holds count like admission; a pending unbounded hold only raises the flag.
@@ -1174,7 +1174,7 @@ async fn budgets_follow_layers_holds_keys_and_never_platform_scan_personal(pool:
     assert_eq!(evaluate(&s).await.resolved, 1);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn spend_spikes_use_the_trailing_hourly_average(pool: PgPool) {
     let s = seed(pool).await;
     // $16.80 over the previous 7 days: $0.10/hour on average.
@@ -1236,7 +1236,7 @@ async fn spend_spikes_use_the_trailing_hourly_average(pool: PgPool) {
     assert_eq!(summary, "Spend spike: $0.30 in the last hour");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn error_rates_and_failing_connections_resolve_when_traffic_recovers(pool: PgPool) {
     let s = seed(pool).await;
     rule(
@@ -1315,7 +1315,7 @@ async fn error_rates_and_failing_connections_resolve_when_traffic_recovers(pool:
     assert!(open(&s).await.is_empty());
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn disabled_rules_and_workspaces_close_silently_and_stop_firing(pool: PgPool) {
     let s = seed(pool).await;
     budget(&s, "local", Some(s.team), "month", 1_000_000).await;
@@ -1369,7 +1369,7 @@ async fn disabled_rules_and_workspaces_close_silently_and_stop_firing(pool: PgPo
     assert!(open(&s).await.is_empty());
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn one_replica_evaluates_at_a_time(pool: PgPool) {
     let s = seed(pool).await;
     let mut holder = s.pool.begin().await.unwrap();
@@ -1386,7 +1386,7 @@ async fn relay(s: &Seed, port: u16) {
     sqlx::query("UPDATE installation_settings SET smtp_host='127.0.0.1',smtp_port=$1,smtp_tls='none',smtp_from_address='gateway@example.test' WHERE singleton").bind(i32::from(port)).execute(&s.pool).await.unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn emails_reach_recipients_and_failures_are_recorded(pool: PgPool) {
     let s = seed(pool).await;
     // Without a relay, the outcome is recorded and nothing crashes.
@@ -1466,7 +1466,7 @@ async fn emails_reach_recipients_and_failures_are_recorded(pool: PgPool) {
 }
 
 /// A connection refusal must retain a durable, scheduled recipient attempt.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn outbox_connection_failure_waits_for_due_retry(pool: PgPool) {
     let s = seed(pool).await;
     let port = {
@@ -1501,7 +1501,7 @@ async fn outbox_connection_failure_waits_for_due_retry(pool: PgPool) {
 /// evaluator's longer first fenced transaction (which also fetches the rule
 /// list before committing) risks blocking a concurrent `complete()`'s
 /// `FOR UPDATE` on the same delivery row until that transaction commits.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn evaluation_alone_never_runs_outbox_cleanup(pool: PgPool) {
     let s = seed(pool).await;
     let (port, _rx) = mock::serve(Behaviour {
@@ -1543,7 +1543,7 @@ async fn evaluation_alone_never_runs_outbox_cleanup(pool: PgPool) {
 /// `elapsed + SEND_DEADLINE` would exceed it, so a hanging relay can never
 /// cancel a send mid-flight and lose its result: the recipient's lease must
 /// never even be taken when there is no budget left for one full send.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn deliver_pending_respects_an_injected_budget_against_a_hanging_relay(pool: PgPool) {
     let s = seed(pool).await;
     // DATA is never acknowledged: a claimed send on this relay hangs until
@@ -1600,7 +1600,7 @@ async fn outbox_due(s: &Seed) {
 /// the outbox. While recipients are still waiting or leased, that overlap
 /// must be refused loudly (not silently finalize mail the outbox has not
 /// finished sending); the new flow must still complete normally.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn old_binary_finalizing_a_delivery_with_live_outbox_rows_is_refused(pool: PgPool) {
     let s = seed(pool).await;
     let (port, mut rx) = mock::serve(Behaviour::default()).await;
@@ -1657,7 +1657,7 @@ async fn old_binary_finalizing_a_delivery_with_live_outbox_rows_is_refused(pool:
     assert_eq!(status, "sent");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn outbox_partial_success_is_durable_and_never_resent(pool: PgPool) {
     let s = seed(pool).await;
     let (port, mut rx) = mock::serve(Behaviour {
@@ -1704,7 +1704,7 @@ async fn outbox_partial_success_is_durable_and_never_resent(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn outbox_backoff_and_five_attempt_exhaustion_use_database_clock(pool: PgPool) {
     let s = seed(pool).await;
     let (port, _rx) = mock::serve(Behaviour {
@@ -1735,7 +1735,7 @@ async fn outbox_backoff_and_five_attempt_exhaustion_use_database_clock(pool: PgP
     assert_eq!(deliver_pending(&s.store, 25).await, 0);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn outbox_live_lease_excludes_replicas_and_fences_stale_completion(pool: PgPool) {
     let s = seed(pool).await;
     let (port, mut rx) = mock::serve(Behaviour::default()).await;
@@ -1786,7 +1786,7 @@ async fn outbox_live_lease_excludes_replicas_and_fences_stale_completion(pool: P
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn outbox_revocation_intersects_snapshot_and_never_adds_recipients(pool: PgPool) {
     let s = seed(pool).await;
     let (port, _rx) = mock::serve(Behaviour {
@@ -1819,7 +1819,7 @@ async fn outbox_revocation_intersects_snapshot_and_never_adds_recipients(pool: P
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn outbox_explicit_address_cannot_resurrect_disabled_internal_user(pool: PgPool) {
     let s = seed(pool).await;
     let (port, _rx) = mock::serve(Behaviour {
@@ -1858,7 +1858,7 @@ async fn outbox_explicit_address_cannot_resurrect_disabled_internal_user(pool: P
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn outbox_internal_address_eligibility_survives_cleanup_and_address_change(pool: PgPool) {
     let s = seed(pool).await;
     let (port, _rx) = mock::serve(Behaviour {
@@ -1887,7 +1887,7 @@ async fn outbox_internal_address_eligibility_survives_cleanup_and_address_change
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn outbox_snapshot_race_keeps_internal_identity(pool: PgPool) {
     let s = seed(pool).await;
     let (port, mut rx) = mock::serve(Behaviour::default()).await;
@@ -1951,7 +1951,7 @@ async fn outbox_snapshot_race_keeps_internal_identity(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn outbox_accepted_data_ignores_hanging_quit_and_never_retries(pool: PgPool) {
     let s = seed(pool).await;
     let (port, mut rx) = mock::serve(Behaviour {
@@ -1971,7 +1971,7 @@ async fn outbox_accepted_data_ignores_hanging_quit_and_never_retries(pool: PgPoo
     assert!(rx.try_recv().is_err());
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn outbox_unsetting_smtp_preserves_a_live_claim_result(pool: PgPool) {
     let s = seed(pool).await;
     relay(&s, 25).await;
@@ -2005,7 +2005,7 @@ async fn outbox_unsetting_smtp_preserves_a_live_claim_result(pool: PgPool) {
     assert_eq!(deliver_pending(&s.store, 25).await, 0);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn outbox_unset_smtp_and_expired_fifth_claim_never_loop(pool: PgPool) {
     let s = seed(pool).await;
     let (port, _rx) = mock::serve(Behaviour {
@@ -2039,7 +2039,7 @@ async fn outbox_unset_smtp_and_expired_fifth_claim_never_loop(pool: PgPool) {
     assert_eq!(deliver_pending(&s.store, 25).await, 0);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn outbox_24h_cleanup_preserves_success_and_exhausts_leases(pool: PgPool) {
     let s = seed(pool).await;
     let (port, _rx) = mock::serve(Behaviour {
@@ -2069,7 +2069,7 @@ async fn outbox_24h_cleanup_preserves_success_and_exhausts_leases(pool: PgPool) 
     assert_eq!((status.as_str(), sent, exhausted), ("partial", 1, 1));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn outbox_network_io_releases_connection_and_restart_reclaims(pool: PgPool) {
     let s = seed(pool).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2117,7 +2117,7 @@ async fn outbox_network_io_releases_connection_and_restart_reclaims(pool: PgPool
     single.close().await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn outbox_personal_delivery_stays_owner_private(pool: PgPool) {
     let s = seed(pool).await;
     let (port, mut rx) = mock::serve(Behaviour::default()).await;
@@ -2143,7 +2143,7 @@ async fn outbox_personal_delivery_stays_owner_private(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn outbox_tick_caps_recipient_attempts_at_25(pool: PgPool) {
     let s = seed(pool).await;
     let (port, mut rx) = mock::serve(Behaviour::default()).await;
@@ -2249,7 +2249,7 @@ const OLD_INSTALLATION_BUDGET: &str = "SELECT coalesce(sum(CASE state WHEN 'sett
 
 /// Budget alerts read maintained totals (0015/0025) and report exactly what
 /// the former history scans reported, for every layer, period and state.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn budget_alert_totals_equal_the_former_scans(pool: PgPool) {
     let s = seed(pool).await;
     let rotated = Uuid::new_v4();
@@ -2359,7 +2359,7 @@ async fn budget_alert_totals_equal_the_former_scans(pool: PgPool) {
 /// reference amount over the installation-wide window (settled plus pending
 /// holds, every workspace), escalation and resolution like budget rules, and
 /// no effect on admission (no installation budget exists to deny with).
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn installation_spend_thresholds_notify_without_limits(pool: PgPool) {
     let s = seed(pool).await;
     let r = rule(
@@ -2625,7 +2625,7 @@ async fn count_pool(pool: &PgPool, sql: &str) -> i64 {
 /// comes from the replicas' flushed wait counts. Shared scopes are named
 /// (workspace reference); personal workspaces only as "a personal
 /// workspace"; keys never by id or name. Email: Platform Admins only.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn admission_ceiling_fires_per_scope_and_names_only_shared_workspaces(pool: PgPool) {
     let s = seed(pool).await;
     let now: UtcInstant = sqlx::query_scalar("SELECT date_trunc('minute',clock_timestamp())")

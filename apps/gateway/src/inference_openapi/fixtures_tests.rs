@@ -386,7 +386,7 @@ fn oversized(path: &str, key: &str, streamed: bool) -> Request<Body> {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn inference_openapi_completed_area_fixtures(pool: PgPool) {
     let (app, keys) = gateway(&pool).await;
     let key = keys.personal_key.token.clone();
@@ -873,7 +873,7 @@ fn generation_http(path: &str, key: &str, body: &Value) -> Request<Body> {
     req
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn inference_openapi_generation_real_handler_fixtures(pool: PgPool) {
     let (app, keys) = generation_gateway(&pool).await;
     let key = keys.personal_key.token;
@@ -981,7 +981,7 @@ async fn inference_openapi_generation_real_handler_fixtures(pool: PgPool) {
     fixtures.finish(r::GENERATION_AREAS);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn inference_openapi_generation_refusals_and_beta_headers(pool: PgPool) {
     let (app, keys) = generation_gateway(&pool).await;
     let key = keys.personal_key.token;
@@ -1130,7 +1130,7 @@ async fn inference_openapi_generation_refusals_and_beta_headers(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn inference_openapi_generation_large_message_boundaries(pool: PgPool) {
     let (app, keys) = generation_gateway(&pool).await;
     for path in ["/v1/chat/completions", "/v1/responses", "/v1/messages"] {
@@ -1520,7 +1520,7 @@ async fn generation_capture(
     captured
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn inference_openapi_generation_distinct_tool_boundaries(pool: PgPool) {
     let (app, keys) = generation_gateway(&pool).await;
     for path in ["/v1/chat/completions", "/v1/responses", "/v1/messages"] {
@@ -1559,7 +1559,7 @@ async fn inference_openapi_generation_distinct_tool_boundaries(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn inference_openapi_generation_native_image_count_boundary(pool: PgPool) {
     let (app, keys) = generation_gateway(&pool).await;
     for (count, status) in [(20, StatusCode::OK), (21, StatusCode::BAD_REQUEST)] {

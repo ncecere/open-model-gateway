@@ -535,7 +535,7 @@ async fn contracts(owner: &PgPool, http: &Http) {
     assert_eq!(key_count(owner, ws).await, 50);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 #[ignore = "dedicated PostgreSQL runtime-role contention measurement"]
 async fn key_issuance_contention_measurement(owner: PgPool) {
     // The supplied sqlx pool owns a fresh test database. This session lock is

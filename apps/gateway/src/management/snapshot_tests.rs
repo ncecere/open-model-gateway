@@ -101,7 +101,7 @@ async fn status(s: &Store, u: &BrowserPrincipal, path: &str) -> StatusCode {
         .status()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn reads_do_not_wait_for_held_installation_and_catalog_locks(pool: PgPool) {
     let f = fixture(&pool).await;
     let a = activity(&f, &pool).await;
@@ -143,7 +143,7 @@ async fn reads_do_not_wait_for_held_installation_and_catalog_locks(pool: PgPool)
     blocker.rollback().await.unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn open_snapshot_reads_do_not_block_writers_and_revocation_applies_to_the_next_read(
     pool: PgPool,
 ) {
@@ -243,7 +243,7 @@ async fn open_snapshot_reads_do_not_block_writers_and_revocation_applies_to_the_
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn snapshot_reads_keep_personal_activity_owner_private(pool: PgPool) {
     let f = fixture(&pool).await;
     activity(&f, &pool).await;
@@ -333,7 +333,7 @@ async fn served_by(
         .unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn reporting_pool_serves_report_data_and_falls_back_to_the_primary(pool: PgPool) {
     let f = fixture(&pool).await;
     activity(&f, &pool).await;
@@ -439,7 +439,7 @@ async fn cancel_after<F: std::future::Future>(fut: F, pendings: usize) -> bool {
 /// next lock-free snapshot failed with "SET TRANSACTION ISOLATION LEVEL must
 /// be called before any query". Every cancellation point of every begin path
 /// must leave the connection clean.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn cancelled_transaction_begins_never_leak_into_the_next_snapshot(pool: PgPool) {
     // One connection, so the next request reuses the cancelled one.
     let one = sqlx::postgres::PgPoolOptions::new()
@@ -555,7 +555,7 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
 /// A database error mapped to 503 "Management storage unavailable" is logged
 /// with the request id, SQLSTATE and object names; the PostgreSQL message only
 /// for classes that never interpolate values, and never row data (DETAIL).
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn storage_errors_are_logged_sanitized_with_the_request_id(pool: PgPool) {
     let s = Store::new(pool.clone());
     // 25006 inside a read-only snapshot: message kept.

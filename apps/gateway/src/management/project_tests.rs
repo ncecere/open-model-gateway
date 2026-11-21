@@ -1,5 +1,5 @@
 use super::*;
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn team_and_project_creation_requires_live_platform_admin_and_entitled_initial_owner(
     pool: PgPool,
 ) {
@@ -69,7 +69,7 @@ async fn team_and_project_creation_requires_live_platform_admin_and_entitled_ini
         StatusCode::FORBIDDEN
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn project_is_sibling_not_implicitly_authorized_by_team_membership(pool: PgPool) {
     let f = fixture(&pool).await;
     assert_eq!(
@@ -146,7 +146,7 @@ async fn project_is_sibling_not_implicitly_authorized_by_team_membership(pool: P
         );
     }
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn personal_workspace_name_is_fixed_and_local_limits_are_platform_controlled(pool: PgPool) {
     let f = fixture(&pool).await;
     let (status, v) = call(
@@ -225,7 +225,7 @@ async fn personal_workspace_name_is_fixed_and_local_limits_are_platform_controll
 
 /// #141: object visibility is set like a rename (same people, same refusals),
 /// fixed for personal workspaces, validated and audited with both values.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn object_visibility_follows_rename_authorization_and_is_audited(pool: PgPool) {
     let f = fixture(&pool).await;
     let team = format!("/api/v1/workspaces/{}", f.team);

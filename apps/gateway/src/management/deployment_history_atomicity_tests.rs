@@ -1,7 +1,7 @@
 //! #86 regression checks for atomic capture and timestamp/ID cursor ties.
 use super::*;
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn deployment_history_capture_failure_rolls_back_enablement_and_revision(pool: PgPool) {
     let f = fixture(&pool).await;
     let m = model(&pool, "history-atomic").await;
@@ -64,7 +64,7 @@ async fn deployment_history_capture_failure_rolls_back_enablement_and_revision(p
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn deployment_history_cursor_ties_do_not_skip_or_repeat_changes(pool: PgPool) {
     let f = fixture(&pool).await;
     let target = Uuid::new_v4();

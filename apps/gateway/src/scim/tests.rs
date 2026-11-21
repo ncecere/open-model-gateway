@@ -524,7 +524,7 @@ mod database {
         json!({"schemas":[PATCH_OP],"Operations":ops})
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn users_are_provisioned_filtered_and_replaced(pool: PgPool) {
         let app = app(pool.clone(), true);
         let auth = bearer();
@@ -709,7 +709,7 @@ mod database {
         assert_eq!(audit, 2);
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn deactivation_suspends_and_reactivation_never_restores_keys(pool: PgPool) {
         let app = app(pool.clone(), true);
         let auth = bearer();
@@ -876,7 +876,7 @@ mod database {
         assert_eq!(pii, (None, None, None, false));
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn groups_feed_mappings_with_group_provenance(pool: PgPool) {
         let app = app(pool.clone(), true);
         let auth = bearer();
@@ -1070,7 +1070,7 @@ mod database {
         assert!(synced >= 5);
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn scim_takes_over_pushed_groups_and_delete_or_rename_revokes(pool: PgPool) {
         let app = app(pool.clone(), true);
         let auth = bearer();
@@ -1171,7 +1171,7 @@ mod database {
         assert_eq!(members, 0);
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn resources_expose_directory_attributes_only(pool: PgPool) {
         let app = app(pool.clone(), true);
         let auth = bearer();
@@ -1229,7 +1229,7 @@ mod database {
         sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn scim_never_removes_the_last_active_platform_admin(pool: PgPool) {
         let app = app(pool.clone(), true);
         let auth = bearer();
@@ -1388,7 +1388,7 @@ mod database {
         assert!(platform_grants(&pool, ann).await.is_empty());
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn concurrent_deactivations_keep_one_admin(pool: PgPool) {
         let app = app(pool.clone(), true);
         let a = person(&pool, "a@example.com", Some("admin")).await;
@@ -1422,7 +1422,7 @@ mod database {
     /// PostgreSQL's refusal of NUL surfaced as 500. Every control character is a
     /// 400 `invalidFilter` on Users and Groups, for each filterable attribute,
     /// and an ordinary filter still matches.
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn filter_values_with_control_characters_are_invalid_filters(pool: PgPool) {
         let app = app(pool.clone(), true);
         let auth = bearer();

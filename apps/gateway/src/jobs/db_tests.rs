@@ -188,7 +188,7 @@ async fn lease(f: &Fixture, id: Uuid) -> gateway_datetime_compat::UtcInstant {
         .unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn video_reserves_highest_tier_and_settles_actual_seconds_once(pool: PgPool) {
     let f = fixture(pool).await;
     video_setup(&f).await;
@@ -272,7 +272,7 @@ async fn video_reserves_highest_tier_and_settles_actual_seconds_once(pool: PgPoo
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn unknown_or_failed_video_keeps_the_hold(pool: PgPool) {
     let f = fixture(pool).await;
     video_setup(&f).await;
@@ -329,7 +329,7 @@ async fn unknown_or_failed_video_keeps_the_hold(pool: PgPool) {
     assert_eq!(jobs, 2);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn jobs_are_private_to_their_workspace(pool: PgPool) {
     let f = fixture(pool).await;
     video_setup(&f).await;
@@ -399,7 +399,7 @@ async fn jobs_are_private_to_their_workspace(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn the_state_machine_is_forward_only_and_identity_immutable(pool: PgPool) {
     let f = fixture(pool).await;
     video_setup(&f).await;
@@ -489,7 +489,7 @@ async fn send(
     )
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn http_video_routes_render_gateway_ids_and_scope_by_key(pool: PgPool) {
     let f = fixture(pool).await;
     video_setup(&f).await;
@@ -601,7 +601,7 @@ async fn job_count(f: &Fixture) -> i64 {
         .unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn video_jobs_are_exempt_from_per_minute_limits(pool: PgPool) {
     let f = fixture(pool).await;
     video_setup(&f).await;
@@ -654,7 +654,7 @@ async fn video_jobs_are_exempt_from_per_minute_limits(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn concurrent_job_admissions_never_exceed_the_limit(pool: PgPool) {
     let f = fixture(pool).await;
     video_setup(&f).await;
@@ -678,7 +678,7 @@ async fn concurrent_job_admissions_never_exceed_the_limit(pool: PgPool) {
     assert_eq!(job_count(&f).await, 2);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn video_without_a_supported_provider_is_refused_before_admission(pool: PgPool) {
     let f = fixture(pool).await;
     video_setup(&f).await;
@@ -716,7 +716,7 @@ async fn video_without_a_supported_provider_is_refused_before_admission(pool: Pg
 /// list, retrieve, content and delete, for jobs of a member's key and of a
 /// service-account key. Hidden jobs are `NotFound` (before any upstream call);
 /// visible ones reach the job's own state checks.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn object_visibility_matrix_for_video_jobs(pool: PgPool) {
     use crate::visibility::test_support::{CALLERS, Owner, expected, may_modify, team};
     let f = fixture(pool).await;
@@ -778,7 +778,7 @@ async fn object_visibility_matrix_for_video_jobs(pool: PgPool) {
 /// #497 on real PostgreSQL: the job poller's claim with every pooled
 /// connection busy, or timing out on a lock, is counted once at the
 /// `job_storage` stage with its cause; a claim that runs records nothing.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_failed_job_claim_names_its_cause(pool: PgPool) {
     use crate::db::{
         accounting_failure::tests::labels,
@@ -834,7 +834,7 @@ async fn a_failed_job_claim_names_its_cause(pool: PgPool) {
 /// #497: a job record that fails after admission and the provider's
 /// acceptance leaves the reservation pending with no job to settle it (only
 /// reconciliation does): counted at `job_settlement`, not `job_storage`.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_job_record_failing_after_acceptance_is_a_settlement_failure(pool: PgPool) {
     use crate::db::{
         accounting_failure::tests::labels,
@@ -882,7 +882,7 @@ async fn a_job_record_failing_after_acceptance_is_a_settlement_failure(pool: PgP
 /// behind whose reservation a short lease would turn `unknown` while the
 /// provider's video is polled: the create fails and the reservation keeps the
 /// hold it was admitted with, for reconciliation.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_video_lease_that_cannot_be_extended_leaves_no_job_row(pool: PgPool) {
     let f = fixture(pool).await;
     video_setup(&f).await;
@@ -932,7 +932,7 @@ pub(super) async fn refuse_lease_extensions(pool: &PgPool) {
     .unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_failed_video_commit_is_a_settlement_failure_and_leaves_no_job(pool: PgPool) {
     let f = fixture(pool).await;
     video_setup(&f).await;
@@ -968,7 +968,7 @@ async fn a_failed_video_commit_is_a_settlement_failure_and_leaves_no_job(pool: P
     assert_eq!(actual, None);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn an_accepted_video_transaction_that_cannot_begin_is_a_settlement_failure(pool: PgPool) {
     let f = fixture(pool).await;
     f.store.pool.close().await;
@@ -990,7 +990,7 @@ async fn an_accepted_video_transaction_that_cannot_begin_is_a_settlement_failure
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_video_reconciled_during_the_provider_call_is_recorded_and_finishes(pool: PgPool) {
     let f = fixture(pool).await;
     video_setup(&f).await;
@@ -1028,7 +1028,7 @@ async fn a_video_reconciled_during_the_provider_call_is_recorded_and_finishes(po
     assert_eq!(amounts(&f, request_id).await.2, None);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn an_accepted_video_global_prefix_failure_is_a_settlement_failure(pool: PgPool) {
     let f = fixture(pool).await;
     let limited = sqlx::postgres::PgPoolOptions::new()

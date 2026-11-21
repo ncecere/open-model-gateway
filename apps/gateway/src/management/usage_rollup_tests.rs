@@ -13,7 +13,7 @@ async fn explore_in(
     crate::rollups::OVERRIDE.scope(mode, get(f, u, path)).await
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn explore_from_rollups_equals_the_raw_scan(pool: PgPool) {
     let f = fixture(&pool).await;
     let r = route(&pool, "alpha", "openai").await;

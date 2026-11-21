@@ -28,7 +28,7 @@ async fn rejects_extra(pool: &PgPool, path: &str, base: Value) -> Fixture {
     f
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn mapping_patch_rejects_unknown_fields_after_valid_control(pool: PgPool) {
     let f = fixture(&pool).await;
     let (status, created) = call(&f.s, &f.admin, "POST", "/api/v1/platform/oidc/group-mappings", json!({"issuer":"https://idp.example.test","group_value":"control","target_kind":"platform","platform_role":"user","enabled":false})).await;
@@ -54,7 +54,7 @@ async fn mapping_patch_rejects_unknown_fields_after_valid_control(pool: PgPool) 
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn general_rejects_configuration_primitives(pool: PgPool) {
     rejects_extra(
         &pool,
@@ -63,7 +63,7 @@ async fn general_rejects_configuration_primitives(pool: PgPool) {
     )
     .await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn privacy_rejects_configuration_primitives(pool: PgPool) {
     rejects_extra(
         &pool,
@@ -72,7 +72,7 @@ async fn privacy_rejects_configuration_primitives(pool: PgPool) {
     )
     .await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn email_rejects_configuration_primitives(pool: PgPool) {
     rejects_extra(
         &pool,
@@ -81,14 +81,14 @@ async fn email_rejects_configuration_primitives(pool: PgPool) {
     )
     .await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn storage_rejects_configuration_primitives(pool: PgPool) {
     let f = rejects_extra(&pool, "/api/v1/platform/settings/storage", json!({"batch":{"enabled":false,"retention_days":7},"video":{"enabled":false,"retention_days":7},"user_files":{"enabled":false,"retention_days":30},"export":{"retention_days":1}})).await;
     let (status, _) = call(&f.s, &f.admin, "PUT", "/api/v1/platform/settings/storage", json!({"batch":{"enabled":false,"retention_days":7,"path":"/etc/passwd"},"video":{"enabled":false,"retention_days":7},"user_files":{"enabled":false,"retention_days":30},"export":{"retention_days":1}})).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn limits_and_alerts_reject_configuration_primitives(pool: PgPool) {
     let f = fixture(&pool).await;
     let (status, _) = call(&f.s, &f.admin, "PUT", "/api/v1/platform/workspace-types/team/policy", json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":[],"environment_variables":{"UI_PASSWORD":"attacker"}})).await;
@@ -117,7 +117,7 @@ async fn limits_and_alerts_reject_configuration_primitives(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn test_actions_reject_configuration_bodies(pool: PgPool) {
     let mut f = fixture(&pool).await;
     let (port, _mail) = crate::email::mock::serve(crate::email::mock::Behaviour::default()).await;
@@ -195,7 +195,7 @@ async fn test_actions_reject_configuration_bodies(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn connections_reject_unknown_fields_and_gateway_secrets(pool: PgPool) {
     use crate::providers::secrets::{EnvSecrets, SECRET_POINTERS};
     let mut f = fixture(&pool).await;
@@ -296,7 +296,7 @@ async fn connections_reject_unknown_fields_and_gateway_secrets(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn logo_headers_cannot_select_a_filesystem_path(pool: PgPool) {
     use crate::filestore::{FileStoreConfig, FileStoreRuntime, ObjectKey};
     use base64::Engine;

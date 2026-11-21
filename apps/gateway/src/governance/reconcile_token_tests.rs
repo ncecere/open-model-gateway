@@ -55,7 +55,7 @@ async fn reconciled_count(pool: &sqlx::PgPool, execution: Uuid) -> i64 {
 /// needed to reproduce this: the revoke is fully committed before
 /// `resolve_usage` is even called, exactly reproducing "revoked between
 /// tx1's commit and tx2" with no timing dependency at all.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn revoked_token_between_authentication_and_the_write_transaction_is_refused(
     pool: sqlx::PgPool,
 ) {
@@ -122,7 +122,7 @@ async fn revoked_token_between_authentication_and_the_write_transaction_is_refus
 /// lookup_rejects_expired_revoked_and_owner_not_admin` already uses, not a
 /// bypass of the immutability/finality/no-delete triggers this fix
 /// actually depends on.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn expired_token_between_authentication_and_the_write_transaction_is_refused(
     pool: sqlx::PgPool,
 ) {
@@ -181,7 +181,7 @@ async fn expired_token_between_authentication_and_the_write_transaction_is_refus
 /// `resolve_usage`'s successful audit row carries the authenticating
 /// token's id; the same call with a plain browser actor (`From<Uuid>`)
 /// carries none, exactly as before this fix.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn successful_reconciliation_audit_carries_the_token_id_browser_audit_stays_null(
     pool: sqlx::PgPool,
 ) {
@@ -255,7 +255,7 @@ async fn successful_reconciliation_audit_carries_the_token_id_browser_audit_stay
 /// now holds `FOR SHARE` across its own write -- blocks a concurrent
 /// explicit revoke until the holder commits, deterministically (polling
 /// `pg_blocking_pids`, never a sleep used to decide ordering).
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn token_row_live_for_share_blocks_a_concurrent_explicit_revoke_until_commit(
     pool: sqlx::PgPool,
 ) {

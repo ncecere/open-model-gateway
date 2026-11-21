@@ -101,7 +101,7 @@ async fn assert_consistent(pool: &PgPool, context: &str) {
     assert!(report.consistent(), "{context}: {report:#?}");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn months_are_created_ahead_and_rows_route_at_the_boundary(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     let upper = legacy_upper(&pool).await;
@@ -203,7 +203,7 @@ async fn months_are_created_ahead_and_rows_route_at_the_boundary(pool: PgPool) {
 /// vacuums after 10 k + 1 % dead rows and always cleans its indexes (the
 /// expired-lease read walks dead `governance_leases` entries); other history
 /// keeps the defaults.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn reservation_partitions_get_threshold_autovacuum_now_and_when_created(pool: PgPool) {
     async fn options(pool: &PgPool, parent: &str) -> Vec<(String, Option<Vec<String>>)> {
         sqlx::query_as("SELECT c.relname::text,c.reloptions FROM pg_inherits h JOIN pg_class c ON c.oid=h.inhrelid WHERE h.inhparent=$1::regclass ORDER BY 1")
@@ -253,7 +253,7 @@ async fn reservation_partitions_get_threshold_autovacuum_now_and_when_created(po
     assert!(runtime.is_empty(), "{runtime:?}");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn missing_future_months_raise_and_clear_the_builtin_alert(pool: PgPool) {
     let upper = legacy_upper(&pool).await;
     // Seen from eight months later, nothing ahead is covered.
@@ -300,7 +300,7 @@ async fn missing_future_months_raise_and_clear_the_builtin_alert(pool: PgPool) {
     assert!(job.short.is_empty() && job.error.is_none(), "{job:?}");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn preflight_accepts_partitions_of_known_parents_only(pool: PgPool) {
     let store = Store::new(pool.clone());
     assert!(store.is_ready().await);
@@ -335,7 +335,7 @@ async fn preflight_accepts_partitions_of_known_parents_only(pool: PgPool) {
     assert!(store.is_ready().await);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn history_never_moves_between_month_partitions(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     let upper = legacy_upper(&pool).await;

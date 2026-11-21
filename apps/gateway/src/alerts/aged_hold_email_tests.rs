@@ -103,7 +103,7 @@ async fn user(s: &Seed, email: &str, role: Option<&str>) -> Uuid {
     id
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_email_recipient_set_is_platform_admin_only_in_every_scope(pool: PgPool) {
     let s = seed(pool).await;
     let auditor = user(&s, "auditor@example.test", Some("auditor")).await;
@@ -164,7 +164,7 @@ async fn aged_hold_email_recipient_set_is_platform_admin_only_in_every_scope(poo
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_email_personal_aggregate_loopback_acceptance_is_identity_free(pool: PgPool) {
     let s = seed(pool).await;
     fire(&s, s.personal, s.personal_key, 169).await;
@@ -240,11 +240,11 @@ async fn refusal(pool: PgPool, mutation: &str) {
     assert_eq!(count(&s, "SELECT count(*) FROM alert_deliveries WHERE status='no_recipients' AND sent=0 AND recipients=1").await, 1);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_email_rechecks_revoked_admin_even_if_still_entitled(pool: PgPool) {
     refusal(pool, "INSERT INTO platform_role_grants(user_id,role,source) SELECT id,'user','manual' FROM users WHERE email='admin@example.test'; UPDATE platform_role_grants SET revoked_at=clock_timestamp() WHERE role='admin'").await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_email_rechecks_lost_entitlement(pool: PgPool) {
     refusal(
         pool,
@@ -252,7 +252,7 @@ async fn aged_hold_email_rechecks_lost_entitlement(pool: PgPool) {
     )
     .await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_email_rechecks_suspended_account(pool: PgPool) {
     refusal(
         pool,
@@ -260,7 +260,7 @@ async fn aged_hold_email_rechecks_suspended_account(pool: PgPool) {
     )
     .await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_email_rechecks_cleaned_account(pool: PgPool) {
     refusal(
         pool,
@@ -268,7 +268,7 @@ async fn aged_hold_email_rechecks_cleaned_account(pool: PgPool) {
     )
     .await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_email_rechecks_changed_address_without_adding_new_snapshot_recipient(
     pool: PgPool,
 ) {
@@ -278,11 +278,11 @@ async fn aged_hold_email_rechecks_changed_address_without_adding_new_snapshot_re
     )
     .await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_email_rechecks_reconciled_hold_before_tick_retires_incident(pool: PgPool) {
     refusal(pool, "UPDATE governance_reservations SET state='settled',actual_microusd=1,input_tokens=1,output_tokens=1 WHERE state='unknown'").await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_email_rechecks_disabled_workspace(pool: PgPool) {
     refusal(
         pool,
@@ -290,16 +290,16 @@ async fn aged_hold_email_rechecks_disabled_workspace(pool: PgPool) {
     )
     .await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_email_rechecks_open_incident(pool: PgPool) {
     refusal(pool, "UPDATE alert_events SET resolved_at=clock_timestamp(),resolution='superseded' WHERE kind='aged_unknown_hold'").await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_email_rechecks_critical_band_even_while_younger_aged_hold_remains(pool: PgPool) {
     refusal(pool, "UPDATE governance_reservations r SET state='settled',actual_microusd=1,input_tokens=1,output_tokens=1 WHERE state='unknown' AND EXISTS(SELECT FROM monetary_ledger l WHERE l.execution_id=r.execution_id AND l.admitted_at=r.admitted_at AND l.kind='unknown' AND l.created_at<clock_timestamp()-interval '168 hours')").await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_email_stale_warning_is_not_claimed_after_scope_enters_critical_band(
     pool: PgPool,
 ) {
@@ -319,7 +319,7 @@ async fn aged_hold_email_stale_warning_is_not_claimed_after_scope_enters_critica
     assert_eq!(count(&s, "SELECT count(*) FROM alert_deliveries WHERE status='no_recipients' AND recipients=0 AND attempt_count=0").await, 1);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_email_admin_membership_removal_does_not_revoke_platform_authority(pool: PgPool) {
     let s = seed(pool).await;
     sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) SELECT $1,id,'admin','manual' FROM users WHERE email='admin@example.test'")
@@ -341,7 +341,7 @@ async fn aged_hold_email_admin_membership_removal_does_not_revoke_platform_autho
     assert!(rx.try_recv().is_err());
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_email_retry_backoff_and_stale_completion_fencing_are_unchanged(pool: PgPool) {
     let s = seed(pool).await;
     fire(&s, s.team, s.key, 25).await;
@@ -389,7 +389,7 @@ async fn aged_hold_email_retry_backoff_and_stale_completion_fencing_are_unchange
     assert_eq!(count(&s, "SELECT count(*) FROM alert_deliveries WHERE status='sent' AND sent=1 AND attempt_count=3").await, 1);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_email_recipient_snapshot_is_capped_at_fifty(pool: PgPool) {
     let s = seed(pool).await;
     for n in 0..55 {
@@ -416,7 +416,7 @@ async fn aged_hold_email_recipient_snapshot_is_capped_at_fifty(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_email_rechecks_admin_between_smtp_handoffs(pool: PgPool) {
     let s = seed(pool).await;
     user(&s, "second-admin@example.test", Some("admin")).await;
@@ -457,7 +457,7 @@ async fn aged_hold_email_rechecks_admin_between_smtp_handoffs(pool: PgPool) {
     assert_eq!(count(&s, "SELECT count(*) FROM alert_deliveries WHERE status='sent' AND recipients=2 AND sent=1 AND attempt_count=1").await, 1);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_email_quota_suppressed_incidents_never_snapshot_or_claim(pool: PgPool) {
     let s = seed(pool).await;
     let events = generation_events(&s, Some(s.team), 100).await;

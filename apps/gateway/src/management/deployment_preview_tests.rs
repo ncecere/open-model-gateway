@@ -42,7 +42,7 @@ async fn state(pool: &PgPool) -> Value {
     }
     Value::Object(result)
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn deployment_preview_last_route_multi_catalog_visibility_and_no_writes(pool: PgPool) {
     let f = fixture(&pool).await;
     let m = model(&pool, "preview-model").await;
@@ -127,7 +127,7 @@ async fn deployment_preview_last_route_multi_catalog_visibility_and_no_writes(po
     assert_eq!(unchanged["affected_workspaces"]["total"], 0);
     assert_eq!(before, state(&pool).await);
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn deployment_preview_gained_alternative_routes_and_apply_behavior(pool: PgPool) {
     let f = fixture(&pool).await;
     let m = model(&pool, "preview-enable").await;
@@ -215,7 +215,7 @@ async fn deployment_preview_gained_alternative_routes_and_apply_behavior(pool: P
         );
     }
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn deployment_preview_live_replacement_and_disabled_model_effects(pool: PgPool) {
     let f = fixture(&pool).await;
     let m = model(&pool, "preview-replacement").await;
@@ -290,7 +290,7 @@ async fn deployment_preview_live_replacement_and_disabled_model_effects(pool: Pg
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn deployment_preview_does_not_wait_for_management_locks(pool: PgPool) {
     let f = fixture(&pool).await;
     let m = model(&pool, "preview-lock-free").await;
@@ -303,7 +303,7 @@ async fn deployment_preview_does_not_wait_for_management_locks(pool: PgPool) {
     lock.rollback().await.unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn deployment_preview_bounds_after_visibility_filter(pool: PgPool) {
     let f = fixture(&pool).await;
     let m = model(&pool, "preview-bounded").await;

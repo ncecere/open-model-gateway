@@ -163,7 +163,7 @@ impl Harness {
 }
 
 /// `GET`/`PUT /platform/workspaces/{ws}/catalogs` on a personal workspace.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn personal_workspace_catalog_override_is_platform_managed_and_read_back(pool: PgPool) {
     let f = fixture(&pool).await;
     let h = Harness::new(&pool, &f).await;
@@ -290,7 +290,7 @@ async fn read_policy(h: &Harness, label: &str, s: &Session, path: &str) -> Value
 }
 
 /// `GET`/`PUT /platform/workspaces/{ws}/policy` on a personal workspace.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn personal_workspace_policy_is_platform_managed_and_read_back(pool: PgPool) {
     let f = fixture(&pool).await;
     let h = Harness::new(&pool, &f).await;
@@ -342,7 +342,7 @@ async fn personal_workspace_policy_is_platform_managed_and_read_back(pool: PgPoo
 
 /// The platform cost report shows the personal workspace's identity and totals
 /// but no key, request or session data.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn personal_workspace_row_in_platform_cost_report_is_identity_and_totals_only(pool: PgPool) {
     let f = fixture(&pool).await;
     let h = Harness::new(&pool, &f).await;
@@ -410,7 +410,7 @@ async fn personal_workspace_row_in_platform_cost_report_is_identity_and_totals_o
 /// Usage explore by workspace at platform scope: the personal workspace is a
 /// row of its own with its id and owner label, and its keys collapse into one
 /// anonymous row.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn personal_workspace_row_in_platform_usage_explore_is_identity_and_totals_only(
     pool: PgPool,
 ) {
@@ -483,7 +483,7 @@ async fn personal_workspace_row_in_platform_usage_explore_is_identity_and_totals
 
 /// Platform storage usage: the personal workspace row carries its id, the
 /// generic workspace name and its totals, with no purpose split.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn personal_workspace_row_in_platform_storage_usage_is_identity_and_totals_only(
     pool: PgPool,
 ) {

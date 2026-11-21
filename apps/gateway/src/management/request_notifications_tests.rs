@@ -58,7 +58,7 @@ fn rid(v: &Value) -> String {
     v["id"].as_str().unwrap().to_owned()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn approvers_and_requesters_are_notified_live(pool: PgPool) {
     let f = fixture(&pool).await;
     let m = eligible_model(&pool, "company/notify").await;
@@ -207,7 +207,7 @@ async fn approvers_and_requesters_are_notified_live(pool: PgPool) {
     assert!(item.get("reason").is_none() && item.get("requester").is_none());
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn lost_authority_hides_request_notifications_at_once(pool: PgPool) {
     let f = fixture(&pool).await;
     let m = eligible_model(&pool, "company/hidden").await;
@@ -262,7 +262,7 @@ async fn lost_authority_hides_request_notifications_at_once(pool: PgPool) {
     assert_eq!(rows, 0);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn request_items_merge_with_incidents_and_keep_their_windows(pool: PgPool) {
     let f = fixture(&pool).await;
     // A workspace incident the owner sees (a workspace budget rule), fired

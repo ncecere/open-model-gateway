@@ -34,7 +34,7 @@ pub(super) async fn generation_events(s: &Seed, workspace: Option<Uuid>, n: i32)
 }
 pub(super) const GENERATE: &str = "INSERT INTO alert_deliveries(id,event_id,transition) SELECT gen_random_uuid(),id,'fired' FROM unnest($1::uuid[]) id ON CONFLICT(event_id,transition) DO NOTHING";
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn alert_generation_across_rules_transitions_buckets_and_webhooks(pool: PgPool) {
     let s = seed(pool).await;
     sqlx::query("INSERT INTO alert_webhook_destinations(label,url,current_secret_ref) VALUES('test','https://receiver.invalid/','env:HOOK')").execute(&s.pool).await.unwrap();
@@ -103,7 +103,7 @@ async fn alert_generation_across_rules_transitions_buckets_and_webhooks(pool: Pg
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn alert_generation_replica_race_at_99_and_rollback_duplicate_multirow(pool: PgPool) {
     let s = seed(pool).await;
     let ids = generation_events(&s, Some(s.team), 103).await;
@@ -167,7 +167,7 @@ async fn alert_generation_replica_race_at_99_and_rollback_duplicate_multirow(poo
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn alert_generation_canonical_locks_opposite_bucket_orders(pool: PgPool) {
     let s = seed(pool).await;
     let a = generation_events(&s, Some(s.team), 2).await;
@@ -224,7 +224,7 @@ async fn alert_generation_canonical_locks_opposite_bucket_orders(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn alert_generation_real_reconcile_and_key_expiry_lock_order(pool: PgPool) {
     let s = seed(pool).await;
     let ws = Uuid::new_v4();
@@ -299,7 +299,7 @@ async fn alert_generation_real_reconcile_and_key_expiry_lock_order(pool: PgPool)
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn alert_generation_old_sql_inverted_bucket_wait_is_refused(pool: PgPool) {
     let low = Uuid::parse_str("00000001-0000-0000-0000-000000000000").unwrap();
     let high = Uuid::parse_str("00000002-0000-0000-0000-000000000000").unwrap();
@@ -323,7 +323,7 @@ async fn alert_generation_old_sql_inverted_bucket_wait_is_refused(pool: PgPool) 
     b.commit().await.unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn alert_generation_clock_boundary_forgery_and_isolation(pool: PgPool) {
     let s = seed(pool).await;
     let ids = generation_events(&s, Some(s.team), 3).await;
@@ -407,7 +407,7 @@ async fn alert_generation_clock_boundary_forgery_and_isolation(pool: PgPool) {
 /// A REPEATABLE READ snapshot taken before another transaction commits 50
 /// recipients would count a stale 0 and admit a 51st; the guard therefore
 /// refuses elevated isolation outright (review finding on #277).
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn alert_generation_recipient_guard_refuses_stale_snapshots(pool: PgPool) {
     let s = seed(pool).await;
     let ids = generation_events(&s, Some(s.team), 1).await;
@@ -457,7 +457,7 @@ async fn alert_generation_recipient_guard_refuses_stale_snapshots(pool: PgPool) 
     assert_eq!(count, 50);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn alert_generation_recipient_50_51_and_suppressed_terminal(pool: PgPool) {
     let s = seed(pool).await;
     let ids = generation_events(&s, Some(s.team), 101).await;

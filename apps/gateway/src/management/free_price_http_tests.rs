@@ -11,7 +11,7 @@ impl Drop for Server {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn free_price_runtime_http_operator_flow(pool: PgPool) {
     let f = crate::governance::tests::db::fixture(pool.clone()).await;
     let free = f.price(0).await;

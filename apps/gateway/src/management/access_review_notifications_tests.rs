@@ -45,7 +45,7 @@ async fn item(pool: &PgPool, campaign: &Value, user: Uuid, ws: Option<Uuid>) -> 
         .bind(id(campaign)).bind(user).bind(ws).fetch_one(pool).await.unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn reviewers_are_reminded_until_they_have_decided(pool: PgPool) {
     let f = fixture(&pool).await;
     let c = start(&f, 14).await;
@@ -147,7 +147,7 @@ async fn reviewers_are_reminded_until_they_have_decided(pool: PgPool) {
     assert!(reminders(&f, &second, "").await.is_empty());
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_reminder_is_unread_again_when_the_due_date_approaches_and_passes(pool: PgPool) {
     let f = fixture(&pool).await;
     // Due in one day: already within 24 hours.
@@ -193,7 +193,7 @@ async fn a_reminder_is_unread_again_when_the_due_date_approaches_and_passes(pool
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn read_marks_are_insert_only_and_bound_to_the_reader(pool: PgPool) {
     let f = fixture(&pool).await;
     let c = start(&f, 14).await;
@@ -253,7 +253,7 @@ async fn revoke_membership(pool: &PgPool, ws: Uuid, user: Uuid) {
     tx.commit().await.unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn reminders_follow_the_reviewer_rule_and_the_items_state(pool: PgPool) {
     let f = fixture(&pool).await;
     // A second Team member and a Team admin.
@@ -366,7 +366,7 @@ async fn reminders_follow_the_reviewer_rule_and_the_items_state(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn an_overdue_reminder_is_dated_by_its_due_date(pool: PgPool) {
     let f = fixture(&pool).await;
     let c = start(&f, 1).await;
@@ -402,7 +402,7 @@ async fn an_overdue_reminder_is_dated_by_its_due_date(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn reminders_stay_cheap_for_everyone_at_twenty_campaigns_of_five_thousand(pool: PgPool) {
     let f = fixture(&pool).await;
     sqlx::query("WITH u AS (INSERT INTO users(id,email) SELECT gen_random_uuid(),'bulk'||n||'@example.test' FROM generate_series(1,4997) n RETURNING id) INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) SELECT $1,id,'member','manual' FROM u")

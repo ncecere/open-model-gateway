@@ -70,7 +70,7 @@ async fn lease_covers_the_job(w: &World, job: &JobRow) {
 /// Initial admission INSERTs the final lease, without a later UPDATE. After
 /// the original ten-minute admission interval, reconciliation leaves the
 /// envelope pending and the gateway runner executes every line.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_gateway_batch_inserts_its_final_lease_and_needs_no_extension(pool: PgPool) {
     let (w, job) = created(pool, false, None).await;
     assert_eq!(job.mode(), Some(BatchMode::Gateway));
@@ -96,7 +96,7 @@ async fn a_gateway_batch_inserts_its_final_lease_and_needs_no_extension(pool: Pg
 
 /// A native batch also INSERTs its final lease; refusing later extensions
 /// cannot shorten the hold protecting its submission and polling.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_native_batch_inserts_its_final_lease_and_needs_no_extension(pool: PgPool) {
     let (w, job) = created(pool, true, None).await;
     assert_eq!(job.mode(), Some(BatchMode::Native));
@@ -108,7 +108,7 @@ async fn a_native_batch_inserts_its_final_lease_and_needs_no_extension(pool: PgP
 }
 
 /// A longer completion window lengthens the lease with it.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_longer_window_lengthens_the_envelope_lease(pool: PgPool) {
     let w = world(pool, false, false, 1).await;
     let file = w
@@ -192,12 +192,12 @@ async fn a_job_row_that_cannot_be_written(pool: PgPool, native: bool, metadata: 
     consistent(&w.f).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_native_job_row_that_cannot_be_written_leaves_no_envelope(pool: PgPool) {
     a_job_row_that_cannot_be_written(pool, true, None).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_gateway_job_row_that_cannot_be_written_leaves_no_envelope(pool: PgPool) {
     a_job_row_that_cannot_be_written(pool, false, Some(json!({"omg_mode":"gateway"}))).await;
 }
@@ -216,7 +216,7 @@ async fn live_files(w: &World) -> i64 {
 /// (its short lease ran out while the job stayed queued): the runner attempts
 /// no line, the batch ends failed with its own reason and error-file entries,
 /// and the envelope keeps its hold for reconciliation.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_batch_left_with_an_unknown_envelope_fails_with_its_own_reason(pool: PgPool) {
     let w = world(pool, false, false, 1).await;
     let file = w
@@ -282,7 +282,7 @@ async fn a_batch_left_with_an_unknown_envelope_fails_with_its_own_reason(pool: P
 
 /// Pause admission just before its job insert, while it holds the user advisory
 /// lock, then let SCIM request that lock while holding its user row lock.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scim_user_lock_and_batch_creator_fk_do_not_deadlock(pool: PgPool) {
     let w = world(pool, false, false, 1).await;
     let file = w
@@ -336,7 +336,7 @@ async fn scim_user_lock_and_batch_creator_fk_do_not_deadlock(pool: PgPool) {
     consistent(&w.f).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_lost_batch_commit_ack_keeps_the_committed_jobs_work_file(pool: PgPool) {
     let w = world(pool, false, false, 1).await;
     let file = w
@@ -375,7 +375,7 @@ async fn a_lost_batch_commit_ack_keeps_the_committed_jobs_work_file(pool: PgPool
     consistent(&w.f).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_file_rekey_does_not_block_the_batch_input_fk(pool: PgPool) {
     let w = world(pool, false, false, 1).await;
     let file = w
@@ -413,7 +413,7 @@ async fn make_unknown(w: &World, job: &JobRow) {
     assert_eq!(envelope(w, job).await, "unknown");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_native_batch_with_an_unknown_envelope_finishes_and_keeps_its_hold(pool: PgPool) {
     let (w, job) = created(pool, true, None).await;
     make_unknown(&w, &job).await;
@@ -433,7 +433,7 @@ async fn a_native_batch_with_an_unknown_envelope_finishes_and_keeps_its_hold(poo
     consistent(&w.f).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_resumed_batch_with_an_unknown_envelope_keeps_its_finished_lines(pool: PgPool) {
     let (w, job) = created(pool, false, None).await;
     w.jobs
@@ -515,17 +515,17 @@ async fn stopped_unknown(pool: PgPool, cancelled: bool) {
     consistent(&w.f).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn cancellation_precedes_hold_unavailable_and_keeps_the_unknown_hold(pool: PgPool) {
     stopped_unknown(pool, true).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn expiry_precedes_hold_unavailable_and_keeps_the_unknown_hold(pool: PgPool) {
     stopped_unknown(pool, false).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_terminal_batch_with_a_settled_envelope_can_be_reclaimed(pool: PgPool) {
     let (w, job) = created(pool, false, None).await;
     sqlx::raw_sql("CREATE FUNCTION refuse_settled_640() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.settled_at IS NOT NULL THEN RAISE EXCEPTION 'settled marker refused'; END IF; RETURN NEW; END $$; CREATE TRIGGER refuse_settled_640 BEFORE UPDATE ON async_jobs FOR EACH ROW EXECUTE FUNCTION refuse_settled_640()")
@@ -569,7 +569,7 @@ async fn a_terminal_batch_with_a_settled_envelope_can_be_reclaimed(pool: PgPool)
     consistent(&w.f).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_batch_in_global_admission_mode_inserts_its_job_and_final_lease(pool: PgPool) {
     let mut w = world(pool, false, false, 1).await;
     w.jobs.store = w
@@ -589,7 +589,7 @@ async fn a_batch_in_global_admission_mode_inserts_its_job_and_final_lease(pool: 
     consistent(&w.f).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_failed_batch_commit_keeps_work_until_its_outcome_is_known(pool: PgPool) {
     let w = world(pool, false, false, 1).await;
     sqlx::raw_sql("CREATE FUNCTION refuse_job_commit_640() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'commit refused'; END $$; CREATE CONSTRAINT TRIGGER refuse_job_commit_640 AFTER INSERT ON async_jobs DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION refuse_job_commit_640()")

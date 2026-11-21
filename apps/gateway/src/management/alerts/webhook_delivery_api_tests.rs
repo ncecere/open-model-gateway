@@ -1,6 +1,6 @@
 use super::*;
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn status_never_counts_late_stale_generation_as_waiting(pool: PgPool) {
     let f = fixture(&pool).await;
     let id:Uuid=sqlx::query_scalar("INSERT INTO alert_webhook_destinations(label,url,current_secret_ref,enabled) VALUES('receiver','https://example.test/hook','env:HOOK',true) RETURNING id").fetch_one(&pool).await.unwrap();
@@ -47,7 +47,7 @@ async fn status_never_counts_late_stale_generation_as_waiting(pool: PgPool) {
     assert_eq!(status["data"].as_array().unwrap().len(), 0);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn saved_tests_limits_redaction_and_strict_body(pool: PgPool) {
     let f = fixture(&pool).await;
     let id: Uuid=sqlx::query_scalar("INSERT INTO alert_webhook_destinations(label,url,current_secret_ref) VALUES('receiver','https://example.test/private-canary','env:PRIVATE_CANARY') RETURNING id").fetch_one(&pool).await.unwrap();
@@ -105,7 +105,7 @@ async fn saved_tests_limits_redaction_and_strict_body(pool: PgPool) {
     assert_eq!(count, 2);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn test_limits_destination_and_installation_across_actors(pool: PgPool) {
     let f = fixture(&pool).await;
     let other = user(&pool, "second-webhook-admin", "admin").await;

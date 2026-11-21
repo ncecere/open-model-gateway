@@ -3,7 +3,7 @@ use super::*;
 
 const HOLDS: &str = "/api/v1/platform/legal-holds";
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn holds_are_admin_placed_audited_listed_and_released_once(pool: PgPool) {
     let f = fixture(&pool).await;
     let user = json!({"user_id": f.outsider.user_id, "reference": "CASE-2026-0042"});

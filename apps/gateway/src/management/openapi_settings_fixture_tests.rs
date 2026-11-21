@@ -224,7 +224,7 @@ async fn reject_json_configuration(
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn management_openapi_slice5_fixtures(pool: PgPool) {
     let mut observed = PositiveFixtures::default();
     let mut f = fixture(&pool).await;

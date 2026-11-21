@@ -35,12 +35,12 @@ async fn check_url_length(pool: PgPool, field: &str) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn support_url_encoded_length_boundary(pool: PgPool) {
     check_url_length(pool, "support_url").await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn logo_url_encoded_length_boundary(pool: PgPool) {
     check_url_length(pool, "logo_url").await;
 }

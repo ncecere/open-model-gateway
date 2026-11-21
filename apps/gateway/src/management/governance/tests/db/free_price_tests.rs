@@ -23,7 +23,7 @@ async fn unknown(f: &Fixture, price: Option<Uuid>, held: Option<i64>) -> Uuid {
     id
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn free_price_preview_apply_preserves_null_and_audits(pool: PgPool) {
     let f = fixture(pool).await;
     let free = f.price(0).await;
@@ -82,7 +82,7 @@ async fn free_price_preview_apply_preserves_null_and_audits(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn free_price_selection_refusals_and_concurrency(pool: PgPool) {
     let f = fixture(pool).await;
     let priced = f.price(1_000_000).await;
@@ -202,7 +202,7 @@ async fn v3(f: &Fixture, mutate: impl FnOnce(&mut Vec<Value>)) -> Uuid {
     id
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn free_price_v3_missing_unknown_priced_and_selectors(pool: PgPool) {
     let f = fixture(pool).await;
     let free = v3(&f, |_| {}).await;
@@ -244,7 +244,7 @@ async fn free_price_v3_missing_unknown_priced_and_selectors(pool: PgPool) {
     assert_eq!(settled, vec![eligible]);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn free_price_resolution_unblocks_history_archive(pool: PgPool) {
     use crate::archive::{Group, Month, Refusal, Request, archive_as_of};
     use gateway_datetime_compat::UtcInstant;
@@ -298,7 +298,7 @@ async fn free_price_resolution_unblocks_history_archive(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn free_price_rechecks_role_after_authority_lock_wait(pool: PgPool) {
     use crate::governance::locks::{self, Scope};
     let f = fixture(pool).await;
@@ -356,7 +356,7 @@ async fn free_price_rechecks_role_after_authority_lock_wait(pool: PgPool) {
     assert_eq!(state, "unknown");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn free_price_v2_cache_and_pinned_batch_tier(pool: PgPool) {
     let f = fixture(pool).await;
     let na = json!({"status":"not_applicable"});
@@ -443,7 +443,7 @@ async fn free_price_v2_cache_and_pinned_batch_tier(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn free_price_native_job_requires_terminal_gateway_record(pool: PgPool) {
     let f = fixture(pool).await;
     let free = v3(&f, |_| {}).await;
@@ -484,7 +484,7 @@ async fn free_price_native_job_requires_terminal_gateway_record(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn free_price_variants_require_free_default_coverage(pool: PgPool) {
     let f = fixture(pool).await;
     let admin = user(f.owner, true);
@@ -530,7 +530,7 @@ async fn many_unknowns(f: &Fixture, price: Uuid, count: i32) {
         .bind(f.principal.workspace_id).bind(f.principal.key_id).bind(f.deployment).bind(price).bind(count).execute(&f.store.pool).await.unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn free_price_large_bucket_makes_bounded_progress(pool: PgPool) {
     let f = fixture(pool).await;
     let free = f.price(0).await;

@@ -33,7 +33,7 @@ impl Drop for Server {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn ordinary_embedding_sdk_default_real_http_all_profiles(pool: sqlx::PgPool) {
     let store = Store::new(pool.clone());
     let keys = bootstrap::seed(&store, Environment::Development)
@@ -419,7 +419,7 @@ async fn invalid_results_keep_observed_usage_and_holds(
 
 /// No Content-Length: exercise the handler's JSON rejection, not the outer
 /// declared-length body limit. The real gateway authenticates before parsing.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn embeddings_streamed_oversized_body_uses_shared_envelope(pool: sqlx::PgPool) {
     let store = Store::new(pool);
     let keys = bootstrap::seed(&store, Environment::Development)

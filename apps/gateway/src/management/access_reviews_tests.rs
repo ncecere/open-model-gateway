@@ -69,7 +69,7 @@ fn sqlstate(r: Result<sqlx::postgres::PgQueryResult, sqlx::Error>) -> Option<Str
     })
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_campaign_snapshots_live_shared_access(pool: PgPool) {
     let f = fixture(&pool).await;
     // Group provenance is reviewed too, shown distinctly (memberships and platform roles).
@@ -245,7 +245,7 @@ async fn a_campaign_snapshots_live_shared_access(pool: PgPool) {
     assert_eq!(audit, ("access_review".to_owned(), json!({"count":4})));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn only_platform_admins_start_and_close_and_platform_readers_read(pool: PgPool) {
     let f = fixture(&pool).await;
     let (status, c) = start(&f, json!({"name":"Mine","subjects":["platform_roles"]})).await;
@@ -333,7 +333,7 @@ async fn only_platform_admins_start_and_close_and_platform_readers_read(pool: Pg
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn campaign_bodies_and_bounds_are_strict(pool: PgPool) {
     let f = fixture(&pool).await;
     let other = Uuid::new_v4();
@@ -471,7 +471,7 @@ async fn campaign_bodies_and_bounds_are_strict(pool: PgPool) {
     assert_eq!(status, StatusCode::OK, "{body}");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn concurrent_starts_never_exceed_twenty_open(pool: PgPool) {
     let f = fixture(&pool).await;
     for n in 0..19 {
@@ -501,7 +501,7 @@ async fn concurrent_starts_never_exceed_twenty_open(pool: PgPool) {
     assert_eq!(open, 20);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_campaign_holds_at_most_5000_items(pool: PgPool) {
     let f = fixture(&pool).await;
     // 4,999 more members of the Team: 5,001 shared memberships in all.
@@ -534,7 +534,7 @@ async fn a_campaign_holds_at_most_5000_items(pool: PgPool) {
     assert_eq!(c["item_count"], 1);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_changing_during_the_snapshot_refuses_the_campaign(pool: PgPool) {
     let f = fixture(&pool).await;
     // A real race: the snapshot's first item waits on an advisory lock this
@@ -607,7 +607,7 @@ async fn access_changing_during_the_snapshot_refuses_the_campaign(pool: PgPool) 
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn the_database_derives_and_binds_every_item(pool: PgPool) {
     let f = fixture(&pool).await;
     let (status, c) = start(

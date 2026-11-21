@@ -69,7 +69,7 @@ fn scopes(values: &[&str]) -> Vec<String> {
     values.iter().map(|s| s.to_string()).collect()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn create_returns_plaintext_once_and_authenticate_round_trips(pool: PgPool) {
     let store = Store::new(pool.clone());
     let owner = admin(&pool, "owner@test.invalid").await;
@@ -119,7 +119,7 @@ async fn create_returns_plaintext_once_and_authenticate_round_trips(pool: PgPool
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn create_rejects_invalid_input_before_touching_the_database(pool: PgPool) {
     let owner = admin(&pool, "owner@test.invalid").await;
     assert!(matches!(
@@ -215,7 +215,7 @@ async fn create_rejects_invalid_input_before_touching_the_database(pool: PgPool)
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn create_accepts_a_valid_cidr_allowlist(pool: PgPool) {
     let owner = admin(&pool, "owner@test.invalid").await;
     let list = vec!["10.0.0.0/24".to_string(), "2001:db8::/32".to_string()];
@@ -244,7 +244,7 @@ async fn create_accepts_a_valid_cidr_allowlist(pool: PgPool) {
 /// any database round trip. PostgreSQL's own `cidr` type would reject
 /// most of these too, but as a raw `22P02` `Database` error, not the
 /// typed `InvalidAllowlist` a caller can match on.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn create_rejects_malformed_allowlist_entries_before_touching_the_database(pool: PgPool) {
     let owner = admin(&pool, "cidr@test.invalid").await;
     for bad in [
@@ -287,7 +287,7 @@ async fn create_rejects_malformed_allowlist_entries_before_touching_the_database
 
 /// Every stored entry is the canonical `addr/len` form, not whatever
 /// capitalization/representation the caller happened to send.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn create_canonicalizes_allowlist_entries(pool: PgPool) {
     let owner = admin(&pool, "cidr-canon@test.invalid").await;
     let list = vec!["10.0.0.0/24".to_string(), "2001:DB8::/32".to_string()];
@@ -314,7 +314,7 @@ async fn create_canonicalizes_allowlist_entries(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn database_level_schema_constraints_hold_even_bypassing_the_rust_validator(pool: PgPool) {
     // These exercise migration 0051's CHECK constraints directly: the Rust
     // validator in create_admin_token is a fail-fast gate, not the only one.
@@ -416,7 +416,7 @@ async fn database_level_schema_constraints_hold_even_bypassing_the_rust_validato
     tx.commit().await.unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn identity_digest_scopes_expiry_and_allowlist_are_immutable_and_rows_are_never_deleted(
     pool: PgPool,
 ) {
@@ -478,7 +478,7 @@ async fn identity_digest_scopes_expiry_and_allowlist_are_immutable_and_rows_are_
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn revocation_is_final_and_revoke_is_idempotent(pool: PgPool) {
     let store = Store::new(pool.clone());
     let owner = admin(&pool, "owner@test.invalid").await;
@@ -521,7 +521,7 @@ async fn revocation_is_final_and_revoke_is_idempotent(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn lookup_rejects_expired_revoked_and_owner_not_admin(pool: PgPool) {
     let store = Store::new(pool.clone());
     let owner = admin(&pool, "owner@test.invalid").await;
@@ -630,7 +630,7 @@ async fn lookup_rejects_expired_revoked_and_owner_not_admin(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn owner_transitions_revoke_tokens_and_regaining_admin_never_restores_them(pool: PgPool) {
     // Manual demotion of the only admin grant.
     let manual = admin(&pool, "manual@test.invalid").await;
@@ -874,14 +874,14 @@ async fn write_skew_scenario(pool: &PgPool, first_source: &str) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn concurrent_revocation_of_manual_then_group_admin_grants_still_revokes_the_token(
     pool: PgPool,
 ) {
     write_skew_scenario(&pool, "manual").await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn concurrent_revocation_of_group_then_manual_admin_grants_still_revokes_the_token(
     pool: PgPool,
 ) {
@@ -902,7 +902,7 @@ fn assert_owner_not_admin<T>(result: &Result<T, CreateAdminTokenError>) {
 /// the INSERT, the role-loss trigger has already run (nothing left to
 /// revoke), so the new token survives and would come back to life if the
 /// owner regains admin later.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn create_fails_when_the_owner_is_not_currently_an_effective_admin(pool: PgPool) {
     let non_admin = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,email) VALUES($1,$2)")
@@ -954,7 +954,7 @@ async fn create_fails_when_the_owner_is_not_currently_an_effective_admin(pool: P
 /// either see the owner still admin (and succeed, atomically with respect
 /// to the demotion) or block until the demotion commits and then fail,
 /// never insert a token for an owner who has already lost admin.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn concurrent_demotion_blocks_and_then_fails_a_pending_create(pool: PgPool) {
     let owner = admin(&pool, "race-create@test.invalid").await;
 
@@ -1020,7 +1020,7 @@ async fn concurrent_demotion_blocks_and_then_fails_a_pending_create(pool: PgPool
 /// database's `clock_timestamp()`. A skewed app clock could let a token
 /// outlive 90 real days, or be created already expired. Both timestamps
 /// must come from one database instant.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn created_at_and_expires_at_come_from_the_database_clock_not_the_app(pool: PgPool) {
     let owner = admin(&pool, "clock@test.invalid").await;
     let before: UtcInstant = sqlx::query_scalar("SELECT clock_timestamp()")
@@ -1081,7 +1081,7 @@ fn is_deadlock(e: &sqlx::Error) -> bool {
 /// resolves by aborting one side with SQLSTATE 40P01. Before migration
 /// 0051 neither trigger touched the `users` row at all, so this deadlock
 /// is new.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn concurrent_manual_and_group_revocation_does_not_deadlock(pool: PgPool) {
     let owner = admin(&pool, "deadlock@test.invalid").await;
     let manual_grant: Uuid = sqlx::query_scalar(
@@ -1190,7 +1190,7 @@ async fn concurrent_manual_and_group_revocation_does_not_deadlock(pool: PgPool) 
 /// same `omg_scope_lock_exclusive` helper a second time (advisory locks are
 /// re-entrant within a transaction, and the audit check only looks at
 /// whether the lock is already held, not who is calling it).
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn manual_demotion_under_scope_lock_audit_mode_does_not_trip_the_audit_check(pool: PgPool) {
     let owner = admin(&pool, "audit@test.invalid").await;
     let token = create(&pool, owner, "t", &scopes(&["platform:read"]), 30, None)
@@ -1227,7 +1227,7 @@ async fn revoked(pool: &PgPool, id: Uuid) -> bool {
         .unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn last_use_is_throttled_to_once_per_five_minutes(pool: PgPool) {
     let store = Store::new(pool.clone());
     let owner = admin(&pool, "owner@test.invalid").await;
@@ -1281,7 +1281,7 @@ async fn last_use_is_throttled_to_once_per_five_minutes(pool: PgPool) {
     assert_eq!(third_addr, "198.51.100.9");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn malformed_tokens_never_reach_the_database(pool: PgPool) {
     let store = Store::new(pool.clone());
     pool.close().await;
@@ -1292,7 +1292,7 @@ async fn malformed_tokens_never_reach_the_database(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn owner_restrict_prevents_removing_a_user_with_live_tokens(pool: PgPool) {
     let owner = admin(&pool, "owner@test.invalid").await;
     let created = create(&pool, owner, "n", &scopes(&["platform:read"]), 30, None)
@@ -1369,7 +1369,7 @@ async fn isolation_guard_refuses_a_stale_snapshot(pool: &PgPool, setup: &'static
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn creation_guard_refuses_a_stale_repeatable_read_snapshot(pool: PgPool) {
     isolation_guard_refuses_a_stale_snapshot(
         &pool,
@@ -1379,7 +1379,7 @@ async fn creation_guard_refuses_a_stale_repeatable_read_snapshot(pool: PgPool) {
     .await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn creation_guard_refuses_a_stale_serializable_snapshot(pool: PgPool) {
     isolation_guard_refuses_a_stale_snapshot(
         &pool,
@@ -1391,7 +1391,7 @@ async fn creation_guard_refuses_a_stale_serializable_snapshot(pool: PgPool) {
 
 /// The common case (the gateway's own isolation level) is unaffected: a
 /// plain READ COMMITTED creation still works.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn creation_guard_allows_read_committed(pool: PgPool) {
     let owner = admin(&pool, "read-committed@test.invalid").await;
     let mut tx = crate::db::begin(&pool).await.unwrap();
@@ -1440,7 +1440,7 @@ async fn role_loss_guard_refuses_elevated_isolation(
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn role_loss_guard_refuses_repeatable_read(pool: PgPool) {
     role_loss_guard_refuses_elevated_isolation(
         &pool,
@@ -1450,7 +1450,7 @@ async fn role_loss_guard_refuses_repeatable_read(pool: PgPool) {
     .await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn role_loss_guard_refuses_serializable(pool: PgPool) {
     role_loss_guard_refuses_elevated_isolation(
         &pool,
@@ -1460,7 +1460,7 @@ async fn role_loss_guard_refuses_serializable(pool: PgPool) {
     .await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn role_loss_guard_allows_read_committed(pool: PgPool) {
     let owner = admin(&pool, "role-loss-rc@test.invalid").await;
     let mut tx = crate::db::begin(&pool).await.unwrap();
@@ -1485,7 +1485,7 @@ async fn role_loss_guard_allows_read_committed(pool: PgPool) {
 /// on the caller's own `tx`, as it does now, makes the trigger's lock
 /// acquisition re-entrant (free) instead, so this returns immediately.
 /// Bounded with a timeout so a regression cannot hang the whole suite.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn create_must_not_hang_when_the_caller_already_holds_the_owners_scope_lock(pool: PgPool) {
     let owner = admin(&pool, "hang-create@test.invalid").await;
     let mut tx = crate::db::begin(&pool).await.unwrap();
@@ -1509,7 +1509,7 @@ async fn create_must_not_hang_when_the_caller_already_holds_the_owners_scope_loc
 /// it is atomic with whatever else that transaction does, e.g. audit
 /// insertion, and rolls back with it), not commit on a separate
 /// connection the instant it is called.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn revoke_runs_on_the_callers_transaction_and_rolls_back_with_it(pool: PgPool) {
     let owner = admin(&pool, "revoke-tx@test.invalid").await;
     let token = create(&pool, owner, "n", &scopes(&["platform:read"]), 30, None)
@@ -1542,7 +1542,7 @@ async fn revoke_runs_on_the_callers_transaction_and_rolls_back_with_it(pool: PgP
 /// role-loss trigger fires at the end of the first statement, before the
 /// replacement exists, and revokes every token the user owns, even though
 /// they never lost Admin.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_group_mapping_recreation_that_replaces_the_grant_does_not_destroy_the_token(
     pool: PgPool,
 ) {
@@ -1604,7 +1604,7 @@ async fn a_group_mapping_recreation_that_replaces_the_grant_does_not_destroy_the
 /// Companion to the above: a real group grant loss with no replacement
 /// (the user's claimed groups no longer include the admin group at all)
 /// must still revoke the owner's tokens, once the transaction commits.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_real_group_grant_loss_with_no_replacement_still_revokes_at_commit(pool: PgPool) {
     let owner = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,email) VALUES($1,'group-loss@test.invalid')")
@@ -1650,7 +1650,7 @@ async fn a_real_group_grant_loss_with_no_replacement_still_revokes_at_commit(poo
 /// (verified in `verify-privileges.sql`); these tests run as the
 /// migrator/owner role to exercise the trigger directly, the same way a
 /// human operator with direct database access could.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn changing_the_role_away_from_admin_revokes_owned_tokens(pool: PgPool) {
     let owner = admin(&pool, "role-change@test.invalid").await;
     let token = create(&pool, owner, "n", &scopes(&["platform:read"]), 30, None)
@@ -1667,7 +1667,7 @@ async fn changing_the_role_away_from_admin_revokes_owned_tokens(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn deleting_the_grant_row_revokes_owned_tokens(pool: PgPool) {
     let owner = admin(&pool, "grant-delete@test.invalid").await;
     let token = create(&pool, owner, "n", &scopes(&["platform:read"]), 30, None)
@@ -1684,7 +1684,7 @@ async fn deleting_the_grant_row_revokes_owned_tokens(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn moving_the_grant_to_another_user_revokes_the_original_owners_tokens(pool: PgPool) {
     let owner = admin(&pool, "grant-move-from@test.invalid").await;
     // A plain user with no grant of its own, so the moved row does not
@@ -1718,7 +1718,7 @@ async fn moving_the_grant_to_another_user_revokes_the_original_owners_tokens(poo
 /// with a dedicated SQLSTATE (`OM003`, mapped to
 /// `CreateAdminTokenError::OwnerLockNotHeld`) instead of acquiring the
 /// lock lazily.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn create_without_the_owners_scope_lock_held_is_refused_with_om003(pool: PgPool) {
     let owner = admin(&pool, "no-lock@test.invalid").await;
     let mut tx = crate::db::begin(&pool).await.unwrap();
@@ -1742,7 +1742,7 @@ async fn create_without_the_owners_scope_lock_held_is_refused_with_om003(pool: P
 
 /// Companion to the above: with the lock correctly taken up front, in the
 /// same transaction, creation succeeds exactly as before.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn create_with_the_owners_scope_lock_held_succeeds(pool: PgPool) {
     let owner = admin(&pool, "with-lock@test.invalid").await;
     let mut tx = crate::db::begin(&pool).await.unwrap();
@@ -1767,7 +1767,7 @@ async fn create_with_the_owners_scope_lock_held_succeeds(pool: PgPool) {
 /// (before the CHECK ever runs), so the identical attack row is measured
 /// against the real creation instant instead and fails the ordinary
 /// 1-90-day bound.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_forged_future_created_at_cannot_make_a_token_practically_unexpiring(pool: PgPool) {
     let owner = admin(&pool, "lifetime-bypass@test.invalid").await;
     let mut tx = crate::db::begin(&pool).await.unwrap();
@@ -1801,7 +1801,7 @@ async fn a_forged_future_created_at_cannot_make_a_token_practically_unexpiring(p
 /// credential -- until the token is revoked or its owner is cleaned up,
 /// whichever comes first. Cleanup scrubs it the same way it scrubs every
 /// other address/identity copy on the account (docs/identity.md).
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn cleanup_scrubs_the_last_used_address(pool: PgPool) {
     let store = Store::new(pool.clone());
     let owner = admin(&pool, "cleanup-scrub@test.invalid").await;
@@ -1842,7 +1842,7 @@ async fn cleanup_scrubs_the_last_used_address(pool: PgPool) {
 /// Adversarial re-review of #37 PR1, issue 5: `AdminTokenPrincipal` must
 /// carry the token's own canonical allowlist, not silently omit it, so a
 /// future PR2 handler cannot forget to enforce it before dispatch.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn authenticate_returns_the_tokens_canonical_ip_allowlist(pool: PgPool) {
     let store = Store::new(pool.clone());
     let owner = admin(&pool, "principal-allowlist@test.invalid").await;

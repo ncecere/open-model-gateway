@@ -22,7 +22,7 @@ async fn download(
     (status, headers, bytes)
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_person_exports_their_own_data_and_nothing_else(pool: PgPool) {
     let f = fixture(&pool).await;
     let m = model(&pool, "export-model").await;
@@ -145,7 +145,7 @@ async fn a_person_exports_their_own_data_and_nothing_else(pool: PgPool) {
     assert_eq!(audited, 3);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn an_admin_export_holds_only_what_admins_see(pool: PgPool) {
     let f = fixture(&pool).await;
     for ws in [None, Some(f.team), Some(f.personal)] {
@@ -199,7 +199,7 @@ async fn an_admin_export_holds_only_what_admins_see(pool: PgPool) {
 
 /// The hourly limit holds under a burst, and a burst can't run unbounded
 /// exports at once.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_burst_of_exports_stays_within_the_limit(pool: PgPool) {
     let f = fixture(&pool).await;
     let calls = (0..6).map(|_| download(&f.s, &f.owner, "/api/v1/me/export"));

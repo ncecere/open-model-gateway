@@ -88,7 +88,7 @@ async fn queue_cursor_replica_worker() {
     assert_eq!(next["has_more"], false);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn queue_cursor_survives_independent_replica(pool: PgPool) {
     use sqlx::ConnectOptions;
     let f = fixture(pool).await;
@@ -134,7 +134,7 @@ async fn queue_cursor_survives_independent_replica(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn queue_foreign_workspace_cursor_never_expands_visibility(pool: PgPool) {
     let f = fixture(pool).await;
     let personal = f.principal.workspace_id;
@@ -224,7 +224,7 @@ async fn queue_foreign_workspace_cursor_never_expands_visibility(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn queue_age_boundary_uses_database_clock(pool: PgPool) {
     let query = format!(
         "WITH clock AS MATERIALIZED (SELECT clock_timestamp() observed_at), points AS (SELECT observed_at,observed_at-interval '24 hours' unknown_since FROM clock UNION ALL SELECT observed_at,observed_at-interval '24 hours'+interval '1 millisecond' FROM clock) SELECT array_agg(({}) ORDER BY unknown_since) FROM points",
@@ -234,7 +234,7 @@ async fn queue_age_boundary_uses_database_clock(pool: PgPool) {
     assert_eq!(aged, vec![true, false]);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn queue_project_authority_and_resolving_between_pages(pool: PgPool) {
     let f = fixture(pool).await;
     let ws = Uuid::new_v4();
@@ -302,7 +302,7 @@ async fn queue_project_authority_and_resolving_between_pages(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn queue_visibility_privacy_pagination_and_strict_parameters(pool: PgPool) {
     let f = fixture(pool).await;
     let ws = f.team.workspace_id;
@@ -570,7 +570,7 @@ async fn queue_visibility_privacy_pagination_and_strict_parameters(pool: PgPool)
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn queue_selection_money_unknown_clock_and_no_writes(pool: PgPool) {
     let f = fixture(pool).await;
     let ws = f.principal.workspace_id;
@@ -634,7 +634,7 @@ async fn queue_selection_money_unknown_clock_and_no_writes(pool: PgPool) {
     assert_eq!(snapshot, unchanged);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn queue_realtime_hold_is_listed_but_never_reconcilable(pool: PgPool) {
     let f = fixture(pool).await;
     let ws = f.team.workspace_id;
@@ -681,7 +681,7 @@ async fn queue_realtime_hold_is_listed_but_never_reconcilable(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn queue_cursor_outside_postgres_timestamp_range_is_400_not_503(pool: PgPool) {
     use gateway_datetime_compat::CalendarDate;
     let f = fixture(pool).await;
@@ -720,7 +720,7 @@ async fn queue_cursor_outside_postgres_timestamp_range_is_400_not_503(pool: PgPo
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn queue_statement_timeout_does_not_suggest_nonexistent_filters(pool: PgPool) {
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("SET LOCAL statement_timeout='20ms'")
@@ -736,7 +736,7 @@ async fn queue_statement_timeout_does_not_suggest_nonexistent_filters(pool: PgPo
     assert!(!message.contains("narrow"), "{message}");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn queue_personal_workspace_predicate_hides_foreign_scopes(pool: PgPool) {
     let f = fixture(pool).await;
     let personal = f.principal.workspace_id;
@@ -781,7 +781,7 @@ async fn queue_personal_workspace_predicate_hides_foreign_scopes(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn queue_personal_aggregate_is_platform_route_only(pool: PgPool) {
     let f = fixture(pool).await;
     let personal = f.principal.workspace_id;

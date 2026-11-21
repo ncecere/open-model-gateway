@@ -1195,7 +1195,7 @@ mod database {
     /// #439: a storage failure while authenticating a management request is the
     /// retryable 503 every other management storage failure answers, never a
     /// 500, for a browser session and for an admin token alike.
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn authentication_storage_failure_is_service_unavailable(pool: sqlx::PgPool) {
         let mock = MockProvider::start(None).await;
         let state = mock.state(pool.clone()).await;
@@ -1310,7 +1310,7 @@ mod database {
 
     /// Real session/CSRF middleware and handlers against PostgreSQL; the IdP is
     /// mocked and the verified session is seeded, not a demo/browser sign-in.
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn configuration_refusals_use_a_live_admin_session(pool: sqlx::PgPool) {
         let mock = MockProvider::start(None).await;
         let state = mock.state(pool.clone()).await;
@@ -1371,7 +1371,7 @@ mod database {
         );
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn expiry_revocation_and_disabled_user_are_checked_every_request(pool: sqlx::PgPool) {
         let state = IdentityState::new(Store::new(pool.clone()), None)
             .await
@@ -1417,7 +1417,7 @@ mod database {
         assert!(verify_session(&state, &headers).await.is_err());
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn sessions_without_verified_email_cannot_authenticate(pool: sqlx::PgPool) {
         let state = IdentityState::new(Store::new(pool.clone()), None)
             .await
@@ -1446,7 +1446,7 @@ mod database {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn linking_is_explicit_single_use_and_authentication_does_not_infer_roles(
         pool: sqlx::PgPool,
     ) {
@@ -1557,7 +1557,7 @@ mod database {
         );
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn attempts_are_bound_expiring_and_single_use(pool: sqlx::PgPool) {
         let store = Store::new(pool.clone());
         let oauth_state = random_token().unwrap();
@@ -1588,7 +1588,7 @@ mod database {
         );
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn middleware_and_logout_enforce_csrf_and_exact_origin(pool: sqlx::PgPool) {
         let mock = MockProvider::start(None).await;
         let state = mock.state(pool.clone()).await;
@@ -1736,7 +1736,7 @@ mod database {
         assert_eq!(display_name(&"a".repeat(201)), None);
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn sign_in_records_the_verified_display_name_and_cleanup_clears_it(pool: sqlx::PgPool) {
         let mock = MockProvider::start(None).await;
         let state = mock.state(pool.clone()).await;
@@ -1787,7 +1787,7 @@ mod database {
         assert_eq!((email, name), (None, None));
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn denied_sign_in_records_the_display_name_without_access(pool: sqlx::PgPool) {
         let mock = MockProvider::start(None).await;
         let state = mock.state(pool.clone()).await;
@@ -1815,7 +1815,7 @@ mod database {
         assert_eq!(sessions, 0);
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn complete_oidc_flow_uses_pkce_and_fresh_hashed_sessions(pool: sqlx::PgPool) {
         let mock = MockProvider::start(None).await;
         let state = mock.state(pool.clone()).await;
@@ -1956,7 +1956,7 @@ mod database {
     /// rand 0.10: state, nonce, PKCE verifier, browser binding, session and
     /// CSRF tokens come from the fallible OS RNG. A failure is a 500 that
     /// stores nothing and signs nobody in; it never panics.
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn sign_in_fails_closed_when_the_os_rng_fails(pool: sqlx::PgPool) {
         use crate::entropy::seam::fail_on_this_thread;
         let mock = MockProvider::start(None).await;
@@ -2027,7 +2027,7 @@ mod database {
         );
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn sign_in_returns_to_the_validated_deep_link(pool: sqlx::PgPool) {
         let mock = MockProvider::start(None).await;
         let state = mock.state(pool.clone()).await;
@@ -2076,7 +2076,7 @@ mod database {
     /// #80: deadlines come from the policy at sign-in, are checked on every
     /// request against the database clock, move with recorded activity, and
     /// are never revived by a longer policy afterwards.
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn session_lifetime_and_idle_timeout(pool: sqlx::PgPool) {
         let mock = MockProvider::start(None).await;
         let with = |lifetime: &str, idle: &str| {
@@ -2157,7 +2157,7 @@ mod database {
         assert!(first.is_some() && first == last);
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn the_session_cookie_lasts_as_long_as_the_session(pool: sqlx::PgPool) {
         let mock = MockProvider::start(None).await;
         let mut config = mock.config();
@@ -2194,7 +2194,7 @@ mod database {
 
     /// #80 cleanup: only sessions that ended more than 30 days ago, in bounded
     /// batches, concurrently with live traffic; expired sign-in attempts.
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn cleanup_deletes_only_long_ended_sessions_and_expired_attempts(pool: sqlx::PgPool) {
         let store = Store::new(pool.clone());
         let (user, live, _) = seed(&pool).await;
@@ -2269,7 +2269,7 @@ mod database {
     /// session list marks the session a request came in on, last-seen is
     /// written at most every five minutes, and a revoked session's cookie
     /// stops working on the next request (any replica: it's the database).
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn your_sessions_end_to_end(pool: sqlx::PgPool) {
         let mock = MockProvider::start(None).await;
         let state = mock.state(pool.clone()).await;
@@ -2411,7 +2411,7 @@ mod database {
         (status, serde_json::from_slice(&bytes).unwrap())
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn fresh_signed_session_accepts_claim_email_not_admin_edited_profile_email(
         pool: sqlx::PgPool,
     ) {
@@ -2562,7 +2562,7 @@ mod database {
         assert_eq!(role, "member");
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn invalid_tokens_and_failed_exchange_consume_attempt_without_session(
         pool: sqlx::PgPool,
     ) {
@@ -2616,7 +2616,7 @@ mod database {
         assert_eq!(count, 0);
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn browser_access_denial_redirects_without_callback_secrets_or_logout_csrf(
         pool: sqlx::PgPool,
     ) {
@@ -2744,7 +2744,7 @@ mod database {
         );
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn custom_signed_groups_entitlement_loss_commits_before_forbidden_and_malformed_does_not_revoke(
         pool: sqlx::PgPool,
     ) {
@@ -2884,7 +2884,7 @@ mod database {
         assert!(disabled);
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn cleaned_identity_rebinds_to_new_uuid_without_resurrecting_old_access(
         pool: sqlx::PgPool,
     ) {
@@ -2957,7 +2957,7 @@ mod database {
 
     /// #75: an expired account on legal hold isn't cleaned at sign-in, and
     /// the person can't sign in again until the hold is released.
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn a_held_expired_account_is_neither_cleaned_nor_reopened_at_sign_in(pool: sqlx::PgPool) {
         let store = Store::new(pool.clone());
         let issuer = "https://id.test";
@@ -3033,7 +3033,7 @@ mod database {
         assert_ne!(old, new);
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn expired_grace_callback_cleans_old_account_even_when_worker_has_not_run(
         pool: sqlx::PgPool,
     ) {
@@ -3103,7 +3103,7 @@ mod database {
         assert_eq!(old_active, 0);
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn sessions_require_current_entitlement_not_stale_admin_presentation(pool: sqlx::PgPool) {
         let state = IdentityState::new(Store::new(pool.clone()), None)
             .await
@@ -3143,7 +3143,7 @@ mod database {
         );
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn scim_managed_groups_replace_token_membership_at_sign_in(pool: sqlx::PgPool) {
         let store = Store::new(pool.clone());
         let issuer = "https://issuer.test";
@@ -3261,7 +3261,7 @@ mod abuse_controls {
             .unwrap()
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn a_burst_from_one_address_is_refused_without_storing_anything(pool: sqlx::PgPool) {
         let mock = MockProvider::start(None).await;
         let state = state(&mock, &pool, |c| {
@@ -3329,7 +3329,7 @@ mod abuse_controls {
         assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn callbacks_are_limited_before_the_attempt_is_consumed(pool: sqlx::PgPool) {
         let mock = MockProvider::start(None).await;
         let state = state(&mock, &pool, |c| c.login_rate_per_minute = 2).await;
@@ -3398,7 +3398,7 @@ mod abuse_controls {
         assert_ne!(replay.status(), StatusCode::SEE_OTHER);
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn the_pending_attempt_cap_is_shared_by_every_replica(pool: sqlx::PgPool) {
         let mock = MockProvider::start(None).await;
         // Two replicas: separate in-memory limiters, one database.
@@ -3482,7 +3482,7 @@ mod abuse_controls {
         assert_eq!(recovered.status(), StatusCode::SEE_OTHER);
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn a_full_cap_is_latched_without_counting_again(pool: sqlx::PgPool) {
         let mock = MockProvider::start(None).await;
         let state = state(&mock, &pool, |c| {

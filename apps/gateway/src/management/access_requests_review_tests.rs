@@ -164,7 +164,7 @@ async fn active_grants(pool: &PgPool, ws: Uuid, user: Uuid, source: &str) -> i64
     sqlx::query_scalar("SELECT count(*) FROM workspace_membership_grants WHERE workspace_id=$1 AND user_id=$2 AND source=$3 AND revoked_at IS NULL").bind(ws).bind(user).bind(source).fetch_one(pool).await.unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_requests_review_requester_entitlement_race_both_orderings(pool: PgPool) {
     let f = fixture(&pool).await;
     discover(&pool, f.team).await;
@@ -213,7 +213,7 @@ async fn access_requests_review_requester_entitlement_race_both_orderings(pool: 
         assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM effective_workspace_memberships WHERE workspace_id=$1 AND user_id=$2").bind(f.team).bind(requester.user_id).fetch_one(&pool).await.unwrap(),0,"entitlement loss removes effective access even after authorized application");
     }
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_requests_review_approver_demotion_race_both_orderings(pool: PgPool) {
     let f = fixture(&pool).await;
     discover(&pool, f.team).await;
@@ -276,7 +276,7 @@ async fn access_requests_review_approver_demotion_race_both_orderings(pool: PgPo
         }
     }
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_requests_review_manual_membership_race_and_removal_both_orderings(pool: PgPool) {
     let f = fixture(&pool).await;
     discover(&pool, f.team).await;
@@ -385,7 +385,7 @@ async fn access_requests_review_manual_membership_race_and_removal_both_ordering
         );
     }
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_requests_review_scim_membership_race_both_orderings(pool: PgPool) {
     let f = fixture(&pool).await;
     discover(&pool, f.team).await;
@@ -455,7 +455,7 @@ async fn access_requests_review_scim_membership_race_both_orderings(pool: PgPool
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_requests_review_scim_removal_race_both_orderings(pool: PgPool) {
     let f = fixture(&pool).await;
     discover(&pool, f.team).await;
@@ -496,7 +496,7 @@ async fn access_requests_review_scim_removal_race_both_orderings(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_requests_review_old_transaction_cannot_backdate_membership_changes(pool: PgPool) {
     let f = fixture(&pool).await;
     discover(&pool, f.team).await;
@@ -551,7 +551,7 @@ async fn access_requests_review_old_transaction_cannot_backdate_membership_chang
     );
     state(&pool, request_id(&fresh), "approved", 1).await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_requests_review_history_indexes_match_queue_order(pool: PgPool) {
     let keys:Vec<String>=sqlx::query_scalar("SELECT pg_get_indexdef(indexrelid,3,true) FROM pg_index WHERE indexrelid='access_requests_requester_clock'::regclass")
         .fetch_all(&pool).await.unwrap();
@@ -561,7 +561,7 @@ async fn access_requests_review_history_indexes_match_queue_order(pool: PgPool) 
     assert!(definition.contains("(created_at DESC, id)"), "{definition}");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_requests_review_reasons_scrub_after_workspace_hold_release(pool: PgPool) {
     let f = fixture(&pool).await;
     discover(&pool, f.team).await;
@@ -627,7 +627,7 @@ async fn access_requests_review_reasons_scrub_after_workspace_hold_release(pool:
             .unwrap()
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_requests_review_reason_scrub_is_bounded_and_hold_aware(pool: PgPool) {
     let f = fixture(&pool).await;
     discover(&pool, f.team).await;

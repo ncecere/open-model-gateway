@@ -104,7 +104,7 @@ async fn hold_admission(
 /// Two workspaces admit in parallel: while one workspace's admission holds
 /// its scope locks and rows, another workspace admits immediately; the same
 /// workspace waits. (Global mode: everything waits on the installation row.)
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn two_workspaces_admit_in_parallel_without_waiting(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1_000_000).await;
@@ -160,7 +160,7 @@ async fn two_workspaces_admit_in_parallel_without_waiting(pool: PgPool) {
 /// Many concurrent admissions on many connections against one workspace
 /// budget and one key budget: exactly the holds that fit are admitted, the
 /// rest are exact budget denials, and the totals stay equal to the scan.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn same_workspace_budget_never_overspent_under_concurrent_admission(pool: PgPool) {
     let _wide = WIDE.acquire().await.unwrap();
     let f = fixture(pool.clone()).await;
@@ -320,7 +320,7 @@ async fn management(pool: PgPool, catalog: bool, sql: &'static str, id: Uuid) ->
     at
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn revoked_key_is_never_admitted_after_revocation_commits(pool: PgPool) {
     let f = fixture(pool).await;
     f.price(1_000_000).await;
@@ -341,7 +341,7 @@ async fn revoked_key_is_never_admitted_after_revocation_commits(pool: PgPool) {
     .await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn membership_removal_races_admission(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1_000_000).await;
@@ -350,7 +350,7 @@ async fn membership_removal_races_admission(pool: PgPool) {
     race(&f, member, |pool| management(pool, false, "UPDATE workspace_membership_grants SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL RETURNING clock_timestamp()", other), InferenceError::Unauthenticated).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn user_suspension_races_admission(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1_000_000).await;
@@ -374,7 +374,7 @@ async fn user_suspension_races_admission(pool: PgPool) {
 
 /// A workspace-type default budget (one change affecting every personal
 /// workspace) racing admission: the type-scope lock admission takes shared.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn type_default_limit_change_races_admission(pool: PgPool) {
     let f = fixture(pool).await;
     f.price(1_000_000).await;
@@ -382,7 +382,7 @@ async fn type_default_limit_change_races_admission(pool: PgPool) {
 }
 
 /// A workspace override (platform per-workspace replacement) racing admission.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn workspace_override_change_races_admission(pool: PgPool) {
     let f = fixture(pool).await;
     f.price(1_000_000).await;
@@ -391,7 +391,7 @@ async fn workspace_override_change_races_admission(pool: PgPool) {
 }
 
 /// A global catalog change (route disabled under the exclusive catalog lock).
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn catalog_change_races_admission(pool: PgPool) {
     let f = fixture(pool).await;
     f.price(1_000_000).await;
@@ -416,7 +416,7 @@ async fn catalog_change_races_admission(pool: PgPool) {
 /// each ends exactly once (settled by the finish, or unknown with its hold
 /// retained by reconciliation, after which the finish fails), with exactly
 /// one terminal ledger row, and the totals stay exact.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn settlement_and_reconciliation_race_exactly_once(pool: PgPool) {
     let _wide = WIDE.acquire().await.unwrap();
     let f = fixture(pool.clone()).await;
@@ -474,7 +474,7 @@ async fn settlement_and_reconciliation_race_exactly_once(pool: PgPool) {
 /// deadlock is ever detected (`pg_stat_database.deadlocks` stays 0, so the
 /// 40P01 retry was never needed), no budget is overspent and the totals and
 /// counters equal the full scan.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn deadlock_freedom_fuzz(pool: PgPool) {
     let _wide = WIDE.acquire().await.unwrap();
     let f = fixture(pool.clone()).await;
@@ -638,7 +638,7 @@ async fn deadlock_freedom_fuzz(pool: PgPool) {
 /// The `omg_scope_key` SQL helper and the gateway agree on lock keys, and
 /// audit mode refuses out-of-order scope locks and authority changes
 /// without their up-front lock (the lane F audit used by the whole suite).
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn lock_keys_match_and_audit_refuses_out_of_order_locks(pool: PgPool) {
     let mut rng = StdRng::seed_from_u64(7);
     for _ in 0..200 {
@@ -713,7 +713,7 @@ fn audit_on() -> bool {
 /// Scoped admission takes no row lock on authority rows (no MultiXacts):
 /// while it holds its locks, a concurrent `FOR UPDATE` of the key, workspace
 /// and user rows does not wait. (Global mode keeps `FOR SHARE`.)
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scoped_admission_takes_no_authority_row_locks(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1_000_000).await;

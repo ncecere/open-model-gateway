@@ -1,5 +1,5 @@
 use super::*;
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn user_direct_read_is_live_platform_metadata_only(pool: PgPool) {
     let f = fixture(&pool).await;
     let path = format!("/api/v1/platform/users/{}", f.member.user_id);
@@ -29,7 +29,7 @@ async fn user_direct_read_is_live_platform_metadata_only(pool: PgPool) {
         StatusCode::NOT_FOUND
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn platform_audit_is_readonly_authority_and_excludes_all_personal_events(pool: PgPool) {
     let f = fixture(&pool).await;
     for ws in [None, Some(f.team), Some(f.personal)] {
@@ -79,7 +79,7 @@ async fn platform_audit_is_readonly_authority_and_excludes_all_personal_events(p
         json!([])
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn auditor_workspace_contexts_require_actual_shared_membership(pool: PgPool) {
     let f = fixture(&pool).await;
     let personal = workspace(&pool, "Auditor personal", "personal", f.auditor.user_id).await;
@@ -127,7 +127,7 @@ async fn auditor_workspace_contexts_require_actual_shared_membership(pool: PgPoo
 }
 /// Live acceptance F6: route and price audit targets carry a display name derived
 /// from platform metadata only.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn platform_audit_names_route_and_price_targets(pool: PgPool) {
     let f = fixture(&pool).await;
     let (provider, deployment) = (Uuid::new_v4(), Uuid::new_v4());
@@ -164,7 +164,7 @@ async fn platform_audit_names_route_and_price_targets(pool: PgPool) {
     // Named targets are named by the server too (R06, #67): the dashboard no longer loads every model.
     assert_eq!(name("model"), "company/luna");
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn suspension_and_reactivation_are_audited_as_what_they_are(pool: PgPool) {
     // #158: an off-host audit export must show who was suspended and
     // reactivated, distinct from a profile edit, without personal data.

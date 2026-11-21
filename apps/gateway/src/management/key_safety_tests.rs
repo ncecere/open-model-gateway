@@ -44,7 +44,7 @@ fn codes(v: &Value, key: Uuid) -> Vec<String> {
     })
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_safety_findings_follow_effective_limits_and_list_visibility(pool: PgPool) {
     let f = fixture(&pool).await;
     let path = format!("/api/v1/workspaces/{}/key-safety", f.team);
@@ -176,7 +176,7 @@ async fn key_safety_findings_follow_effective_limits_and_list_visibility(pool: P
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_safety_members_see_own_keys_and_personal_keys_stay_private(pool: PgPool) {
     let f = fixture(&pool).await;
     let team = format!("/api/v1/workspaces/{}/key-safety", f.team);
@@ -264,7 +264,7 @@ async fn key_safety_members_see_own_keys_and_personal_keys_stay_private(pool: Pg
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn model_compare_prices_metrics_and_visibility(pool: PgPool) {
     let f = fixture(&pool).await;
     let a = model(&pool, "cmp-a").await;
@@ -418,7 +418,7 @@ async fn model_compare_prices_metrics_and_visibility(pool: PgPool) {
 /// #145: a revocation is final. Once `revoked_at` is set on a key, grant,
 /// session or invitation, no role (not even the schema owner) can clear it or
 /// move it; re-revoking with `coalesce` stays a no-op.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn revocations_are_final_for_every_revocable_row(pool: PgPool) {
     let f = fixture(&pool).await;
     let (status, created) = key(&f, &f.member, f.team, Value::Null).await;

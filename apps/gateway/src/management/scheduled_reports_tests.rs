@@ -17,7 +17,7 @@ async fn create(f: &Fixture, u: &BrowserPrincipal, path: &str, recipients: &[Uui
     assert_eq!(status, StatusCode::OK, "{value}");
     value["id"].as_str().unwrap().parse().unwrap()
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_crud_authority_and_personal_existence_hiding(pool: PgPool) {
     let f = fixture(&pool).await;
     let ws_admin = user(&pool, "schedule-admin", "user").await;
@@ -155,7 +155,7 @@ async fn scheduled_reports_crud_authority_and_personal_existence_hiding(pool: Pg
         );
     }
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_recipient_validation_live_revocation_and_audit(pool: PgPool) {
     let f = fixture(&pool).await;
     let base = collection(f.team);
@@ -304,7 +304,7 @@ async fn scheduled_reports_recipient_validation_live_revocation_and_audit(pool: 
         StatusCode::FORBIDDEN
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_historical_cost_center_scope_and_recipient_cap(pool: PgPool) {
     let f = fixture(&pool).await;
     let cc = Uuid::new_v4();
@@ -365,7 +365,7 @@ async fn scheduled_reports_historical_cost_center_scope_and_recipient_cap(pool: 
         StatusCode::BAD_REQUEST
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_every_route_real_sessions_csrf_origin_and_admin_token_refusal(
     pool: PgPool,
 ) {

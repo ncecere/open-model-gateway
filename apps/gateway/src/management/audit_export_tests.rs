@@ -25,7 +25,7 @@ pub(super) async fn receiver() -> (String, std::sync::Arc<std::sync::Mutex<Vec<V
     (url, seen)
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn status_is_platform_read_only_and_never_shows_the_url_or_secret(pool: PgPool) {
     let f = fixture(&pool).await;
     for actor in [&f.admin, &f.auditor] {
@@ -118,7 +118,7 @@ async fn status_is_platform_read_only_and_never_shows_the_url_or_secret(pool: Pg
     assert!(!v.to_string().contains("hidden-token") && !v.to_string().contains("v1/logs"));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_test_send_is_signed_audited_admin_only_and_rate_limited(pool: PgPool) {
     let f = fixture(&pool).await;
     let (url, seen) = receiver().await;

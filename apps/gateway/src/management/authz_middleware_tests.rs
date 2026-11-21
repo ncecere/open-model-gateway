@@ -175,7 +175,7 @@ pub(super) fn stub_routes() -> Router<Store> {
     }
     app
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn platform_writer_checks_admin_before_missing_workspace(pool: PgPool) {
     let f = fixture(&pool).await;
     let mock = MockProvider::start(None).await;
@@ -209,7 +209,7 @@ async fn platform_writer_checks_admin_before_missing_workspace(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn service_keys_require_admin_in_middleware(pool: PgPool) {
     let f = fixture(&pool).await;
     let (_, account) = call(
@@ -273,7 +273,7 @@ async fn service_keys_require_admin_in_middleware(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn snapshot_and_locked_workspace_authority_agree(pool: PgPool) {
     let f = fixture(&pool).await;
     let unentitled = user(&pool, "unentitled-parity", "user").await;
@@ -327,7 +327,7 @@ async fn snapshot_and_locked_workspace_authority_agree(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn every_route_middleware_has_exact_positive_and_negative_outcomes(pool: PgPool) {
     let f = fixture(&pool).await;
     member(&pool, f.project, f.outsider.user_id, "member").await;

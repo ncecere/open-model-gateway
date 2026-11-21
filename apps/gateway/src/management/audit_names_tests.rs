@@ -15,7 +15,7 @@ fn row<'a>(rows: &'a Value, kind: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("no {kind} event"))
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn platform_audit_names_actors_workspaces_and_targets(pool: PgPool) {
     let f = fixture(&pool).await;
     sqlx::query("UPDATE users SET display_name='Owen Owner' WHERE id=$1")
@@ -63,7 +63,7 @@ async fn platform_audit_names_actors_workspaces_and_targets(pool: PgPool) {
     assert_eq!(row(&rows, "catalog")["target_name"], "Standard");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn workspace_audit_and_keys_name_people_only_where_visible(pool: PgPool) {
     let f = fixture(&pool).await;
     sqlx::query("UPDATE users SET display_name='Mia Member' WHERE id=$1")
@@ -110,7 +110,7 @@ async fn workspace_audit_and_keys_name_people_only_where_visible(pool: PgPool) {
 }
 
 /// Platform Admins add members by searching too, never by loading every user.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn platform_member_candidates_search_entitled_non_members(pool: PgPool) {
     let f = fixture(&pool).await;
     let path =
@@ -161,7 +161,7 @@ async fn platform_member_candidates_search_entitled_non_members(pool: PgPool) {
 /// Names never reach people who couldn't see them before: personal owners don't
 /// learn who on the platform staff changed their workspace, and former members'
 /// names stay hidden. Cleaned identities stay labelled as retained.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn names_stay_within_previous_visibility(pool: PgPool) {
     let f = fixture(&pool).await;
     // A Platform Admin's change in someone's personal workspace.
@@ -239,7 +239,7 @@ async fn names_stay_within_previous_visibility(pool: PgPool) {
 }
 
 /// Member lists search on the server, so the members table never loads a whole team.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn member_lists_search_on_the_server(pool: PgPool) {
     let f = fixture(&pool).await;
     for path in [
@@ -278,7 +278,7 @@ async fn member_lists_search_on_the_server(pool: PgPool) {
 }
 
 /// The Team/Project "Initial owner" search asks only for entitled people.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn users_can_be_filtered_to_anyone_with_a_platform_role(pool: PgPool) {
     let f = fixture(&pool).await;
     let unentitled = Uuid::new_v4();

@@ -411,7 +411,7 @@ mod failure_tests {
 #[cfg(all(test, feature = "integration-tests"))]
 mod tests {
     use super::*;
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn bounds_reject_unsafe_retention(pool: sqlx::PgPool) {
         let store = Store::new(pool);
         assert!(compact_history(&store, 0, 100).await.is_err());
@@ -420,7 +420,7 @@ mod tests {
     }
 
     /// #497: a settings refresh whose statement times out on a lock names it.
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn a_settings_refresh_lock_timeout_is_recorded_with_its_cause(pool: sqlx::PgPool) {
         use crate::db::{
             accounting_failure::tests::labels,

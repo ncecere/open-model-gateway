@@ -53,7 +53,7 @@ async fn budget(f: &Fixture, amount: Option<i64>) {
     .await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn v3_shape_is_validated_in_sql_and_immutable(pool: PgPool) {
     let f = fixture(pool).await;
     let id = v3(&f, token_lines(), json!({})).await;
@@ -114,7 +114,7 @@ async fn v3_shape_is_validated_in_sql_and_immutable(pool: PgPool) {
     assert!(sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_token_limit,output_token_limit,pricing_version,price_lines,max_units) VALUES($1,$2,100,50,3,$3,'{\"input_tokens\":\"1\"}')").bind(Uuid::new_v4()).bind(f.deployment).bind(json!(token_lines())).execute(&f.store.pool).await.is_err());
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn v3_exact_tiered_settlement_and_pinned_bound(pool: PgPool) {
     let f = fixture(pool).await;
     let price = v3(&f, token_lines(), json!({})).await;
@@ -160,7 +160,7 @@ async fn v3_exact_tiered_settlement_and_pinned_bound(pool: PgPool) {
     assert_eq!(pinned, Some(price));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn v3_unknown_meter_keeps_floor_and_unbounded_budget_is_denied(pool: PgPool) {
     let f = fixture(pool).await;
     let mut lines = token_lines();
@@ -188,7 +188,7 @@ async fn v3_unknown_meter_keeps_floor_and_unbounded_budget_is_denied(pool: PgPoo
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn v3_unit_meter_needs_trusted_ceiling_for_budget(pool: PgPool) {
     let f = fixture(pool).await;
     let mut lines = token_lines();
@@ -207,7 +207,7 @@ async fn v3_unit_meter_needs_trusted_ceiling_for_budget(pool: PgPool) {
     assert_eq!(amounts(&f, start.id).await.1, Some(690 + 61_440));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn v3_meter_evidence_variants_and_reconciliation(pool: PgPool) {
     let f = fixture(pool).await;
     let mut image_768 = line(Meter::OutputImages, "20500", 1);
@@ -366,7 +366,7 @@ fn rejected(id: Uuid, error: InferenceError) -> ExecutionFinish {
     record
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn free_price_pre_processing_rejection_settles_known_zero(pool: PgPool) {
     let f = fixture(pool).await;
     v3(&f, free_lines(), json!({})).await;
@@ -407,7 +407,7 @@ async fn free_price_pre_processing_rejection_settles_known_zero(pool: PgPool) {
 /// so usage is unknown and the hold stays. The same rejection as an error
 /// before any stream (`stream_returned` false, as `finish` passes) still
 /// settles as a known zero on a free price.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn free_price_rejection_inside_a_returned_stream_stays_unknown(pool: PgPool) {
     use crate::inference::repository::AttemptTelemetry;
     let f = fixture(pool).await;
@@ -449,7 +449,7 @@ async fn free_price_rejection_inside_a_returned_stream_stays_unknown(pool: PgPoo
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn messages_context_length_keeps_existing_rejection_hold_rules(pool: PgPool) {
     let f = fixture(pool).await;
     for paid in [false, true] {
@@ -470,7 +470,7 @@ async fn messages_context_length_keeps_existing_rejection_hold_rules(pool: PgPoo
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn other_failures_partial_usage_or_paid_meters_stay_unknown(pool: PgPool) {
     let f = fixture(pool).await;
     v3(&f, free_lines(), json!({})).await;
@@ -563,7 +563,7 @@ async fn other_failures_partial_usage_or_paid_meters_stay_unknown(pool: PgPool) 
     assert_eq!(unknown(&f, start.id).await.0, "unknown");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn token_reservation_above_tokens_per_minute_is_a_distinct_denial(pool: PgPool) {
     let f = fixture(pool).await;
     // The "minute's tokens are used" step needs both admissions in one minute.
@@ -641,7 +641,7 @@ async fn token_reservation_above_tokens_per_minute_is_a_distinct_denial(pool: Pg
     assert_eq!(reservations, 1);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn zero_input_ceiling_only_for_v3_without_input_token_meters(pool: PgPool) {
     let f = fixture(pool).await;
     // Speech-like price: characters only, every token meter not applicable.

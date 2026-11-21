@@ -49,7 +49,7 @@ async fn admit_traced(
     (result, spans, eligibility)
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_personal_admission_commits_without_shared_eligibility(pool: PgPool) {
     let f = fixture(pool).await;
     let start = ExecutionStart {
@@ -78,7 +78,7 @@ async fn a_personal_admission_commits_without_shared_eligibility(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_shared_workspace_admission_commits_eligibility_with_the_admitted_alias(pool: PgPool) {
     let f = fixture(pool).await;
     let start = ExecutionStart {

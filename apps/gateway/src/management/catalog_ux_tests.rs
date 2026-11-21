@@ -14,7 +14,7 @@ fn ids(v: &Value) -> Vec<String> {
         .collect()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn platform_readers_read_disabled_workspace_configuration_read_only(pool: PgPool) {
     let f = fixture(&pool).await;
     let m = model(&pool, "disabled-view-model").await;
@@ -146,7 +146,7 @@ async fn platform_readers_read_disabled_workspace_configuration_read_only(pool: 
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn catalog_summaries_and_defaults_matrix_keep_live_semantics(pool: PgPool) {
     let f = fixture(&pool).await;
     let m = model(&pool, "matrix-model").await;

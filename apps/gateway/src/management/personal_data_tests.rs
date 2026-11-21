@@ -5,7 +5,7 @@ fn path(user: Uuid) -> String {
     format!("/api/v1/platform/users/{user}/remove-personal-data")
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_suspended_persons_data_is_removed_now_without_rewriting_history(pool: PgPool) {
     let f = fixture(&pool).await;
     let who = &f.outsider;
@@ -147,7 +147,7 @@ async fn a_suspended_persons_data_is_removed_now_without_rewriting_history(pool:
 
 /// #76 review: only this person's copies go; a held team's copies stay; keys
 /// and sessions are revoked and stay revoked.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn removal_leaves_other_people_and_held_teams_alone(pool: PgPool) {
     let f = fixture(&pool).await;
     let who = &f.outsider;

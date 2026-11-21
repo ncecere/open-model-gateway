@@ -78,7 +78,7 @@ fn inference_openapi_closure_has_zero_placeholders() {
 }
 
 #[cfg(feature = "integration-tests")]
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn inference_openapi_realtime_wire_fixtures(pool: sqlx::PgPool) {
     let mut fixtures = super::responses::Fixtures::default();
     crate::protocols::realtime::inference_openapi_handshake_fixtures(pool, &mut fixtures).await;

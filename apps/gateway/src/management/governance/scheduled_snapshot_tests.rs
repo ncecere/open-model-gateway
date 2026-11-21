@@ -2,7 +2,7 @@ use super::*;
 use crate::governance::tests::db::fixture;
 use crate::timestamp::TimestampFormat as _;
 use sqlx::PgPool;
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_snapshot_exact_live_parity_rollups_privacy_and_attribution(
     pool: PgPool,
 ) {

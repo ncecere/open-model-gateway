@@ -422,7 +422,7 @@ fn represented(r: &Captured, seen: &mut PositiveFixtures) -> Value {
     seen.observe(r);
     v
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
     let f = fixture(&pool).await;
     let admin = browser(&pool, &f.admin).await;

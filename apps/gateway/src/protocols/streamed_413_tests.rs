@@ -20,7 +20,7 @@ impl Drop for Server {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn every_openai_route_uses_the_shared_streamed_413_envelope(pool: sqlx::PgPool) {
     let store = Store::new(pool);
     let keys = bootstrap::seed(&store, Environment::Development)

@@ -101,7 +101,7 @@ fn audio_usage(ms: u64) -> Usage {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn per_minute_transcription_holds_measured_duration_and_settles_reported(pool: PgPool) {
     let f = fixture(pool).await;
     let deployment = protocols(&f, "audio_transcriptions").await;
@@ -146,7 +146,7 @@ async fn per_minute_transcription_holds_measured_duration_and_settles_reported(p
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn unmeasured_audio_needs_price_max_units_and_ceilings_never_loosen_it(pool: PgPool) {
     let f = fixture(pool).await;
     let deployment = protocols(&f, "audio_transcriptions").await;
@@ -193,7 +193,7 @@ async fn unmeasured_audio_needs_price_max_units_and_ceilings_never_loosen_it(poo
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn token_billed_transcription_settles_tokens_with_free_audio_line(pool: PgPool) {
     let f = fixture(pool).await;
     let deployment = protocols(&f, "audio_transcriptions").await;
@@ -225,7 +225,7 @@ async fn token_billed_transcription_settles_tokens_with_free_audio_line(pool: Pg
     assert_eq!(amounts(&f, start.id).await.2, Some(10 + 30));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn per_million_character_speech_holds_exact_characters(pool: PgPool) {
     let f = fixture(pool).await;
     let deployment = protocols(&f, "audio_speech").await;
@@ -273,7 +273,7 @@ async fn per_million_character_speech_holds_exact_characters(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn cancelled_speech_keeps_its_hold_and_unbounded_output_is_refused(pool: PgPool) {
     let f = fixture(pool).await;
     let deployment = protocols(&f, "audio_speech").await;
@@ -351,7 +351,7 @@ async fn cancelled_speech_keeps_its_hold_and_unbounded_output_is_refused(pool: P
     assert_eq!(amounts(&f, start.id).await.0, "unknown");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn unreported_tokens_are_zero_only_when_the_price_says_not_applicable(pool: PgPool) {
     let f = fixture(pool).await;
     let deployment = protocols(&f, "audio_transcriptions").await;

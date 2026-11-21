@@ -5,7 +5,7 @@ use crate::alerts as core;
 #[path = "aged_hold_tests.rs"]
 mod aged_hold;
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn alert_generation_history_fired_and_cleared_preserves_privacy(pool: PgPool) {
     let f = fixture(&pool).await;
     let (status, r) = call(&f.s, &f.owner, "POST", &ws_rules(f.team), json!({"name":"Generation","kind":"budget_threshold","budget_layers":["local"],"thresholds":[100],"notify_workspace_admins":true})).await;
@@ -52,7 +52,7 @@ const EVENT_FROM: &str = "FROM alert_events e LEFT JOIN alert_rules r ON r.id=e.
 // Feed, summary and read-marking ALL use it; keep the actual SQL as an upgrade oracle.
 const PRE_0049_VISIBLE: &str = "e.fired_at>now()-interval '90 days' AND ((e.builtin IS NOT NULL AND w.kind='personal' AND w.owner_user_id=$1 AND w.disabled_at IS NULL) OR (r.scope='installation' AND $2) OR (e.builtin IN ('scim_last_admin','partitions_missing','history_orphans') AND $2) OR (r.scope='workspace' AND w.kind IN ('team','project') AND w.disabled_at IS NULL AND (EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=e.workspace_id AND m.user_id=$1 AND m.role IN ('owner','admin')) OR (r.notify_platform_admins AND $2))))";
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_expiry_live_visibility_shared_personal_service_and_old_binary(pool: PgPool) {
     let f = fixture(&pool).await;
     let (status, human) = key(&f, &f.member, f.team, Value::Null).await;
@@ -258,7 +258,7 @@ fn ws_rules(ws: Uuid) -> String {
     format!("/api/v1/workspaces/{ws}/alerts/rules")
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn installation_rules_are_admin_write_auditor_read(pool: PgPool) {
     let f = fixture(&pool).await;
     let (status, created) = call(&f.s, &f.admin, "POST", RULES, budget_rule()).await;
@@ -387,7 +387,7 @@ async fn installation_rules_are_admin_write_auditor_read(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn workspace_rules_belong_to_shared_admins_and_personal_is_built_in(pool: PgPool) {
     let f = fixture(&pool).await;
     let spike = json!({"name":"Spike","kind":"spend_spike","spike_factor_percent":300,"min_spend_microusd":"1000000","notify_workspace_admins":true});
@@ -525,7 +525,7 @@ async fn unread(f: &Fixture, user: &BrowserPrincipal) -> i64 {
         .unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn notifications_follow_live_authority_and_never_leak_private_details(pool: PgPool) {
     let f = fixture(&pool).await;
     local_budget(&pool, f.team, 1_000_000).await;
@@ -713,7 +713,7 @@ async fn notifications_follow_live_authority_and_never_leak_private_details(pool
     assert_eq!(closed["data"][0]["resolution"], "rule_disabled");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scim_last_admin_incident_is_for_platform_readers(pool: PgPool) {
     let f = fixture(&pool).await;
     let mut tx = pool.begin().await.unwrap();
@@ -789,7 +789,7 @@ async fn scim_last_admin_incident_is_for_platform_readers(pool: PgPool) {
 /// window and a rate and/or a lock-wait bucket, and email Platform Admins
 /// only. The incident's workspace reference is shown to Platform Admins;
 /// Auditors see the incident without it.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn admission_ceiling_rules_and_scope_names_are_for_platform_admins(pool: PgPool) {
     let f = fixture(&pool).await;
     let body = json!({"name":"Hot scopes","kind":"admission_ceiling","window_minutes":5,"ceiling_requests_per_second":200,"ceiling_lock_wait_ms":250,"notify_platform_admins":true});

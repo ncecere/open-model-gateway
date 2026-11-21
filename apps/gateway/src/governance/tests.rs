@@ -501,7 +501,7 @@ pub(crate) mod db {
             cache_write_1h_input_tokens: Some(8),
         }
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn revocation_wins_and_catalog_lock_precedes_installation(pool: PgPool) {
         let f = fixture(pool).await;
         let cached = f
@@ -545,7 +545,7 @@ pub(crate) mod db {
             0
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn credential_shared_locks_and_all_live_authority(pool: PgPool) {
         let f = fixture(pool).await;
         let mut tx = f.store.pool.begin().await.unwrap();
@@ -626,7 +626,7 @@ pub(crate) mod db {
             Err(InferenceError::Unauthenticated)
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn personal_direct_grant_never_authorizes_sibling_workspace(pool: PgPool) {
         let f = fixture(pool).await;
         sqlx::query("DELETE FROM workspace_model_grants WHERE workspace_id=$1")
@@ -656,7 +656,7 @@ pub(crate) mod db {
             Err(InferenceError::ModelUnavailable)
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn service_account_requires_live_account_and_workspace_grant(pool: PgPool) {
         let f = fixture(pool).await;
         let account = Uuid::new_v4();
@@ -702,7 +702,7 @@ pub(crate) mod db {
             Err(InferenceError::ModelUnavailable)
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn no_installation_layer_type_caps_are_per_workspace(pool: PgPool) {
         let f = fixture(pool).await;
         // Per-minute caps: every admission must see the same UTC minute.
@@ -740,7 +740,7 @@ pub(crate) mod db {
             Err(InferenceError::Busy)
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn cached_target_and_removed_protocol_drift_reject_before_reservation(pool: PgPool) {
         let f = fixture(pool).await;
         let cached = f
@@ -785,7 +785,7 @@ pub(crate) mod db {
             0
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn each_limiter_independently_serializes_races(pool: PgPool) {
         let f = fixture(pool).await;
         // Shared by every isolated clone: both racers see one UTC minute.
@@ -843,7 +843,7 @@ pub(crate) mod db {
             other: f.other,
         }
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn pinned_price_full_finish_idempotency_and_immutable_history(pool: PgPool) {
         let f = fixture(pool).await;
         let p = f.price(1_000_000).await;
@@ -890,7 +890,7 @@ pub(crate) mod db {
     /// `gateway_admission_seconds` / `gateway_settlement_seconds` time every
     /// phase of the real transactions. The registry is process-global and
     /// tests run in parallel, so counts are compared as lower bounds.
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn admission_and_settlement_phases_are_timed(pool: PgPool) {
         use crate::metrics::{ADMISSION_PHASES, METRICS, SETTLEMENT_PHASES};
         let admission = |outcome: &'static str| {
@@ -942,7 +942,7 @@ pub(crate) mod db {
             assert!(now_denied[i] > denied[i], "denied {}", ADMISSION_PHASES[i]);
         }
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn missing_usage_nonshrinking_floor_manual_resolution_and_evidence(pool: PgPool) {
         let f = fixture(pool).await;
         f.price(1_000_000).await;
@@ -1033,7 +1033,7 @@ pub(crate) mod db {
             1
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn reconciliation_rechecks_revoked_admin_after_lock_wait(pool: PgPool) {
         let f = fixture(pool).await;
         f.price(1_000_000).await;
@@ -1072,7 +1072,7 @@ pub(crate) mod db {
         tx.commit().await.unwrap();
         assert_eq!(op.await, Err(InferenceError::InvalidRequest));
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn partial_usage_grows_hold_oversized_usage_rolls_back(pool: PgPool) {
         let f = fixture(pool).await;
         f.price(1_000_000).await;
@@ -1092,7 +1092,7 @@ pub(crate) mod db {
             ("unknown".into(), Some(300), None, true)
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn expired_leases_release_concurrency_never_money(pool: PgPool) {
         let f = fixture(pool).await;
         f.price(1_000_000).await;
@@ -1116,7 +1116,7 @@ pub(crate) mod db {
                 .is_err()
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn unpriced_unknown_history_blocks_later_budget_and_token_caps(pool: PgPool) {
         let f = fixture(pool).await;
         let start = f.start();
@@ -1154,7 +1154,7 @@ pub(crate) mod db {
             Err(InferenceError::UnresolvedUsage(LimitScope::Workspace))
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn failed_provider_retains_hold_actual_overspend_blocks_future(pool: PgPool) {
         let f = fixture(pool).await;
         f.price(1_000_000).await;
@@ -1178,7 +1178,7 @@ pub(crate) mod db {
             Err(InferenceError::BudgetExceeded(LimitScope::Workspace))
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn utc_rollover_preserves_admission_month(pool: PgPool) {
         let f = fixture(pool).await;
         f.price(1_000_000).await;
@@ -1202,7 +1202,7 @@ pub(crate) mod db {
             .unwrap();
         assert!(sqlx::query_scalar::<_,bool>("SELECT month_start<date_trunc('month',now(),'UTC') FROM governance_reservations WHERE execution_id=$1").bind(a.id).fetch_one(&f.store.pool).await.unwrap());
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn v2_disjoint_cache_and_embeddings_are_input_only(pool: PgPool) {
         let f = fixture(pool).await;
         f.v2(rates()).await;
@@ -1252,7 +1252,7 @@ pub(crate) mod db {
         });
         assert!(finish(&f.store, &changed).await.is_err());
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn unknown_cache_bounds_block_every_budget_no_budget_flag_persists(pool: PgPool) {
         let f = fixture(pool).await;
         f.v2(CachePricing {
@@ -1285,7 +1285,7 @@ pub(crate) mod db {
             Err(InferenceError::UnresolvedUsage(LimitScope::Workspace))
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn positive_na_category_invalidates_bound_unknown_allocation_never_settles(pool: PgPool) {
         let f = fixture(pool).await;
         f.v2(CachePricing {
@@ -1328,7 +1328,7 @@ pub(crate) mod db {
         .unwrap();
         assert_eq!(amounts(&f, start.id).await.2, Some(38));
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn v1_normalized_inclusive_input_required_raw_only_compatibility_and_pin(pool: PgPool) {
         let f = fixture(pool).await;
         let price = f.price(1_000_000).await;
@@ -1375,7 +1375,7 @@ pub(crate) mod db {
             assert!(sqlx::query_scalar::<_, bool>("SELECT bool_and(cost_components IS NULL) FROM monetary_ledger WHERE execution_id=$1").bind(id).fetch_one(&f.store.pool).await.unwrap());
         }
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn bedrock_missing_ttl_na_invalidates_hold_and_blocks_next_budget(pool: PgPool) {
         let f = fixture(pool).await;
         f.v2(CachePricing {
@@ -1405,7 +1405,7 @@ pub(crate) mod db {
     }
     /// F7: budget/accounting denials are distinct from rate limits, report the
     /// narrowest denying scope and take precedence over retryable rate limits.
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn budget_denials_are_scoped_and_precede_rate_limits(pool: PgPool) {
         let f = fixture(pool).await;
         f.store.freeze_admission_clock().await.unwrap();
@@ -1450,7 +1450,7 @@ pub(crate) mod db {
     }
     /// Live acceptance D2: one failed attempt with entirely unknown usage under
     /// NA TTL rates must keep a finite hold instead of blocking the month.
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn failed_unknown_usage_with_na_rates_keeps_finite_hold(pool: PgPool) {
         let f = fixture(pool).await;
         f.v2(CachePricing {
@@ -1493,7 +1493,7 @@ pub(crate) mod db {
         finish(&isolated.store, &failed).await.unwrap();
         assert!(amounts(&isolated, start.id).await.3);
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn v2_partial_residuals_preserve_only_proven_finite_holds(pool: PgPool) {
         let f = fixture(pool).await;
         let all_na = CachePricing {
@@ -1707,7 +1707,7 @@ pub(crate) mod db {
             );
         }
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn v1_monetary_overflow_retains_terminal_usage_and_blocks_budget(pool: PgPool) {
         let f = fixture(pool).await;
         overflow_price(&f, 1, 100).await;
@@ -1729,7 +1729,7 @@ pub(crate) mod db {
         )
         .await;
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn v2_monetary_overflow_retains_terminal_usage_and_blocks_budget(pool: PgPool) {
         let f = fixture(pool).await;
         overflow_price(&f, 2, 100).await;
@@ -1768,7 +1768,7 @@ pub(crate) mod db {
         )
         .await;
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn overflow_reconciliation_is_fail_closed_and_preserves_observed_evidence(pool: PgPool) {
         let f = fixture(pool).await;
         // V1 and V2 share the reconciliation guard; exercise both pinned prices.
@@ -1851,7 +1851,7 @@ pub(crate) mod db {
             Err(InferenceError::UnresolvedUsage(LimitScope::Workspace))
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn malformed_usage_overflow_is_not_accepted_as_unknown_cost(pool: PgPool) {
         let f = fixture(pool).await;
         let req = ChatRequest {
@@ -1906,7 +1906,7 @@ pub(crate) mod db {
             assert_eq!(row, ("started".into(), None, None));
         }
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn nonrepresentable_reservation_is_rejected_before_dispatch(pool: PgPool) {
         let f = fixture(pool).await;
         let req = ChatRequest {
@@ -1940,7 +1940,7 @@ pub(crate) mod db {
             0
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn raw_normalized_total_validation_applies_finish_and_reconcile(pool: PgPool) {
         let f = fixture(pool).await;
         f.v2(rates()).await;
@@ -1968,7 +1968,7 @@ pub(crate) mod db {
     }
     /// #77: compaction works in bounded batches that each commit, so it
     /// resumes where it stopped, and it never touches money.
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn compaction_is_bounded_resumable_and_never_touches_money(pool: PgPool) {
         let f = fixture(pool).await;
         f.price(1_000_000).await;
@@ -2001,7 +2001,7 @@ pub(crate) mod db {
         assert_eq!(left, 0);
     }
     /// #75: held executions keep their details; released, they're compacted.
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn compaction_skips_executions_on_legal_hold(pool: PgPool) {
         let f = fixture(pool).await;
         f.price(1_000_000).await;
@@ -2043,7 +2043,7 @@ pub(crate) mod db {
             1
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn cost_center_snapshot_and_compaction_preserve_financial_dimensions(pool: PgPool) {
         let f = fixture(pool).await;
         f.price(1_000_000).await;
@@ -2100,7 +2100,7 @@ pub(crate) mod db {
         assert_eq!(amounts(&f, known.id).await.2, Some(5));
         assert_eq!(amounts(&f, unknown.id).await.0, "unknown");
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn key_rotation_consumption_and_restriction_lineage_do_not_reset(pool: PgPool) {
         let f = fixture(pool).await;
         // The rotated key must be denied by the same minute's consumption.
@@ -2121,7 +2121,7 @@ pub(crate) mod db {
             Err(InferenceError::Busy)
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn override_header_replaces_live_type_default_and_local_tightens(pool: PgPool) {
         let f = fixture(pool).await;
         f.store.freeze_admission_clock().await.unwrap();

@@ -1,6 +1,6 @@
 use super::*;
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn incoherent_operator_usage_is_invalid_and_retains_hold(pool: PgPool) {
     let f = fixture(pool).await;
     f.price(1_000_000).await;
@@ -105,7 +105,7 @@ async fn incoherent_operator_usage_is_invalid_and_retains_hold(pool: PgPool) {
     assert!(failures.is_empty(), "{}", failures.join("; "));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn input_only_operator_output_is_invalid_and_retains_hold(pool: PgPool) {
     use crate::{
         governance::{admit_workload_for_deployment, finish},

@@ -88,7 +88,7 @@ async fn occurrence_body_at(
         format!("{base}/report-schedules/{schedule}/runs/{run}"),
     )
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_read_authority_personal_privacy_auditor_and_live_revocation(
     pool: PgPool,
 ) {
@@ -178,7 +178,7 @@ async fn scheduled_reports_read_authority_personal_privacy_auditor_and_live_revo
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_read_uses_one_clock_at_expiry(pool: PgPool) {
     let mut f = fixture(&pool).await;
     let past = sqlx::query_scalar(

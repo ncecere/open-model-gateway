@@ -16,7 +16,7 @@ async fn incident(pool: &PgPool, ws: Option<Uuid>) -> Uuid {
     event
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_visibility_feed_summary_read_history_and_old_replicas(pool: PgPool) {
     let f = fixture(&pool).await;
     let shared = incident(&pool, Some(f.team)).await;

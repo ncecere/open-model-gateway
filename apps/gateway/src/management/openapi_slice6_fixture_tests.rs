@@ -539,7 +539,7 @@ async fn fresh_waits(pool: &PgPool) {
         .unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn management_openapi_slice6_fixtures(pool: PgPool) {
     let f = fixture(&pool).await;
     let owner = browser(&pool, &f.owner).await;

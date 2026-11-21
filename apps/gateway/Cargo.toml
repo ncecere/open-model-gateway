@@ -97,4 +97,6 @@ quote = "1"
 # Parse source inventories for route declarations and the configuration surface.
 syn = { version = "3", features = ["full", "visit"] }
 tempfile = "3"
+# `#[dbtest::test]`: database tests that clone a pre-migrated template (docs/verification.md, "Database tests").
+dbtest = { path = "../../crates/dbtest" }
 proptest = { version = "=1.12.0", default-features = false, features = ["std"] }

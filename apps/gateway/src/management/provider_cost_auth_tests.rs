@@ -19,7 +19,7 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for RejectionLogs {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn provider_cost_json_rejections_preserve_status_without_echoing_or_logging_uploads(
     pool: PgPool,
 ) {
@@ -114,7 +114,7 @@ async fn provider_cost_json_rejections_preserve_status_without_echoing_or_loggin
     assert!(!logged.contains(VALUE), "{logged}");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn provider_cost_upload_real_http_router_allows_more_than_two_mib_but_refuses_more_than_five(
     pool: PgPool,
 ) {
@@ -168,7 +168,7 @@ async fn provider_cost_upload_real_http_router_allows_more_than_two_mib_but_refu
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn provider_cost_browser_only_origin_csrf_and_live_roles(pool: PgPool) {
     let f = fixture(&pool).await;
     let mock = MockProvider::start(None).await;

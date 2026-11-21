@@ -108,7 +108,7 @@ async fn group_member(pool: &PgPool, ws: Uuid, user: Uuid) {
         .bind(ws).bind(user).bind(Uuid::new_v4()).execute(pool).await.unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn reviewers_see_and_decide_only_their_items(pool: PgPool) {
     let f = fixture(&pool).await;
     group_member(&pool, f.project, f.outsider.user_id).await;
@@ -247,7 +247,7 @@ async fn reviewers_see_and_decide_only_their_items(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_platform_admin_assigns_an_item_to_an_eligible_reviewer(pool: PgPool) {
     let f = fixture(&pool).await;
     let c = campaign(&f).await;
@@ -345,7 +345,7 @@ async fn a_platform_admin_assigns_an_item_to_an_eligible_reviewer(pool: PgPool) 
     assert!(inbox(&f, &f.owner).await.is_empty());
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn reviewer_authority_and_item_state_are_live(pool: PgPool) {
     let f = fixture(&pool).await;
     // A second workspace admin of the Team.
@@ -370,7 +370,7 @@ async fn reviewer_authority_and_item_state_are_live(pool: PgPool) {
     assert!(!emails(&inbox(&f, &f.owner).await).contains("Team:member@example.test"));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn the_database_binds_decisions_and_assignments(pool: PgPool) {
     let f = fixture(&pool).await;
     group_member(&pool, f.project, f.outsider.user_id).await;
@@ -524,7 +524,7 @@ async fn the_database_binds_decisions_and_assignments(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn platform_role_items_are_decided_by_other_platform_admins(pool: PgPool) {
     let f = fixture(&pool).await;
     let second = user(&pool, "second-admin", "admin").await;
@@ -611,7 +611,7 @@ async fn platform_role_items_are_decided_by_other_platform_admins(pool: PgPool) 
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn an_assignment_falls_back_when_the_assignee_no_longer_qualifies(pool: PgPool) {
     let f = fixture(&pool).await;
     member(&pool, f.team, f.outsider.user_id, "admin").await;
@@ -667,7 +667,7 @@ async fn an_assignment_falls_back_when_the_assignee_no_longer_qualifies(pool: Pg
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn repeated_and_stale_decisions_change_nothing(pool: PgPool) {
     let f = fixture(&pool).await;
     let c = campaign(&f).await;
@@ -718,7 +718,7 @@ async fn repeated_and_stale_decisions_change_nothing(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_decision_waits_for_a_concurrent_close_and_is_refused(pool: PgPool) {
     let f = fixture(&pool).await;
     let c = campaign(&f).await;
@@ -754,7 +754,7 @@ async fn a_decision_waits_for_a_concurrent_close_and_is_refused(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn the_inbox_matches_the_rule_and_pages(pool: PgPool) {
     let f = fixture(&pool).await;
     let second = user(&pool, "second-admin", "admin").await;
@@ -811,7 +811,7 @@ async fn the_inbox_matches_the_rule_and_pages(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn the_inbox_stays_fast_at_twenty_campaigns_of_five_thousand(pool: PgPool) {
     let f = fixture(&pool).await;
     sqlx::query("WITH u AS (INSERT INTO users(id,email) SELECT gen_random_uuid(),'bulk'||n||'@example.test' FROM generate_series(1,4997) n RETURNING id) INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) SELECT $1,id,'member','manual' FROM u")

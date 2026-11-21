@@ -29,7 +29,7 @@ fn ids(v: &Value, field: &str) -> Vec<String> {
         .collect()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn logs_telemetry_filters_generations_sessions_and_metrics(pool: PgPool) {
     let f = fixture(&pool).await;
     let r = route(&pool, "log-model", "openai").await;
@@ -307,7 +307,7 @@ async fn logs_telemetry_filters_generations_sessions_and_metrics(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn platform_logs_show_shared_workspaces_only_never_personal(pool: PgPool) {
     let f = fixture(&pool).await;
     let r = route(&pool, "plat-model", "openai").await;
@@ -489,7 +489,7 @@ async fn platform_logs_show_shared_workspaces_only_never_personal(pool: PgPool) 
 
 /// Async jobs in Logs: the `workload=jobs` filter, the job summary on rows
 /// and the job detail on the request page, under the usual visibility.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn logs_filter_and_show_async_jobs(pool: PgPool) {
     let f = fixture(&pool).await;
     let r = route(&pool, "job-model", "openai").await;
@@ -591,7 +591,7 @@ async fn logs_filter_and_show_async_jobs(pool: PgPool) {
 /// #141: Workspace › Logs › Batches follows the workspace's object visibility,
 /// and cancelling needs the creator or a workspace owner/admin (403), never
 /// "whoever sees it"; a hidden batch is 404 everywhere.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn dashboard_batches_follow_object_visibility(pool: PgPool) {
     let f = fixture(&pool).await;
     let r = route(&pool, "job-model", "openai").await;
@@ -738,7 +738,7 @@ fn cursor_timestamp_bounds() {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn cursor_timestamp_bounds_on_log_routes(pool: PgPool) {
     let f = fixture(&pool).await;
     let id = "00000000-0000-0000-0000-000000000001";
@@ -785,7 +785,7 @@ async fn cursor_timestamp_bounds_on_log_routes(pool: PgPool) {
     assert_eq!(failures, 0, "cursor route status failures");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn session_cursor_timestamp_bounds_on_route(pool: PgPool) {
     let f = fixture(&pool).await;
     for (case, micros, expected) in [
