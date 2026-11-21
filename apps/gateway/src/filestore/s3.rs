@@ -21,9 +21,9 @@ use std::time::Duration;
 use aws_sdk_s3::{
     Client,
     config::{
-        BehaviorVersion, Credentials, Region, RequestChecksumCalculation,
-        ResponseChecksumValidation, SharedCredentialsProvider, StalledStreamProtectionConfig,
-        retry::RetryConfig, timeout::TimeoutConfig,
+        Credentials, Region, RequestChecksumCalculation, ResponseChecksumValidation,
+        SharedCredentialsProvider, StalledStreamProtectionConfig, retry::RetryConfig,
+        timeout::TimeoutConfig,
     },
     error::{ProvideErrorMetadata, SdkError},
     primitives::ByteStream as SdkStream,
@@ -372,7 +372,7 @@ impl S3Backend {
         let mut builder = aws_sdk_s3::Config::builder();
         builder.set_endpoint_url(settings.endpoint.clone());
         let config = builder
-            .behavior_version(BehaviorVersion::v2026_01_12())
+            .behavior_version(aws_auth::sdk_behavior_version())
             .region(Region::new(settings.region.clone()))
             .credentials_provider(credentials)
             .http_client(http)

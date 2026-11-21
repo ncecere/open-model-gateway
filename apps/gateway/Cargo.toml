@@ -25,7 +25,7 @@ aws-smithy-eventstream = "=0.61.6"
 aws-smithy-async = "1"
 # File store (docs/file-storage.md): S3-compatible backend. Same SDK generation as
 # Bedrock (shared smithy/runtime crates); request checksums "when_required" for MinIO/RustFS.
-aws-sdk-s3 = { version = "=1.156.0", default-features = false, features = ["rt-tokio"] }
+aws-sdk-s3 = { version = "=1.157.0", default-features = false, features = ["rt-tokio"] }
 # Mandatory streaming AES-256-GCM encryption of every stored object.
 aes-gcm = { version = "=0.11.1", features = ["zeroize"] }
 base64 = "0.23"
@@ -57,7 +57,7 @@ percent-encoding = "2"
 # never classify webhook retryability by attacker-controlled error text.
 hyper = { version = "=1.12.0", default-features = false }
 # Prometheus/OpenMetrics exposition on the optional GATEWAY_METRICS_ADDR listener.
-prometheus-client = "=0.25.2"
+prometheus-client = "=0.26.0"
 # Secrets come only from the OS CSPRNG (rand::rngs::SysRng, fallible; src/entropy.rs).
 # The gateway never uses ThreadRng for secrets (it panics when the OS RNG fails);
 # seeded StdRng only for routing's deterministic, non-secret weighted choice.

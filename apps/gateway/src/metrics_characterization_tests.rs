@@ -29,14 +29,18 @@ async fn db_collector_label_keys_match_golden(pool: sqlx::PgPool) {
         let expected = golden.split_whitespace().nth(2).unwrap();
         let lines = out
             .lines()
-            .filter(|line| line.starts_with(&format!("{family}{{")))
+            .filter_map(|line| line.strip_prefix(family))
+            .filter(|rest| rest.starts_with(['{', ' ']))
             .collect::<Vec<_>>();
         assert!(
             !lines.is_empty(),
             "DB collector must have refreshed {family}"
         );
         for line in lines {
-            let labels = line.split_once('{').unwrap().1.split_once('}').unwrap().0;
+            let labels = line
+                .strip_prefix('{')
+                .map(|rest| rest.split_once('}').unwrap().0)
+                .unwrap_or_default();
             let keys = labels
                 .split(',')
                 .filter(|label| !label.is_empty())
@@ -218,7 +222,6 @@ async fn prometheus_family_types_and_label_keys_match_golden() {
             observed.insert(name.clone());
             if let Some((_, rest)) = line.split_once('{') {
                 let (labels, _) = rest.split_once('}').unwrap();
-                // A populated Family<L0, Gauge> emits valid empty braces.
                 for label in labels.split(',').filter(|label| !label.is_empty()) {
                     let (key, _) = label.split_once('=').unwrap();
                     if key != "le" {

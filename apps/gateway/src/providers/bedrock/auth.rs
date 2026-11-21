@@ -250,12 +250,18 @@ pub(super) fn profile_provider(
     builder.build()
 }
 
+/// Bedrock, STS and S3 retain their current retry and timeout defaults.
+#[allow(deprecated)]
+pub(crate) fn sdk_behavior_version() -> BehaviorVersion {
+    BehaviorVersion::v2026_01_12()
+}
+
 /// STS client configuration for AssumeRole: the server's identity, the connection's region
 /// and the regional STS endpoint. Built explicitly, so shared AWS configuration (including
 /// endpoint overrides) is not loaded. One attempt and bounded timeouts.
 pub(super) fn sts_config(region: &str, base: SharedCredentialsProvider) -> SdkConfig {
     let mut builder = SdkConfig::builder()
-        .behavior_version(BehaviorVersion::v2026_01_12())
+        .behavior_version(sdk_behavior_version())
         .region(Region::new(region.to_owned()))
         .credentials_provider(base)
         .time_source(aws_smithy_async::time::SystemTimeSource::new())

@@ -423,9 +423,18 @@ mod tests {
         let mut out = String::new();
         encode(&mut out, &m.registry).unwrap();
         assert!(out.contains("gateway_report_generation_outcomes_total{category=\"timeout\"} 1"));
-        assert!(out.contains("gateway_report_due_backlog{} 1024"));
-        assert!(out.contains("gateway_report_due_backlog_capped{} 1"));
-        assert!(out.contains("gateway_report_oldest_due_lag_seconds{} 42"));
+        assert!(
+            out.lines()
+                .any(|line| line == "gateway_report_due_backlog 1024")
+        );
+        assert!(
+            out.lines()
+                .any(|line| line == "gateway_report_due_backlog_capped 1")
+        );
+        assert!(
+            out.lines()
+                .any(|line| line == "gateway_report_oldest_due_lag_seconds 42")
+        );
         assert!(
             out.contains("gateway_report_email_attempts_total{outcome=\"permanent_failure\"} 1")
         );
@@ -720,13 +729,15 @@ mod tests {
         let m = Metrics::new();
         let scrape = m.render(Some(&store)).await;
         assert!(
-            scrape.contains("gateway_alert_delivery_pending_buckets{} 2"),
+            scrape
+                .lines()
+                .any(|line| line == "gateway_alert_delivery_pending_buckets 2"),
             "{scrape}"
         );
         let age = scrape
             .lines()
             .find_map(|line| {
-                line.strip_prefix("gateway_alert_delivery_oldest_pending_age_seconds{} ")
+                line.strip_prefix("gateway_alert_delivery_oldest_pending_age_seconds ")
             })
             .unwrap()
             .parse::<i64>()
@@ -737,20 +748,21 @@ mod tests {
             .clone()
             .with_leases(std::sync::Arc::new(crate::leases::Leases::new()));
         let scrape = m.render(Some(&unleased)).await;
-        assert!(
-            !scrape
-                .lines()
-                .any(|line| line.starts_with("gateway_alert_delivery_pending_buckets{"))
-        );
-        assert!(
-            !scrape
-                .lines()
-                .any(|line| line.starts_with("gateway_alert_delivery_oldest_pending_age_seconds{"))
-        );
+        for family in [
+            "gateway_alert_delivery_pending_buckets",
+            "gateway_alert_delivery_oldest_pending_age_seconds",
+        ] {
+            assert!(
+                !scrape
+                    .lines()
+                    .any(|line| line.split(['{', ' ']).next() == Some(family)),
+                "unleased collector exported {family}"
+            );
+        }
         crate::alerts::deliver_pending(&store, 25).await;
         let scrape = Metrics::new().render(Some(&store)).await;
-        assert!(scrape.contains("gateway_alert_delivery_pending_buckets{} 0"));
-        assert!(scrape.contains("gateway_alert_delivery_oldest_pending_age_seconds{} 0"));
+        assert!(scrape.contains("gateway_alert_delivery_pending_buckets 0"));
+        assert!(scrape.contains("gateway_alert_delivery_oldest_pending_age_seconds 0"));
     }
 
     #[cfg(feature = "integration-tests")]
