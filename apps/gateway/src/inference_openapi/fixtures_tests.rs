@@ -875,9 +875,35 @@ fn generation_http(path: &str, key: &str, body: &Value) -> Request<Body> {
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn inference_openapi_generation_real_handler_fixtures(pool: PgPool) {
+    generation_real_handler_fixtures(pool, 0)
+        .await
+        .finish(r::GENERATION_AREAS);
+}
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn inference_openapi_generation_real_handler_fixtures_shard_2(pool: PgPool) {
+    generation_real_handler_fixtures(pool, 1)
+        .await
+        .finish(r::GENERATION_AREAS);
+}
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn inference_openapi_generation_real_handler_fixtures_shard_3(pool: PgPool) {
+    generation_real_handler_fixtures(pool, 2)
+        .await
+        .finish(r::GENERATION_AREAS);
+}
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn inference_openapi_generation_real_handler_fixtures_shard_4(pool: PgPool) {
+    generation_real_handler_fixtures(pool, 3)
+        .await
+        .finish(r::GENERATION_AREAS);
+}
+/// The generation journey as shard `shard` of [`GENERATION_SHARDS`] parallel
+/// runs (see `PositiveFixtures::sharded`).
+const GENERATION_SHARDS: usize = 4;
+async fn generation_real_handler_fixtures(pool: PgPool, shard: usize) -> Fixtures {
     let (app, keys) = generation_gateway(&pool).await;
     let key = keys.personal_key.token;
-    let mut fixtures = Fixtures::default();
+    let mut fixtures = Fixtures::sharded(shard, GENERATION_SHARDS);
     for path in ["/v1/chat/completions", "/v1/responses", "/v1/messages"] {
         let mut event_kinds = std::collections::BTreeSet::new();
         for stream in [false, true] {
@@ -978,7 +1004,7 @@ async fn inference_openapi_generation_real_handler_fixtures(pool: PgPool) {
                 .await;
         }
     }
-    fixtures.finish(r::GENERATION_AREAS);
+    fixtures
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]

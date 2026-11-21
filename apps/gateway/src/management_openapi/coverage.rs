@@ -443,10 +443,8 @@ fn observe_node(
             .flatten()
             .filter(|(_, child)| child.is_object())
             .map(|(pattern, child)| {
-                super::validation::compile_schema(
-                    &serde_json::json!({"type":"string","pattern":pattern}),
-                )
-                .map(|validator| (pattern, child, validator))
+                super::validation::pattern_validator(pattern)
+                    .map(|validator| (pattern, child, validator))
             })
             .collect::<Result<_>>()?;
         let declared = node["properties"].as_object();

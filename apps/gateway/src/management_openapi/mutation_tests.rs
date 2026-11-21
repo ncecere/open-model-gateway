@@ -286,7 +286,15 @@ fn management_openapi_hardening_response_mutations_reach_nested_objects_and_arra
 
 #[test]
 fn management_openapi_review_every_completed_operation_rejects_response_mutations() {
-    let document = artifact().clone(); // deliberately NOT the immutable cached pointer
+    // Deliberately NOT the immutable cached pointer: a copy with its own scoped
+    // cache, so nothing is shared with the artifact's trusted entries.
+    let document = artifact().clone();
+    super::responses::with_document_cache(&document, || {
+        every_completed_operation_rejects_response_mutations(&document);
+    });
+}
+
+fn every_completed_operation_rejects_response_mutations(document: &Value) {
     let mut operations = 0;
     let mut json_operations = 0;
     for (path, item) in document["paths"].as_object().unwrap() {
@@ -341,7 +349,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                     let name = name.to_ascii_lowercase();
                     if header["required"] == true
                         && !h.contains_key(name.as_str())
-                        && let Some(text) = sample(&document, &header["schema"]).as_str()
+                        && let Some(text) = sample(document, &header["schema"]).as_str()
                     {
                         h.insert(
                             axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
@@ -349,20 +357,13 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                         );
                     }
                 }
-                let mut valid = sample(&document, schema);
+                let mut valid = sample(document, schema);
                 if valid["error"].is_object() {
                     valid["error"]["code"] = json!(status.as_str());
                 }
                 let encode = |v: &Value| serde_json::to_vec(v).unwrap();
-                validate(
-                    &document,
-                    &method,
-                    path,
-                    success_status,
-                    &h,
-                    &encode(&valid),
-                )
-                .unwrap_or_else(|e| panic!("positive schema control {method} {path}: {e:#}"));
+                validate(document, &method, path, success_status, &h, &encode(&valid))
+                    .unwrap_or_else(|e| panic!("positive schema control {method} {path}: {e:#}"));
                 let mut body_schema = schema;
                 loop {
                     if let Some(reference) = body_schema["$ref"].as_str() {
@@ -386,10 +387,10 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                 } else {
                     json!(false)
                 };
-                for (pointer, corrupt) in recursive_mutations(&document, schema, &valid) {
+                for (pointer, corrupt) in recursive_mutations(document, schema, &valid) {
                     assert!(
                         validate(
-                            &document,
+                            document,
                             &method,
                             path,
                             success_status,
@@ -409,7 +410,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                 ] {
                     assert!(
                         validate(
-                            &document,
+                            document,
                             &method,
                             path,
                             success_status,
@@ -439,7 +440,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                         value.parse().unwrap(),
                     );
                 }
-                validate(&document, &method, path, StatusCode::OK, &h, b"opaque!").unwrap();
+                validate(document, &method, path, StatusCode::OK, &h, b"opaque!").unwrap();
                 for name in [
                     "content-length",
                     "content-disposition",
@@ -448,15 +449,8 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                     let mut absent = h.clone();
                     absent.remove(name);
                     assert!(
-                        validate(
-                            &document,
-                            &method,
-                            path,
-                            StatusCode::OK,
-                            &absent,
-                            b"opaque!"
-                        )
-                        .is_err()
+                        validate(document, &method, path, StatusCode::OK, &absent, b"opaque!")
+                            .is_err()
                     );
                     let mut wrong = h.clone();
                     wrong.insert(
@@ -464,14 +458,14 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                         "false".parse().unwrap(),
                     );
                     assert!(
-                        validate(&document, &method, path, StatusCode::OK, &wrong, b"opaque!")
+                        validate(document, &method, path, StatusCode::OK, &wrong, b"opaque!")
                             .is_err()
                     );
                 }
                 h.insert("content-type", "application/json".parse().unwrap());
                 assert!(
                     validate(
-                        &document,
+                        document,
                         &method,
                         path,
                         StatusCode::OK,
@@ -530,7 +524,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                         let name = name.to_ascii_lowercase();
                         if header["required"] == true
                             && !h.contains_key(name.as_str())
-                            && let Some(text) = sample(&document, &header["schema"]).as_str()
+                            && let Some(text) = sample(document, &header["schema"]).as_str()
                         {
                             h.insert(
                                 axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
@@ -627,24 +621,24 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                         b"".as_slice(),
                     )
                 };
-                validate(&document, &method, path, status, &h, valid_body).unwrap();
+                validate(document, &method, path, status, &h, valid_body).unwrap();
                 let mut missing = h.clone();
                 missing.remove(header);
                 assert!(
-                    validate(&document, &method, path, status, &missing, valid_body).is_err(),
+                    validate(document, &method, path, status, &missing, valid_body).is_err(),
                     "missing required header {method} {path}"
                 );
                 let mut wrong = h.clone();
                 wrong.remove(header);
                 wrong.insert(header, "false".parse().unwrap());
                 assert!(
-                    validate(&document, &method, path, status, &wrong, valid_body).is_err(),
+                    validate(document, &method, path, status, &wrong, valid_body).is_err(),
                     "wrong header type/format {method} {path}"
                 );
                 let extra = h; // keep the declared media type; do not hide a body mutation behind a MIME mutation
                 assert!(
                     validate(
-                        &document,
+                        document,
                         &method,
                         path,
                         status,
@@ -658,6 +652,44 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
         }
     }
     assert_eq!((operations, json_operations), (274, 265));
+}
+
+/// A schema compiled as a fragment of the registered document must judge every
+/// instance, and name every violation, exactly as the same schema compiled inside
+/// a full copy of the document does (the reference behaviour).
+#[test]
+fn management_openapi_review_registry_validators_agree_with_whole_document_compilation() {
+    let document = artifact();
+    let mut compared = 0;
+    for (name, _) in document["components"]["schemas"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .step_by(9)
+    {
+        let schema = json!({"$ref": format!("#/components/schemas/{name}")});
+        let mut whole = document.clone();
+        whole["$defs"] = json!({"observed": schema});
+        whole["$ref"] = json!("#/$defs/observed");
+        let whole = super::validation::compile_schema(&whole).unwrap();
+        let fragment = validator(document, &schema).unwrap();
+        let valid = sample(document, &schema);
+        let mut instances = vec![valid.clone(), json!(false), json!(null), json!([])];
+        instances.extend(
+            recursive_mutations(document, &schema, &valid)
+                .into_iter()
+                .map(|(_, corrupt)| corrupt),
+        );
+        for instance in instances {
+            let verdicts = (
+                whole.validate(&instance).map_err(|e| describe(&e)),
+                fragment.validate(&instance).map_err(|e| describe(&e)),
+            );
+            assert_eq!(verdicts.0, verdicts.1, "{name}");
+            compared += 1;
+        }
+    }
+    assert!(compared > 100, "{compared}");
 }
 
 #[test]

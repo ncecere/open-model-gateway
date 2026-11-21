@@ -75,7 +75,10 @@ pub(crate) fn verify_vendor(files: &BTreeMap<String, Vec<u8>>) -> Result<()> {
     }
     Ok(())
 }
-struct LocalSchemas(BTreeMap<String, Value>);
+/// The vendored schemas, shared by every compilation. They are the checked-in
+/// bytes, verified against the manifest once per process: `vendor_files` and
+/// `verify_vendor` stay callable on their own for the tamper controls.
+struct LocalSchemas(std::sync::Arc<BTreeMap<String, Value>>);
 impl Retrieve for LocalSchemas {
     fn retrieve(
         &self,
@@ -87,7 +90,7 @@ impl Retrieve for LocalSchemas {
             .ok_or_else(|| format!("non-vendored reference refused: {uri}").into())
     }
 }
-fn local_schemas() -> Result<LocalSchemas> {
+fn load_local_schemas() -> Result<BTreeMap<String, Value>> {
     let files = vendor_files()?;
     let mut schemas = BTreeMap::new();
     for entry in manifest()?.files {
@@ -98,14 +101,110 @@ fn local_schemas() -> Result<LocalSchemas> {
         );
         schemas.insert(entry.uri, schema);
     }
-    Ok(LocalSchemas(schemas))
+    Ok(schemas)
+}
+fn local_schemas() -> Result<LocalSchemas> {
+    static LOADED: std::sync::OnceLock<
+        std::result::Result<std::sync::Arc<BTreeMap<String, Value>>, String>,
+    > = std::sync::OnceLock::new();
+    LOADED
+        .get_or_init(|| {
+            load_local_schemas()
+                .map(std::sync::Arc::new)
+                .map_err(|e| format!("{e:#}"))
+        })
+        .as_ref()
+        .map(|schemas| LocalSchemas(schemas.clone()))
+        .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// The URI under which a contract document is registered for compilation.
+/// Schema fragments that point into the document are rebased onto it (see
+/// [`rebased`]), so one registry serves every schema compiled against that
+/// document instead of each compilation copying and indexing the whole of it.
+const DOCUMENT_URI: &str = "urn:omg:contract";
+
+/// A registry borrowing `document`, registered under [`DOCUMENT_URI`].
+pub(crate) fn document_registry(document: &Value) -> Result<jsonschema::Registry<'_>> {
+    jsonschema::Registry::new()
+        .draft(Draft::Draft202012)
+        .retriever(local_schemas()?)
+        .add(DOCUMENT_URI, document)
+        .and_then(jsonschema::RegistryBuilder::prepare)
+        .map_err(|error| anyhow::anyhow!("contract document registration failed: {error}"))
+}
+
+/// [`document_registry`] owning a copy, for a registry that outlives the borrow.
+pub(crate) fn owned_document_registry(document: &Value) -> Result<jsonschema::Registry<'static>> {
+    jsonschema::Registry::new()
+        .draft(Draft::Draft202012)
+        .retriever(local_schemas()?)
+        .add(DOCUMENT_URI, document.clone())
+        .and_then(jsonschema::RegistryBuilder::prepare)
+        .map_err(|error| anyhow::anyhow!("contract document registration failed: {error}"))
+}
+
+/// `schema` with every local `$ref` (`#/...`) pointing at the registered
+/// document, so it resolves the same way it does inside the document.
+fn rebased(schema: &Value) -> Value {
+    match schema {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, child)| {
+                    let child = match (key.as_str(), child) {
+                        ("$ref", Value::String(reference)) if reference.starts_with("#/") => {
+                            Value::String(format!("{DOCUMENT_URI}{reference}"))
+                        }
+                        _ => rebased(child),
+                    };
+                    (key.clone(), child)
+                })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(rebased).collect()),
+        other => other.clone(),
+    }
+}
+
+/// Compile `schema` as a fragment of the document held by `registry`: its local
+/// references resolve into that document, exactly as when the schema is placed
+/// under `$defs` of a copy of the document.
+pub(crate) fn compile_in_document(
+    registry: &jsonschema::Registry<'_>,
+    schema: &Value,
+) -> Result<Validator> {
+    let root = json!({"$defs":{"observed":rebased(schema)},"$ref":"#/$defs/observed"});
+    build(&root, Some(registry))
 }
 
 pub(crate) fn compile_schema(schema: &Value) -> Result<Validator> {
+    build(schema, None)
+}
+/// The validator of `{"type":"string","pattern":<pattern>}`, compiled once per
+/// distinct pattern for the process (a compilation is a pure function of the
+/// pattern, and the harness asks about the same few hundred patterns over and
+/// over). A pattern that does not compile is refused every time.
+pub(crate) fn pattern_validator(pattern: &str) -> Result<std::sync::Arc<Validator>> {
+    type Compiled = std::result::Result<std::sync::Arc<Validator>, String>;
+    static COMPILED: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, Compiled>>,
+    > = std::sync::OnceLock::new();
+    let mut compiled = COMPILED.get_or_init(Default::default).lock().unwrap();
+    if let Some(found) = compiled.get(pattern) {
+        return found.clone().map_err(|e| anyhow::anyhow!("{e}"));
+    }
+    let built = compile_schema(&json!({"type":"string","pattern":pattern}))
+        .map(std::sync::Arc::new)
+        .map_err(|e| format!("{e:#}"));
+    compiled.insert(pattern.to_owned(), built.clone());
+    built.map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+fn build(schema: &Value, registry: Option<&jsonschema::Registry<'_>>) -> Result<Validator> {
     // No runtime backtracking: look-around/backreferences, malformed patterns and
     // compilation exhaustion fail at construction. The RED tests cover both regex
     // keywords, including underneath `not` (where treating errors as false is unsafe).
-    jsonschema::options()
+    let options = jsonschema::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
         // JSON UUID fields use uuid's serde parser, which also accepts compact,
@@ -119,7 +218,12 @@ pub(crate) fn compile_schema(schema: &Value) -> Result<Validator> {
             serde_json::from_value::<gateway_datetime_compat::UtcInstant>(json!(value)).is_ok()
         })
         .with_retriever(local_schemas()?)
-        .with_pattern_options(PatternOptions::regex().size_limit(1 << 20))
+        .with_pattern_options(PatternOptions::regex().size_limit(1 << 20));
+    let options = match registry {
+        Some(registry) => options.with_registry(registry),
+        None => options,
+    };
+    options
         .build(schema)
         .map_err(|error| anyhow::anyhow!("schema compilation failed: {error}"))
 }
@@ -252,6 +356,7 @@ pub(crate) fn validate_document_with(
     // local-reference meaning in this immutable document. Deduplicate only
     // within THIS validation call; mutated documents never reuse a result.
     let mut compiled = BTreeSet::new();
+    let registry = document_registry(document)?;
     for pointer in pointers {
         let node = document
             .pointer(&pointer)
@@ -260,9 +365,11 @@ pub(crate) fn validate_document_with(
         if !key.contains("$dynamic") && !key.contains("$anchor") && !compiled.insert(key) {
             continue;
         }
-        let mut schema = document.clone();
-        schema["$ref"] = json!(format!("#{}", fragment(&pointer)));
-        compile_schema(&schema).with_context(|| format!("compile contract schema at {pointer}"))?;
+        compile_in_document(
+            &registry,
+            &json!({"$ref":format!("#{}", fragment(&pointer))}),
+        )
+        .with_context(|| format!("compile contract schema at {pointer}"))?;
     }
     super::quality::completed_with(document, completed)?;
     Ok(())
