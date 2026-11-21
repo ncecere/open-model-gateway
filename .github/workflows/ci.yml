@@ -135,6 +135,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - uses: ./.github/actions/setup-node
       - run: npm ci
+      - run: node .github/scripts/rust-shards.mjs --check-special-sources
       - name: S3-compatible file store against MinIO and RustFS containers
         # Images are pinned by digest in tests/filestore_s3.rs; random loopback ports;
         # containers are removed by the test. Missing Docker fails instead of skipping.
@@ -142,17 +143,17 @@ jobs:
           FILESTORE_REQUIRE_DOCKER: "1"
         run: cargo test -p open-model-gateway --all-features --test filestore_s3
       - name: Ordinary runtime privilege tests on disposable PostgreSQL
-        run: cargo test -p open-model-gateway --all-features --test runtime_privileges
+        run: node deploy/spark/test-integration.mjs runtime
       - name: Verify enterprise runtime ACLs on disposable PostgreSQL
-        run: cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored --test-threads=1
+        run: node deploy/spark/test-integration.mjs runtime-ignored
       - name: Measure key issuance contention on dedicated runtime-role PostgreSQL
         # Changes maintenance ACLs; serialize after runtime_privileges, not an ignored sweep.
         env:
           RUST_TEST_NOCAPTURE: "1"
-        run: cargo test -p open-model-gateway --all-features --lib management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement -- --ignored --exact
+        run: node deploy/spark/test-integration.mjs key-contention
       - name: Verify Anthropic terminal SDK and accounting contract on disposable PostgreSQL
         # Changes maintenance-database ACLs: run sequentially, never as a generic ignored-test sweep.
-        run: cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact
+        run: node deploy/spark/test-integration.mjs terminal
       - name: Install age for the encrypted backup tests (pinned release, SHA-256 verified)
         run: |
           set -euo pipefail

@@ -163,11 +163,12 @@ test("special probes retain sequential ACL, exact contention/terminal, Docker an
   assert.ok(job, "missing special coverage job");
   assert.deepEqual(runs(job), [
     "npm ci",
+    "node .github/scripts/rust-shards.mjs --check-special-sources",
     "cargo test -p open-model-gateway --all-features --test filestore_s3",
-    "cargo test -p open-model-gateway --all-features --test runtime_privileges",
-    "cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored --test-threads=1",
-    "cargo test -p open-model-gateway --all-features --lib management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement -- --ignored --exact",
-    "cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact",
+    "node deploy/spark/test-integration.mjs runtime",
+    "node deploy/spark/test-integration.mjs runtime-ignored",
+    "node deploy/spark/test-integration.mjs key-contention",
+    "node deploy/spark/test-integration.mjs terminal",
     AGE_INSTALL,
     "cargo build -p open-model-gateway --all-features --bin open-model-gateway",
     "python3 tests/backup.test.py",
@@ -183,6 +184,57 @@ test("special probes retain sequential ACL, exact contention/terminal, Docker an
   assert.equal(webRuns.filter(run => run === AGE_INSTALL).length, 1);
   assert.equal(webRuns.filter(run => /\bage\b/.test(run)).length, 1, "no other step touches age");
   assert.ok(webRuns.indexOf(AGE_INSTALL) < webRuns.indexOf("npm run test:staging"));
+});
+
+test("special job validates both source paths before invoking any test", () => {
+  const dir = mkdtempSync(join(tmpdir(), "gateway-special-"));
+  try {
+    const cargo = join(dir, "cargo");
+    const calls = join(dir, "calls");
+    writeFileSync(cargo, `#!${process.execPath}
+      import { appendFileSync } from 'node:fs';
+      appendFileSync(process.env.CALLS, JSON.stringify(process.argv.slice(2)) + '\\n');
+      console.log(process.env.METADATA);
+      if (process.env.FAIL) process.exitCode = 101;`, { mode: 0o755 });
+    const command = runs(loadWorkflow().jobs["gateway-special"])[1].split(" ");
+    assert.equal(command[0], "node");
+    const meta = fixtures();
+    meta.workspace_root = "/repo";
+    for (const t of meta.packages[0].targets) t.src_path = `/repo/apps/gateway/tests/${t.name}.rs`;
+    const valid = JSON.stringify(meta);
+    function mutated(name, change) {
+      const copy = structuredClone(meta);
+      const targets = copy.packages[0].targets;
+      change(targets.find(t => t.name === name), targets);
+      return JSON.stringify(copy);
+    }
+    const runtime = change => mutated("runtime_privileges", change);
+    const scenarios = [
+      [valid],
+      [mutated("filestore_s3", t => { t.src_path = "/repo/elsewhere/tests/filestore_s3.rs"; }), /unexpected filestore_s3 source path/],
+      [runtime(t => { t.src_path = "/repo/apps/gateway/tests/remapped_live.rs"; }), /unexpected runtime_privileges source path/],
+      [runtime(t => { t.kind = ["bin", "test"]; }), /Unsupported Cargo test target kind/],
+      [runtime(t => { t.kind = "test"; }), /Malformed Cargo target identity/],
+      [runtime((t, targets) => targets.push(t)), /expected one gateway test target/],
+      [runtime(t => { t.test = false; }), /expected one gateway test target/],
+      ["{", /SyntaxError/],
+      [valid, /exit=101/, "1"],
+    ];
+    for (const [metadata, error, fail = ""] of scenarios) {
+      writeFileSync(calls, "");
+      const result = spawnSync(process.execPath, command.slice(1), {
+        cwd: root, encoding: "utf8", env: { PATH: dir, CALLS: calls, METADATA: metadata, FAIL: fail },
+      });
+      if (error) {
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, error);
+      } else assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(readFileSync(calls, "utf8")),
+        ["--color", "never", "metadata", "--no-deps", "--all-features", "--format-version", "1", "--locked"]);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("aggregate executable accepts only the exact dependency set with every result successful", () => {
@@ -209,7 +261,7 @@ test("aggregate executable accepts only the exact dependency set with every resu
 });
 
 // Synthetic Cargo/libtest output only: these tests must never build or run Rust.
-const target = (name, kind = ["test"]) => ({ name, kind, test: true });
+const target = (name, kind = ["test"]) => ({ name, kind, test: true, src_path: `/repo/tests/${name}.rs` });
 const gateway = "path+file:///repo/apps/gateway#open-model-gateway@0.9.0";
 const fixtures = () => ({
   workspace_members: [gateway, "path+file:///repo/tools/new#new@0.1.0"],
@@ -319,8 +371,11 @@ test("Cargo target invocations preserve package identity, exact multiple filters
   assert.deepEqual(validateRun("running 1 test\ntest result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s\n", { entries: [entry("live")], ignored: ["live"], total: 1 }), { passed: 0, ignored: 1, measured: 0 });
 });
 
-function syntheticCargo({ corrupt = "", failAt = -1, probe = "", probeMutation = "" } = {}) {
+function syntheticCargo({ liveIgnored, corrupt = "", failAt = -1, probe = "", probeMutation = "" } = {}) {
   const meta = fixtures();
+  if (liveIgnored !== undefined) {
+    meta.packages[0].targets.push({ ...target("custom_name"), src_path: "/repo/apps/gateway/tests/future_live.rs" });
+  }
   const calls = [];
   const run = async args => {
     calls.push(args);
@@ -331,10 +386,11 @@ function syntheticCargo({ corrupt = "", failAt = -1, probe = "", probeMutation =
     const name = args.includes("--lib") ? "open_model_gateway" : args[args.indexOf("--test") + 1] ?? "binary";
     const terminal = "providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence";
     const keyContention = "management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement";
-    const runtimeProbes = ["enterprise_runtime_allowlist_and_rollback_probes", "controlled_lock_stall_recovers_on_runtime_http_path"];
+    const runtimeProbes = ["enterprise_runtime_allowlist_and_rollback_probes", "controlled_lock_stall_recovers_on_runtime_http_path", "populated_verifier_both", "populated_verifier_personal", "populated_verifier_scim"];
     let entries = name === "open_model_gateway" ? Array.from({ length: 12 }, (_, i) => entry(i === 11 ? terminal : i === 10 ? keyContention : `m::test_${i}`))
       : name === "runtime_privileges" ? runtimeProbes.map(name => entry(name)) : [entry("normal"), entry("live")];
     let ignored = entries.filter(e => e.name === "live" || e.name === terminal || e.name === keyContention || (name === "runtime_privileges" && runtimeProbes.includes(e.name)));
+    if (name === "custom_name" && liveIgnored) ignored = entries;
     if (name === "open_model_gateway" || name === "runtime_privileges") {
       const mutate = items => items.flatMap(e => e.name !== probe ? [e]
         : probeMutation === "remove" ? []
@@ -380,6 +436,14 @@ test("orchestrator runs selected lib names once after -- --exact, runs doctests 
   }
 });
 
+test("live source targets require every discovered case to be ignored before shard execution", async () => {
+  const { runShard } = await shards();
+  const bad = syntheticCargo({ liveIgnored: false });
+  await assert.rejects(runShard(0, 4, bad.run, () => {}), /future_live\.rs.*normal/);
+  assert.ok(bad.calls.every(args => !args.includes("--exact") && !args.includes("--doc")));
+  await runShard(0, 4, syntheticCargo({ liveIgnored: true }).run, () => {});
+});
+
 test("orchestrator rejects each missing, renamed, unignored or non-test dedicated probe before executing tests", async () => {
   const { runShard } = await shards();
   const probes = [
@@ -387,6 +451,7 @@ test("orchestrator rejects each missing, renamed, unignored or non-test dedicate
     "providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence",
     "enterprise_runtime_allowlist_and_rollback_probes",
     "controlled_lock_stall_recovers_on_runtime_http_path",
+    "populated_verifier_both", "populated_verifier_personal", "populated_verifier_scim",
   ];
   for (const probe of probes) for (const probeMutation of ["remove", "rename", "unignore", "benchmark"]) {
     // Generate all listings from the same mutation: pretty counts stay valid

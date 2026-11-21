@@ -840,7 +840,7 @@ class SparkTest:
                 if "AlreadyExists" not in str(error):
                     raise
             script = json.dumps({"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": SCRIPT_CONFIGMAP},
-                                 "data": {name: (DEPLOY / name).read_text() for name in ("test-run.sh", "pg-forward.mjs", "test-integration.mjs")}})
+                                 "data": {name: (DEPLOY / name).read_text() for name in ("test-run.sh", "pg-forward.mjs", "test-integration.mjs", "target-inventory.mjs")}})
             for manifest in (superuser_secret(), script, (DEPLOY / "test-cluster.yaml").read_text()):
                 self.require_run(slot, handle)
                 self.kubectl(["create", "-f", "-"], slot=slot, stdin=self.owned_manifest(manifest, handle))

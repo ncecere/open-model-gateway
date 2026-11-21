@@ -39,18 +39,36 @@ case "$1" in
   metadata) cat "$STUB_METADATA"; exit 0 ;;
 esac
 case "$args" in
+  *"-p open-model-gateway --all-features --lib -- --list"*"--color never"* | *"-p open-model-gateway --all-features --lib -- --ignored --exact"*)
+    probes=(management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement
+            providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence inert_library_probe)
+    if [[ "$args" == *"--list"* ]]; then
+      printf '%s: test\n' "${probes[@]}"
+    else
+      n=0
+      for name in "${probes[@]}"; do [[ " $args " == *" $name "* ]] && n=$((n+1)); done
+      echo "running $n tests"
+      echo "test result: ok. $n passed; 0 failed; 0 ignored; 0 measured; $((3-n)) filtered out; finished in 0.01s"
+    fi
+    exit 0 ;;
   *"--test runtime_privileges"*)
     probes=(enterprise_runtime_allowlist_and_rollback_probes controlled_lock_stall_recovers_on_runtime_http_path)
-    if [ "${STUB_MISSING_PROBE:-}" = 1 ]; then probes=("${probes[0]}"); fi
+    probes+=(populated_verifier_both populated_verifier_personal populated_verifier_scim inert_unrelated)
+    if [[ "${STUB_MISSING_PROBE:-}" = 1 && "$args" == *"--ignored"* ]]; then unset 'probes[1]'; fi
     n=${#probes[@]}
     if [[ "$args" == *"--list"* ]]; then
       printf '%s: test\n' "${probes[@]}"
     else
+      total=$n
+      if [[ "$args" == *"--exact"* ]]; then
+        n=0
+        for name in "${probes[@]}"; do [[ " $args " == *" $name "* ]] && n=$((n+1)); done
+      fi
       if [[ "$args" == *"--ignored"* && "${STUB_EMPTY_RUNTIME_RUN:-}" = 1 ]]; then n=0; fi
       passed=0 ignored=$n
       if [[ "$args" == *"--ignored"* ]]; then passed=$n ignored=0; fi
       echo "running $n tests"
-      echo "test result: ok. $passed passed; 0 failed; $ignored ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      echo "test result: ok. $passed passed; 0 failed; $ignored ignored; 0 measured; $((total-n)) filtered out; finished in 0.01s"
     fi
     exit 0 ;;
   *"--message-format=json"*)
@@ -113,12 +131,12 @@ esac
 
 def metadata(tests):
     def target(kind, name):
-        return {"kind": [kind], "name": name, "test": True}
+        return {"kind": [kind], "name": name, "test": True, "src_path": f"/fixture/apps/gateway/tests/{name}.rs"}
     packages = [
         {"id": "open-model-gateway", "name": "open-model-gateway", "targets": [target("test", name) for name in tests] + [target("lib", "open_model_gateway"), target("bin", "empty_gateway")]},
         {"id": "fixture-tools", "name": "fixture-tools", "targets": [target("lib", "fixture_tools"), target("bin", "empty_tool")]},
     ]
-    return json.dumps({"workspace_members": [p["id"] for p in packages], "packages": packages})
+    return json.dumps({"workspace_root": "/fixture", "workspace_members": [p["id"] for p in packages], "packages": packages})
 
 
 def git(*args, cwd):
@@ -160,7 +178,7 @@ class Pod(unittest.TestCase):
             folder.mkdir(parents=True)
         (self.secrets / "password").write_text(PASSWORD)
         (self.image_rustup / "toolchains" / "1.99.1" / "bin" / "rustc").write_text("image rustc")
-        for name in ("pg-forward.mjs", "test-integration.mjs"):
+        for name in ("pg-forward.mjs", "test-integration.mjs", "target-inventory.mjs"):
             shutil.copy(ROOT / "deploy" / "spark" / name, self.scripts / name)
         for name, body in (("cargo", CARGO), ("npm", NPM), ("rustup", RUSTUP), ("rustc", RUSTC), ("node", NODE)):
             path = self.noderoot / "bin" / name
@@ -186,7 +204,12 @@ class Pod(unittest.TestCase):
             self.repo.mkdir(exist_ok=True)
             git("init", "-q", "-b", "main", cwd=self.repo)
             git("config", "uploadpack.allowAnySHA1InWant", "true", cwd=self.repo)
-        files = files or {"rust-toolchain.toml": '[toolchain]\nchannel = "1.99.1"\ncomponents = ["rustfmt", "clippy"]\n', "Cargo.toml": "[workspace]\n", "package.json": "{}\n", "apps/gateway/src/lib.rs": "// lib\n", "README.md": "readme\n", ".github/scripts/rust-shards.mjs": (ROOT / ".github/scripts/rust-shards.mjs").read_text()}
+        if files is None:
+            files = {"rust-toolchain.toml": '[toolchain]\nchannel = "1.99.1"\ncomponents = ["rustfmt", "clippy"]\n',
+                     "Cargo.toml": "[workspace]\n", "package.json": "{}\n", "apps/gateway/src/lib.rs": "// lib\n",
+                     "README.md": "readme\n"}
+            for path in (".github/scripts/rust-shards.mjs", "deploy/spark/target-inventory.mjs"):
+                files[path] = (ROOT / path).read_text()
         for name, text in files.items():
             path = self.repo / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -314,11 +337,59 @@ class Integration(Pod):
                     self.assertIn("--jobs 1", build)
                     self.assertIn("--workspace --all-features --no-run", build)
 
+    def test_live_inventory_refuses_enabled_case_before_execution(self):
+        data = json.loads(self.metadata.read_text())
+        data["packages"][0]["targets"][0]["src_path"] = "/fixture/tests/provider_live.rs"
+        self.metadata.write_text(json.dumps(data))
+        # The renamed live target has one active case and one ignored case.
+        stub = self.noderoot / "bin" / "cargo"
+        stub.write_text(stub.read_text().replace('  *"--list"*)', '''  *"--test alpha -- --list"*)
+    echo "fixture::opted_in: test"
+    n=1
+    if [[ "$args" != *"--ignored"* ]]; then echo "fixture::test: test"; n=2; fi
+    if [[ "$args" == *"--format pretty"* ]]; then printf "\\n%s tests, 0 benchmarks\\n" "$n"; fi
+    exit 0 ;;
+  *"--list"*)'''))
+        result = self.run_script(OMG_SUITE="integration", timeout=120)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("provider_live.rs: live cases must be ignored: fixture::test", result.stdout)
+        calls = [c for c in self.stub_calls() if "--test alpha " in c]
+        self.assertTrue(any("--list --ignored" in c for c in calls))
+        self.assertFalse(any("--list" not in c for c in calls))
+
+    def test_runtime_selection_checks_its_source_before_running_ignored_probes(self):
+        data = json.loads(self.metadata.read_text())
+        runtime = next(t for t in data["packages"][0]["targets"] if t["name"] == "runtime_privileges")
+        runtime["src_path"] = "/fixture/tests/provider_live.rs"
+        self.metadata.write_text(json.dumps(data))
+        result = self.run_script(OMG_SUITE="integration")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertGreaterEqual(result.stdout.count("unexpected runtime_privileges source path"), 2)
+        self.assertFalse(any("--test runtime_privileges" in c for c in self.stub_calls()))
+
     def test_runtime_probe_must_be_present_and_ignored(self):
         result = self.run_script(OMG_SUITE="integration", STUB_MISSING_PROBE="1", timeout=120)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("missing ignored runtime probe: controlled_lock_stall_recovers_on_runtime_http_path", result.stdout)
+        self.assertFalse(any("--test runtime_privileges" in c and "--list" not in c for c in self.stub_calls()))
 
+
+    def test_each_dedicated_probe_runs_once_by_exact_name(self):
+        result = self.run_script(OMG_SUITE="integration", timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout[-3000:])
+        runs = [c for c in self.stub_calls() if "--test runtime_privileges" in c and "--ignored" in c and "--list" not in c]
+        names = ["enterprise_runtime_allowlist_and_rollback_probes", "controlled_lock_stall_recovers_on_runtime_http_path",
+                 "populated_verifier_both", "populated_verifier_personal", "populated_verifier_scim"]
+        self.assertEqual(len(runs), len(names))
+        for name in names:
+            self.assertEqual(sum("--exact" in c and name in c.split() for c in runs), 1)
+        self.assertFalse(any("inert_unrelated" in c for c in runs))
+        lib = [c for c in self.stub_calls() if "--lib -- --ignored" in c]
+        self.assertEqual(len(lib), 2)
+        for name in ("management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement",
+                     "providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence"):
+            self.assertEqual(sum("--exact" in c and name in c.split() for c in lib), 1)
+        self.assertFalse(any("inert_library_probe" in c for c in lib))
 
     def test_runtime_ignored_run_must_execute_the_listed_probes(self):
         result = self.run_script(OMG_SUITE="integration", STUB_EMPTY_RUNTIME_RUN="1", timeout=120)
@@ -377,11 +448,11 @@ fi
         original = stub.read_text()
         for probe in ("key_issuance_contention_measurement", "terminal_fidelity_official_sdks_and_priced_http_evidence"):
             with self.subTest(probe=probe):
-                zero = f'if [[ "$args" == *"{probe}"* ]]; then echo "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2491 filtered out; finished in 0.00s"; exit 0; fi\n'
+                zero = f'if [[ "$args" == *"{probe}"* ]]; then echo "running 0 tests"; echo "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2491 filtered out; finished in 0.00s"; exit 0; fi\n'
                 stub.write_text(original.replace('args="$*"\n', 'args="$*"\n' + zero))
                 result = self.run_script(OMG_SUITE="integration", timeout=120)
                 self.assertNotEqual(result.returncode, 0, result.stdout[-3000:])
-                self.assertIn("expected exactly one passing probe", result.stdout)
+                self.assertIn("Libtest execution counts do not match", result.stdout)
                 parsed = tool.parse_log(result.stdout, NONCE)
                 summary = tool.build_summary("t", "integration", "main", self.commit, parsed, "failed", {}, 1)
                 self.assertEqual((summary["result"], tool.result_exit(summary)), ("failed", 1))

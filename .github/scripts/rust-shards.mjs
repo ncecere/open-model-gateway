@@ -4,24 +4,16 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-export const TERMINAL = "providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence";
-export const KEY_CONTENTION = "management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement";
+import { checkSources, identity, SPECIAL, KEY_CONTENTION, TERMINAL, DEDICATED_RUNTIME_PROBES } from "../../deploy/spark/target-inventory.mjs";
+export { KEY_CONTENTION, TERMINAL };
 const DEDICATED_LIB_PROBES = [TERMINAL, KEY_CONTENTION];
-const DEDICATED_RUNTIME_PROBES = ["enterprise_runtime_allowlist_and_rollback_probes", "controlled_lock_stall_recovers_on_runtime_http_path"];
-const SPECIAL = ["filestore_s3", "runtime_privileges"];
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const fail = message => { throw new Error(message); };
 
-function identity(packageId, target) {
-  if (typeof packageId !== "string" || !packageId || typeof target?.name !== "string" || !target.name
-      || !Array.isArray(target.kind) || !target.kind.length) fail("Malformed Cargo target identity");
-  const libs = ["lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"];
-  let kind;
-  if (target.kind.every(k => libs.includes(k))) kind = "lib";
-  else if (target.kind.length === 1 && ["bin", "test", "example", "bench"].includes(target.kind[0])) kind = target.kind[0];
-  else fail(`Unsupported Cargo test target kind: ${JSON.stringify(target.kind)}`);
-  return { packageId, name: target.name, kind, key: JSON.stringify([packageId, [...target.kind].sort(), target.name]) };
+async function checkSpecialSources() {
+  const metadata = JSON.parse(await runCargo(["metadata", "--no-deps", "--all-features", "--format-version", "1", "--locked"]));
+  checkSources(metadata, SPECIAL);
 }
 
 export function discoverTargets(metadata, output) {
@@ -35,6 +27,10 @@ export function discoverTargets(metadata, output) {
       if (typeof target.test !== "boolean") fail("Missing Cargo target.test flag");
       if (!target.test) continue;
       const item = { ...identity(id, target), packageName: packages[0].name };
+      if (item.kind === "test") {
+        if (typeof target.src_path !== "string" || !target.src_path) fail("Missing Cargo test source path");
+        if (/\/tests\/[^/]*_live\.rs$/.test(target.src_path)) item.liveSource = target.src_path;
+      }
       if (expected.has(item.key)) fail(`Duplicate metadata target: ${item.key}`);
       expected.set(item.key, item);
     }
@@ -157,6 +153,10 @@ export async function runShard(index, count, run = runCargo, log = console.log) 
     const ignored = parseListing(await run([...args, "--", "--list", "--ignored", "--format", "terse", "--color", "never"]));
     if (ignored.some(e => !target.entries.some(t => t.name === e.name && t.kind === e.kind))) fail("Ignored listing is not a subset of complete inventory");
     target.ignored = ignored.map(e => e.name);
+    if (target.liveSource) {
+      const enabled = target.entries.filter(e => !target.ignored.includes(e.name));
+      if (enabled.length) fail(`${target.liveSource}: live cases must be ignored: ${enabled.map(e => e.name).join(", ")}`);
+    }
     log(`inventory ${target.key}: listed=${target.entries.length} default-ignored=${target.ignored.length}`);
   }
   for (const target of targets.filter(t => t.packageName === "open-model-gateway" && t.kind === "lib")) {
@@ -225,9 +225,13 @@ export function runCargo(args, { echo = false } = {}) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const args = process.argv.slice(2);
-    if (args.length !== 4 || args[0] !== "--shard" || args[2] !== "--count"
-        || !/^(0|[1-9]\d*)$/.test(args[1]) || !/^[1-9]\d*$/.test(args[3])) fail("usage: rust-shards.mjs --shard INDEX --count COUNT");
-    await runShard(Number(args[1]), Number(args[3]));
+    if (args.length === 1 && args[0] === "--check-special-sources") {
+      await checkSpecialSources();
+    } else {
+      if (args.length !== 4 || args[0] !== "--shard" || args[2] !== "--count"
+          || !/^(0|[1-9]\d*)$/.test(args[1]) || !/^[1-9]\d*$/.test(args[3])) fail("usage: rust-shards.mjs --check-special-sources | --shard INDEX --count COUNT");
+      await runShard(Number(args[1]), Number(args[3]));
+    }
   } catch (error) {
     console.error(error.stack);
     process.exitCode = 1;

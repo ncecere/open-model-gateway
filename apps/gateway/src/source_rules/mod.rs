@@ -7,6 +7,7 @@
 #[macro_use]
 mod tree;
 mod engine_no_provider_switch;
+mod live_tests;
 mod log_fields;
 mod money_float;
 mod review_history;
