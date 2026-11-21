@@ -117,6 +117,7 @@ impl SecretResolver for Resolver {
 }
 
 struct Gateway {
+    engine: Engine,
     addr: std::net::SocketAddr,
     keys: DevelopmentKeys,
     mock: Mock,
@@ -175,11 +176,12 @@ async fn gateway(pool: PgPool, init: Init, replies: Vec<Reply>, limits: Realtime
         .unwrap()
         .with_realtime_limits(limits)
         .unwrap();
-    let router = http::router_with_engine(store, None, engine);
+    let router = http::router_with_engine(store, None, engine.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     Gateway {
+        engine,
         addr,
         keys,
         mock,
@@ -576,7 +578,18 @@ async fn client_disconnect_closes_upstream_and_keeps_the_hold(pool: PgPool) {
     assert_eq!(row["finish_reason"], "cancelled");
     assert_eq!(row["reservation"], "unknown");
     assert_eq!(row["held"], hold(expected_bounds(&g, &[])[0], 1000));
-    let responses = g.responses(row["id"].as_str().unwrap()).await;
+    assert_eq!(row["actual"], Value::Null);
+    assert_eq!(row["input_tokens"], Value::Null);
+    assert_eq!(row["output_tokens"], Value::Null);
+    let id = row["id"].as_str().unwrap();
+    assert_eq!(
+        g.ledger(id).await,
+        [
+            ("hold".into(), Some(ADMISSION)),
+            ("unknown".into(), Some(0))
+        ]
+    );
+    let responses = g.responses(id).await;
     assert_eq!(
         (responses.len(), responses[0]["state"].as_str()),
         (1, Some("unknown"))
@@ -1404,3 +1417,4 @@ pub(crate) async fn inference_openapi_handshake_fixtures(
     let _ = g.finished().await;
     g.pool.close().await;
 }
+mod settlement_drop;

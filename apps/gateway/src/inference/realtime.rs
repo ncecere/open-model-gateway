@@ -27,8 +27,10 @@ pub mod context;
 pub use context::ResponseBound;
 use context::{ContextTracker, EventSize, SessionConfig};
 
+use super::hand_off::HandOff;
 use super::*;
 use crate::db::accounting_failure::{realtime_admission, realtime_settlement};
+use crate::ops_log::Finalizer;
 use crate::{
     billing::MeterUsage,
     inference::{
@@ -270,6 +272,7 @@ pub struct RealtimeSession {
     sequence: i32,
     open: Option<(i32, String, ResponseBound)>,
     context: ContextTracker,
+    response_write: Option<tokio::sync::oneshot::Receiver<()>>,
     finished: bool,
     first_output_ms: Option<u64>,
     _permit: SharedPermit,
@@ -382,13 +385,28 @@ impl RealtimeSession {
         }
         let (sequence, bound) = (*sequence, *bound);
         let usage = usage.filter(RealtimeUsage::valid);
-        realtime_settlement(timeout(
-            Duration::from_secs(3),
-            self.repository
-                .realtime_settle_response(self.id, sequence, status, usage, bound),
-        ))
-        .await
-        .map_err(|_| InferenceError::Storage)??;
+        if self.response_write.is_some() {
+            return Err(InferenceError::Storage);
+        }
+        let repository = self.repository.clone();
+        let id = self.id;
+        let write = timeout(SETTLEMENT_DEADLINE, async move {
+            repository
+                .realtime_settle_response(id, sequence, status, usage, bound)
+                .await
+        });
+        // Session finalization reads the response rows. If this await is
+        // cancelled, it must observe the write's commit or failure first.
+        let (completed, waiting) = tokio::sync::oneshot::channel();
+        self.response_write = Some(waiting);
+        let result = HandOff::new(async move {
+            let result = realtime_settlement(write).await;
+            let _ = completed.send(());
+            result
+        })
+        .await;
+        self.response_write = None;
+        result.map_err(|_| InferenceError::Storage)??;
         self.open = None;
         self.context.done(usage);
         Ok(())
@@ -419,6 +437,36 @@ impl RealtimeSession {
                 .unwrap_or(ResponseBound::unknown(self.window_output_tokens)),
         }
     }
+    fn final_write(
+        &mut self,
+        record: RealtimeFinish,
+        finalizer: Finalizer,
+    ) -> impl Future<Output = Result<(), InferenceError>> + Send + 'static + use<> {
+        let repository = self.repository.clone();
+        let response_write = self.response_write.take();
+        let permit = self._permit.clone();
+        async move {
+            let _permit = permit;
+            if let Some(waiting) = response_write {
+                let _ = waiting.await;
+            }
+            let result = realtime_settlement(timeout(
+                SETTLEMENT_DEADLINE,
+                repository.realtime_finish(&record),
+            ))
+            .await
+            .map_err(|_| InferenceError::Storage)
+            .and_then(|r| r);
+            if result.is_err() {
+                tracing::error!(execution_id = %record.id, "realtime finalization failed; reconciliation required");
+                crate::ops_log::emit(crate::ops_log::OpsEvent::FinalizationNeedsReconciliation {
+                    finalizer,
+                    trace: None,
+                });
+            }
+            result
+        }
+    }
     /// Durably finish the session. An open response or unopened request keeps
     /// its window as unknown usage.
     pub async fn finish(
@@ -431,21 +479,7 @@ impl RealtimeSession {
         drop(self.upstream.take());
         self.finished = true;
         let record = self.record(outcome, error, finish);
-        let result = realtime_settlement(timeout(
-            Duration::from_secs(3),
-            self.repository.realtime_finish(&record),
-        ))
-        .await
-        .map_err(|_| InferenceError::Storage)
-        .and_then(|r| r);
-        if result.is_err() {
-            tracing::error!(execution_id = %self.id, "realtime finalization failed; reconciliation required");
-            // Realtime events remain uncorrelated (#294): no trace id.
-            crate::ops_log::emit(crate::ops_log::OpsEvent::FinalizationNeedsReconciliation {
-                finalizer: crate::ops_log::Finalizer::RealtimeFinish,
-                trace: None,
-            });
-        }
+        let result = HandOff::new(self.final_write(record, Finalizer::RealtimeFinish)).await;
         // Health is advisory: only provider-side failures count against it.
         let provider_error = error.filter(|e| {
             matches!(
@@ -478,19 +512,9 @@ impl Drop for RealtimeSession {
         if self.finished {
             return;
         }
-        let repository = self.repository.clone();
         let record = self.record(Outcome::Cancelled, None, None);
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(async move {
-                let finished = realtime_settlement(timeout(Duration::from_secs(3), repository.realtime_finish(&record)));
-                if !matches!(finished.await, Ok(Ok(()))) {
-                    tracing::error!(execution_id = %record.id, "cancelled realtime finalization failed; reconciliation required");
-                    crate::ops_log::emit(crate::ops_log::OpsEvent::FinalizationNeedsReconciliation {
-                        finalizer: crate::ops_log::Finalizer::RealtimeCancel,
-                        trace: None,
-                    });
-                }
-            });
+            runtime.spawn(self.final_write(record, Finalizer::RealtimeCancel));
         }
     }
 }
@@ -633,6 +657,7 @@ impl Engine {
                 sequence: 0,
                 open: None,
                 context: ContextTracker::new(SessionConfig::default()),
+                response_write: None,
                 finished: false,
                 first_output_ms: None,
                 _permit: permit.clone(),

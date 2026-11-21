@@ -17,6 +17,8 @@ use crate::{
 
 #[derive(Default)]
 struct Repo {
+    response_gate: StdMutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    settlement_events: StdMutex<Vec<&'static str>>,
     admitted: AtomicUsize,
     finished: StdMutex<Vec<(Uuid, Outcome, Option<InferenceError>)>>,
 }
@@ -37,7 +39,36 @@ impl InferenceRepository for Repo {
         self.admitted.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
-    async fn finish(&self, record: &ExecutionFinish) -> Result<(), InferenceError> {
+    async fn realtime_settle_response(
+        &self,
+        _: Uuid,
+        _: i32,
+        _: Option<ResponseStatus>,
+        _: Option<RealtimeUsage>,
+        _: ResponseBound,
+    ) -> Result<(), InferenceError> {
+        self.settlement_events
+            .lock()
+            .unwrap()
+            .push("response entered");
+        let gate = self.response_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.await.unwrap();
+        }
+        self.settlement_events
+            .lock()
+            .unwrap()
+            .push("response completed");
+        Ok(())
+    }
+    async fn finish(&self, _: &ExecutionFinish) -> Result<(), InferenceError> {
+        panic!("realtime sessions must use realtime_finish")
+    }
+    async fn realtime_finish(&self, record: &RealtimeFinish) -> Result<(), InferenceError> {
+        self.settlement_events
+            .lock()
+            .unwrap()
+            .push("finish entered");
         self.finished
             .lock()
             .unwrap()
@@ -200,6 +231,54 @@ async fn dropping_a_session_closes_upstream_now_and_records_a_cancellation() {
         }
         tokio::task::yield_now().await;
     }
+    assert_eq!(
+        repo.finished.lock().unwrap().as_slice(),
+        [(id, Outcome::Cancelled, None)]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn final_write_waits_for_cancelled_response_settlement() {
+    let (release, gate) = tokio::sync::oneshot::channel();
+    let repo = Arc::new(Repo {
+        response_gate: StdMutex::new(Some(gate)),
+        ..Repo::default()
+    });
+    let id = Uuid::new_v4();
+    let mut session = engine(
+        repo.clone(),
+        Fake {
+            realtime: true,
+            fail: None,
+            dropped: Arc::default(),
+        },
+    )
+    .open_realtime(principal(), "company/voice", id)
+    .await
+    .unwrap();
+    session.open_response("r1".into()).await.unwrap();
+    {
+        let mut response =
+            Box::pin(session.settle_response("r1", Some(ResponseStatus::Completed), None));
+        assert!(futures_util::poll!(&mut response).is_pending());
+    }
+
+    // The response owner has handed off its pending write. Poll finish on this
+    // task so it has a chance to enter the repository while the gate is shut.
+    let mut finish = Box::pin(session.finish(Outcome::Cancelled, None, None));
+    let first_poll = futures_util::poll!(&mut finish);
+    assert_eq!(
+        *repo.settlement_events.lock().unwrap(),
+        ["response entered"]
+    );
+    assert!(first_poll.is_pending());
+
+    release.send(()).unwrap();
+    finish.await.unwrap();
+    assert_eq!(
+        *repo.settlement_events.lock().unwrap(),
+        ["response entered", "response completed", "finish entered"]
+    );
     assert_eq!(
         repo.finished.lock().unwrap().as_slice(),
         [(id, Outcome::Cancelled, None)]
