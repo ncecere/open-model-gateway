@@ -692,7 +692,8 @@ async fn db_refresh_round_trips_with_concurrent_global_recording(pool: sqlx::PgP
         "gateway_alert_delivery_pending_buckets",
         "gateway_alert_delivery_oldest_pending_age_seconds",
     ] {
-        assert!(text.contains(&format!("{name}{{}} ")));
+        let sample_prefix = format!("{name} ");
+        assert!(text.lines().any(|line| line.starts_with(&sample_prefix)));
     }
     for (traffic, encoded) in encoded {
         assert_eq!(encoded.dropped.total(), 0, "{:?}", encoded.dropped);
