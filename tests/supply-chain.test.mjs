@@ -2179,8 +2179,9 @@ function assertPublicationGraph(flows) {
     ["digest", "artifact_id", "source_revision"].map(key => [`${key}_linux_${arch}`, `\${{ steps.record.outputs.${key}_linux_${arch} }}`]))));
   const branchBuild = stepsOf(branch.jobs.build).find(s => actionName(s.uses) === "docker/build-push-action");
   assert.equal(branchBuild.with.platforms, "${{ matrix.platform }}");
-  assert.equal(branchBuild.with["cache-from"], "type=gha,scope=image-${{ matrix.pair }}");
-  assert.equal(branchBuild.with["cache-to"], "type=gha,mode=max,scope=image-${{ matrix.pair }}");
+  assert.equal(branchBuild.with["no-cache"], true);
+  assert.ok(!("cache-from" in branchBuild.with));
+  assert.ok(!("cache-to" in branchBuild.with));
   assert.deepEqual(branch.jobs.build.steps.find(s => s.id === "record").env, {
     DIGEST: "${{ steps.build.outputs.digest }}", ARTIFACT_ID: "${{ steps.upload.outputs.artifact-id }}", SOURCE_REVISION: "${{ steps.name.outputs.sha }}",
   });
@@ -2545,7 +2546,7 @@ const imageVerificationMutants = [
     artifact_id: "${{ needs.build.outputs.artifact_id_linux_amd64 }}", root_digest: "${{ needs.build.outputs.digest_linux_amd64 }}",
   }); }],
   ["branch ARM import trusts the AMD revision", f => { f["branch-images"].jobs["import-arm64"].with.source_revision = "${{ needs.build.outputs.source_revision_linux_amd64 }}"; }],
-  ["branch builds share one cache scope", f => { stepsOf(f["branch-images"].jobs.build).find(s => actionName(s.uses) === "docker/build-push-action").with["cache-from"] = "type=gha,scope=image-linux-amd64"; }],
+  ["branch builds import a shared cache", f => { stepsOf(f["branch-images"].jobs.build).find(s => actionName(s.uses) === "docker/build-push-action").with["cache-from"] = "type=gha,scope=image-linux-amd64"; }],
   ["branch builds only amd64", f => { f["branch-images"].jobs.build.strategy.matrix.include.pop(); }],
   ["branch publish drops the same-commit check", f => { const s = f["branch-images"].jobs.publish.steps.find(s => s.name?.startsWith("Authenticate")); s.run = s.run.replace('[ "${SOURCE_REVISION_ARM64}" = "${SOURCE_REVISION}" ]', "true"); }],
   ["branch publish tags the arm64 image without its suffix", f => { const s = f["branch-images"].jobs.publish.steps.find(s => s.name?.includes("arm64")); s.run = s.run.replace("-arm64\"", '"'); }],
