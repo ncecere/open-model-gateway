@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, type RefObject } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type RefObject, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api, platformPath, type Provider, type Session } from "../../lib/api";
 import { importsPath, mappingsPath, readCostPages, readImportSummary, readLatestMapping, validateReportFile, dimensionLabel, coversPeriod, writeBinding, type Binding, type CostImport, type ImportSummary, type MappingRevision } from "../../lib/provider-cost-writes";
@@ -56,9 +56,12 @@ export function ProviderCostManager({ session, onOpen, onClose }: ManagerProps &
   if (session.user.platform_role !== "admin" || !session.capabilities.platform_write) return null;
   return <Manager onOpen={onOpen} onClose={onClose} />;
 }
-function Manager(props: ManagerProps) {
+export function ProviderCostWorkflow({ children }: { children: ReactNode }) {
   const [busy, setBusy] = useState(false), [dirty, setDirty] = useState(false), active = useRef<AbortController | null>(null);
-  return <WorkflowContext.Provider value={{ busy, setBusy, dirty, setDirty, active }}><ManagerView {...props} /></WorkflowContext.Provider>;
+  return <WorkflowContext.Provider value={{ busy, setBusy, dirty, setDirty, active }}>{children}</WorkflowContext.Provider>;
+}
+function Manager(props: ManagerProps) {
+  return <ProviderCostWorkflow><ManagerView {...props} /></ProviderCostWorkflow>;
 }
 function ManagerView({ onOpen, onClose }: ManagerProps) {
   const workflow = useContext(WorkflowContext);
@@ -106,11 +109,11 @@ function ManagerView({ onOpen, onClose }: ManagerProps) {
         <FormField label="Existing import" description="Resume mapping or freezing a retained import without downloading its raw evidence."><NativeSelect disabled={reports.isPending || !!reports.error || workflow.busy} value={selected?.id ?? ""} onChange={e => { const report = reports.data?.find(r => r.id === e.target.value); leave(() => select(report)); }}><option value="">Choose an import…</option>{!reports.error && reports.data?.map(r => <option key={r.id} value={r.id}>{r.account_id} · {r.period_start} – {r.period_end} · {r.id}</option>)}</NativeSelect></FormField>
         <Refusal error={reports.error} />{reports.error && <Button onClick={() => void reports.refetch()}>Reload imports</Button>}
       </Stack></TabsPanel>
-      {selected && <ImportFlow key={selected.id} report={selected} resolved={resolved} mappingId={mappingId} onMapping={setMappingId} onOpen={id => leave(() => onOpen(id))} />}
+      {selected && <ProviderCostImportFlow key={selected.id} report={selected} resolved={resolved} mappingId={mappingId} onMapping={setMappingId} onOpen={id => leave(() => onOpen(id))} />}
     </Stack></Tabs>
   </Stack>;
 }
-function ImportFlow({ report, resolved, mappingId, onMapping, onOpen }: { report: CostImport; resolved?: string; mappingId?: string; onMapping: (id: string) => void; onOpen: (id: string) => void }) {
+export function ProviderCostImportFlow({ report, resolved, mappingId, onMapping, onOpen }: { report: CostImport; resolved?: string; mappingId?: string; onMapping: (id: string) => void; onOpen: (id: string) => void }) {
   const scope = useApiScope();
   const summary = useQuery({ queryKey: ["api", scope, importsPath, report.id, "summary"], queryFn: ({ signal }) => readImportSummary(report, signal), retry: false });
   return <>
