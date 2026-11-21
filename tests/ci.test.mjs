@@ -209,7 +209,7 @@ test("aggregate executable accepts only the exact dependency set with every resu
 });
 
 // Synthetic Cargo/libtest output only: these tests must never build or run Rust.
-const target = (name, kind = ["test"]) => ({ name, kind, test: true });
+const target = (name, kind = ["test"]) => ({ name, kind, test: true, doctest: kind.some(k => ["lib", "rlib", "proc-macro"].includes(k)) });
 const gateway = "path+file:///repo/apps/gateway#open-model-gateway@0.9.0";
 const fixtures = () => ({
   workspace_members: [gateway, "path+file:///repo/tools/new#new@0.1.0"],
@@ -319,14 +319,15 @@ test("Cargo target invocations preserve package identity, exact multiple filters
   assert.deepEqual(validateRun("running 1 test\ntest result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s\n", { entries: [entry("live")], ignored: ["live"], total: 1 }), { passed: 0, ignored: 1, measured: 0 });
 });
 
-function syntheticCargo({ corrupt = "", failAt = -1, probe = "", probeMutation = "" } = {}) {
+function syntheticCargo({ corrupt = "", failAt = -1, probe = "", probeMutation = "", extend = () => {} } = {}) {
   const meta = fixtures();
+  extend(meta);
   const calls = [];
   const run = async args => {
     calls.push(args);
     if (calls.length === failAt) throw new Error("cargo failed");
     if (args[0] === "metadata") return JSON.stringify(meta);
-    if (args.includes("--no-run")) return cargoOutput(artifacts(meta));
+    if (args.includes("--no-run")) return cargoOutput(artifacts({ packages: meta.packages.filter(p => p.id === args[args.indexOf("-p") + 1]) }));
     if (args.includes("--doc")) return "doctests passed\n";
     const name = args.includes("--lib") ? "open_model_gateway" : args[args.indexOf("--test") + 1] ?? "binary";
     const terminal = "providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence";
@@ -362,7 +363,11 @@ test("orchestrator runs selected lib names once after -- --exact, runs doctests 
     const fake = syntheticCargo();
     const logs = [];
     await runShard(shard, 4, fake.run, text => logs.push(text));
-    assert.equal(fake.calls.filter(c => c.includes("--doc")).length, shard === 0 ? 1 : 0);
+    // One doctest run per package with a documented library (the gateway and
+    // the proc macro), each selected like its build: never `--workspace`.
+    assert.deepEqual(fake.calls.filter(c => c.includes("--doc")).map(c => c[c.indexOf("-p") + 1]), shard === 0 ? fixtures().workspace_members : []);
+    assert.deepEqual(fake.calls.filter(c => c.includes("--no-run")).map(c => c.slice(0, 3)), fixtures().workspace_members.map(id => ["test", "-p", id]));
+    assert.ok(!fake.calls.some(c => c.includes("--workspace")), "a workspace build unifies features differently from the -p runs");
     const libRuns = fake.calls.filter(c => c.includes("--lib") && !c.includes("--list") && c[c.indexOf("-p") + 1] === gateway);
     assert.equal(libRuns.length, 1);
     const args = libRuns[0];
@@ -378,6 +383,38 @@ test("orchestrator runs selected lib names once after -- --exact, runs doctests 
   for (const [index, count] of [[-1, 4], [4, 4], [0, 0], [0.5, 4], [0, 1.5], ["0", 4]]) {
     await assert.rejects(() => runShard(index, count, async () => { throw new Error("must not run"); }, () => {}), /shard/i);
   }
+});
+
+test("orchestrator builds and documents per package with all features, and refuses foreign artifacts and malformed members", async () => {
+  const { runShard } = await shards();
+  const cli = "path+file:///repo/tools/cli#cli@0.1.0";
+  const binOnly = meta => {
+    meta.workspace_members.push(cli);
+    meta.packages.push({ id: cli, name: "cli", targets: [target("cli", ["bin"])] });
+  };
+  const fake = syntheticCargo({ extend: binOnly });
+  await runShard(0, 4, fake.run, () => {});
+  const builds = fake.calls.filter(c => c.includes("--no-run"));
+  const docs = fake.calls.filter(c => c.includes("--doc"));
+  assert.deepEqual(builds.map(c => c[c.indexOf("-p") + 1]), [...fixtures().workspace_members, cli]);
+  // A package with no documented library gets no doctest run (Cargo refuses one).
+  assert.deepEqual(docs.map(c => c[c.indexOf("-p") + 1]), fixtures().workspace_members);
+  for (const call of [...builds, ...docs]) assert.ok(call.includes("--all-features"), call.join(" "));
+  // A package's build must produce only its own test executables.
+  const foreign = syntheticCargo();
+  await assert.rejects(() => runShard(0, 4, async args => {
+    const output = await foreign.run(args);
+    if (!args.includes("--no-run") || args[args.indexOf("-p") + 1] !== gateway) return output;
+    const other = artifacts({ packages: fixtures().packages.slice(1) })[0];
+    return cargoOutput([...output.trimEnd().split("\n").slice(0, -1).map(line => JSON.parse(line)), other]);
+  }, () => {}), /Unexpected\/duplicate Cargo test executable/);
+  for (const members of [[], [gateway, gateway], null]) {
+    const malformed = syntheticCargo({ extend: meta => { meta.workspace_members = members; } });
+    await assert.rejects(() => runShard(0, 4, malformed.run, () => {}), /Malformed Cargo workspace metadata/);
+    assert.ok(!malformed.calls.some(c => c.includes("--no-run")), "refused before any build");
+  }
+  const undocumented = syntheticCargo({ extend: meta => { for (const p of meta.packages) for (const t of p.targets) delete t.doctest; } });
+  await assert.rejects(() => runShard(0, 4, undocumented.run, () => {}), /No workspace package has doctests enabled/);
 });
 
 test("orchestrator rejects each missing, renamed, unignored or non-test dedicated probe before executing tests", async () => {
