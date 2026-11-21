@@ -16,6 +16,7 @@ Release preparation must update the chart's default repository to `ghcr.io/bitop
 
 ## Security and verification
 
+- **A fast test tier for the edit loop** (#722). `python3 -I scripts/test-fast.py` runs the gateway lib tests of the modules a change touches, the source rules and the matching npm scripts, typically in one to two minutes after the build; `--all` runs everything but the OpenAPI contract fixtures and `--contract` adds them. GitHub CI still runs the whole suite on every pull request (AGENTS.md, Checks).
 - **Database tests clone a pre-migrated template** (#722). The 1,112 `#[sqlx::test(migrations = "./enterprise_migrations")]` library tests became `#[dbtest::test]`: each still gets its own database, but it is a `CREATE DATABASE ... TEMPLATE` copy of one the real migrator built once (named after the migrations and the server's UTC hour, built under an advisory lock, collected when unused) instead of an empty database plus 82 migrations. Test names and counts are unchanged; a test that checks a clone against a freshly migrated database is added. See `docs/verification.md` ("Database tests"). Test code only; no gateway, migration, grant or API change.
 - **The OpenAPI contract-fixture tests are far cheaper and run in parallel** (#722). Internal verification change: no gateway code, route, schema, migration or grant changed, and no vector, response check or refusal expectation was removed. Measured alone on the 4-core build machine (user CPU seconds of the test process, before to after):
 
