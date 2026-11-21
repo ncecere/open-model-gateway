@@ -35,7 +35,7 @@ impl BedrockAdapter {
         adapter.http = http;
         adapter.streaming_http = streaming_http;
         let config = aws_sdk_bedrockruntime::Config::builder()
-            .behavior_version(BehaviorVersion::v2026_01_12())
+            .behavior_version(auth::sdk_behavior_version())
             .region(Region::new("us-east-1"))
             .credentials_provider(aws_sdk_bedrockruntime::config::Credentials::new(
                 "AKIDLOCALTEST",
@@ -132,7 +132,7 @@ impl Mock {
         // no endpoint argument and never inherits shared endpoint configuration.
         let mut adapter = BedrockAdapter::new().unwrap();
         let config = aws_sdk_bedrockruntime::Config::builder()
-            .behavior_version(BehaviorVersion::v2026_01_12())
+            .behavior_version(auth::sdk_behavior_version())
             .region(Region::new("us-east-1"))
             .credentials_provider(aws_sdk_bedrockruntime::config::Credentials::new(
                 "AKIDLOCALTEST",
