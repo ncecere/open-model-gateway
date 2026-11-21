@@ -12,7 +12,9 @@ This is a **single-host staging baseline, not approval for public production lau
 - Runtime readiness verifies migration versions/checksums. Startup never runs migrations or provisions identities. The default pool is 10 connections per replica: size database capacity accordingly.
 - The image `HEALTHCHECK` runs `open-model-gateway healthcheck` in exec form; ingress waits for it. Use `docker compose exec gateway /usr/local/bin/open-model-gateway healthcheck` for a manual probe; `sh`/`curl` inside the gateway container do not exist.
 
-For reproducible releases, build/tag the image with the Git commit and promote the tested image by digest. Do not substitute a newly rebuilt mutable tag during rollback. The runtime base image is pinned by digest in the `Dockerfile`; the build-stage images (`node`, `rust`, pulled through Google's Docker Hub mirror `mirror.gcr.io`) and the Compose images (`postgres`, `caddy`) are pinned by version tag only, so pin those to reviewed digests in your release process. `STAGING_POSTGRES_IMAGE` and `STAGING_CADDY_IMAGE` (in `staging.env` or the environment) replace the Compose images; CI sets them to the `mirror.gcr.io/library/...` copies so it never pulls from Docker Hub ([verification](verification.md#no-docker-hub-pulls-in-ci)).
+Tag the gateway image with the Git commit and promote the tested digest. For rollback, use the previously tested digest. The Dockerfile pins the Node, Rust and runtime base images by digest. Staging Compose also pins its default PostgreSQL and Caddy images to reviewed digests at `mirror.gcr.io`. To replace either default, set `STAGING_POSTGRES_IMAGE` or `STAGING_CADDY_IMAGE` to the reviewed image and digest in `staging.env` or the environment.
+
+The gateway, migration and grant services use the gateway image already in the local image store. Build the staging gateway first, or pull the selected release digest before setting `GATEWAY_IMAGE` to that reference. The release rehearsal follows this pull-by-digest path. [Image verification](verification.md#no-docker-hub-pulls-in-ci)
 
 ## Image CI and registry publication
 

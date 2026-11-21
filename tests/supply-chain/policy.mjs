@@ -8,6 +8,7 @@
 // workflows and these tests; mandatory review of workflow diffs and of pinned-jobs.yaml is.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, posix } from "node:path";
+import { isAlias, isMap, parseAllDocuments } from "yaml";
 import { gitFiles } from "../git.mjs";
 import {
   DOCKERFILE_SKIP_DIRS, KNOWN_DOCKERFILES, actionName, jobPermissions, actionsDir, isMapping, jobsOf, loadWorkflow, parseStrict, readLocalFromRepo, root, sourceFiles, stepsOf, toData, workflowsDir,
@@ -21,7 +22,27 @@ import {
 // expression, a computed services mapping, a missing image) is refused unless listed here as
 // `<file>: <where>` with the reason; every entry must be used. None is listed.
 export const CONTAINER_IMAGE_EXPRESSIONS = new Map([]);
-export const PINNED_IMAGE = /^[^\s@$]+@sha256:[0-9a-f]{64}$/;
+// Registry, repository and tag components follow distribution/reference/regexp.go.
+const domainLabel = "[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?";
+const registry = `(?:${domainLabel}(?:\\.${domainLabel})*|\\[[a-fA-F0-9:]+\\])(?::[0-9]+)?`;
+const pathComponent = "[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*";
+const repositoryPath = `${pathComponent}(?:/${pathComponent})*`;
+const tag = "[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}";
+const pinnedImage = new RegExp(`^(?:(${registry})/)?(${repositoryPath})(?::${tag})?@sha256:[0-9a-f]{64}$`);
+
+export function isPinnedImage(image) {
+  const match = pinnedImage.exec(image);
+  if (!match) return false;
+  const [, first, path] = match;
+  // Docker treats a plain lowercase prefix as a Hub namespace, and expands
+  // single-component Hub repository names to library/<name> before the limit.
+  if (first && first !== "localhost" && !/[.:A-Z]/.test(first)) {
+    return first.length + 1 + path.length <= 255;
+  }
+  const hub = !first || first === "docker.io" || first === "index.docker.io";
+  const normalizedPath = hub && !path.includes("/") ? `library/${path}` : path;
+  return normalizedPath.length <= 255;
+}
 
 // Container `options:` that reach the host or replace what the image runs, refused unless
 // listed here as `<file>: <where>: <option>` with the reason. None is listed: today's options
@@ -53,7 +74,7 @@ export function containerPinViolations(file, data, allowed = CONTAINER_IMAGE_EXP
       out.push(`${key}: an expression ('${image}') cannot be checked; write the digest-pinned image or allowlist it with a reason`);
     } else if (typeof image !== "string") {
       out.push(`${key}: the image must be one literal string`);
-    } else if (!PINNED_IMAGE.test(image)) {
+    } else if (!isPinnedImage(image)) {
       out.push(`${key}: ${image} is not pinned by digest (<image>[:<tag>]@sha256:<64 hex>)`);
     }
   };
@@ -85,6 +106,9 @@ export function containerPinViolations(file, data, allowed = CONTAINER_IMAGE_EXP
 // - no `target` (the last stage, the runtime image, is built), no `build-contexts`
 //   (`<name>=docker-image://<image>` replaces a stage or base image) and no `BUILDKIT_*`
 //   build argument (`BUILDKIT_SYNTAX` loads another Dockerfile frontend);
+// - literal `no-cache: true`, no cache imports/exports or stage-only bypass. GHA
+//   scopes do not authenticate the producing job; even read-only jobs can write
+//   through the Actions runtime token. Renaming a scope cannot make it trusted;
 // - an expression in any input but `labels` is one of BUILD_INPUT_EXPRESSIONS. `env.*`,
 //   `steps.*`, `needs.*` and `inputs.*` are refused: an earlier step can write env through
 //   $GITHUB_ENV (a cache scope of `x,url=https://...` redirects the cache), and the others
@@ -128,6 +152,10 @@ const matrixKeys = job => {
 function buildStepViolations(where, inputs, job) {
   const out = [];
   if (!isMapping(inputs)) return [`${where}: a build step needs a literal with: mapping`];
+  if (inputs["no-cache"] !== true && inputs["no-cache"] !== "true") out.push(`${where}: no-cache must be literal true; image builds must not reuse cached layers`);
+  for (const key of ["cache-from", "cache-to", "no-cache-filters"]) {
+    if (key in inputs) out.push(`${where}: ${key} is not allowed; image builds must have no cache import, export or stage-only bypass`);
+  }
   if ("build-contexts" in inputs) out.push(`${where}: build-contexts can replace a stage or base image of the Dockerfile; it is not allowed`);
   if ("target" in inputs) out.push(`${where}: target '${inputs.target}' builds another stage than the runtime image; it is not allowed`);
   if ("build-args" in inputs) {
@@ -386,21 +414,29 @@ export function invisibleCharacterViolations(texts = Object.fromEntries(stagingT
   return out;
 }
 
+export const STAGING_CANDIDATE_SERVICES = new Set(["gateway", "migrate", "grant-runtime"]);
+
 export function stagingCandidateViolations(compose, envExample, ci, overlays = readOverlays()) {
   const out = [];
   const candidate = stepOf(ci?.jobs?.["staging-image"], "docker/build-push-action")?.with?.tags;
   if (typeof candidate !== "string" || candidate.includes("${{") || candidate.includes("\n")) return ["ci.yml: staging-image must load one literal candidate tag"];
   const expected = `\${GATEWAY_IMAGE:-${candidate}}`;
   const services = isMapping(compose?.services) ? compose.services : {};
-  if (!isMapping(services.gateway)) out.push("deploy/staging/compose.yaml: there is no gateway service");
+  const candidates = new Set(STAGING_CANDIDATE_SERVICES);
   for (const [name, service] of Object.entries(services)) {
-    if (!isMapping(service) || (name !== "gateway" && service.build === undefined)) continue;
-    if (service.image !== expected) out.push(`deploy/staging/compose.yaml: service '${name}' image '${service.image}' is not the candidate under test (${expected})`);
+    if (service?.build !== undefined) candidates.add(name);
   }
-  const candidates = Object.entries(services).filter(([name, service]) => name === "gateway" || service?.build !== undefined).map(([name]) => name);
+  for (const name of candidates) {
+    const service = services[name];
+    if (!isMapping(service)) out.push(`deploy/staging/compose.yaml: there is no ${name} service`);
+    else if (service.image !== expected) out.push(`deploy/staging/compose.yaml: service '${name}' image '${service.image}' is not the candidate under test (${expected})`);
+  }
   for (const [file, overlay] of Object.entries(overlays ?? {})) {
     for (const [name, service] of Object.entries(isMapping(overlay?.services) ? overlay.services : {})) {
-      if (candidates.includes(name) && isMapping(service) && "image" in service) out.push(`${file}: service '${name}' may not set image; the rehearsal runs the candidate under test`);
+      if (candidates.has(name) && isMapping(service) && "image" in service) out.push(`${file}: service '${name}' may not set image; the rehearsal runs the candidate under test`);
+      if (candidates.has(name) && isMapping(service) && "pull_policy" in service && service.pull_policy !== "never") {
+        out.push(`${file}: service '${name}' must retain pull_policy: never for the local candidate`);
+      }
       if (isMapping(service) && "build" in service) out.push(`${file}: service '${name}' may not set build; only deploy/staging/compose.yaml builds the candidate`);
     }
   }
@@ -813,8 +849,18 @@ export function composeBuildViolations(file, data, builds = []) {
 // top-level `services:` key, in the Git source inventory outside the skipped directories
 // and .github. Only these may be passed to `docker compose -f`.
 export function repoComposeFiles(dir = root) {
-  return sourceFiles(dir).filter(file => !file.startsWith(".github/") && /\.ya?ml$/i.test(file))
-    .filter(file => COMPOSE_FILE.test(posix.basename(file)) || /^services[ \t]*:/m.test(readFileSync(join(dir, file), "utf8")));
+  return sourceFiles(dir).filter(file => {
+    if (file.startsWith(".github/") || !/\.ya?ml$/i.test(file)) return false;
+    if (COMPOSE_FILE.test(posix.basename(file))) return true;
+    const docs = parseAllDocuments(readFileSync(join(dir, file), "utf8"), { merge: true });
+    return docs.some(doc => {
+      if (!isMap(doc.contents)) return false;
+      if (doc.has("services")) return true;
+      // Resolve indirect keys only when this root mapping contains one.
+      const indirect = doc.contents.items.some(({ key }) => isAlias(key) || key?.source === "<<");
+      return indirect && Object.hasOwn(toData(doc), "services");
+    });
+  });
 }
 
 // Compose reads `.env` from the project directory (that of the first file) and takes

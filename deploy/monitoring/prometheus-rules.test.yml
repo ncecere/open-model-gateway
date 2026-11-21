@@ -1,0 +1,261 @@
+# Run with promtool test rules; CI pins the executable and verifies its archive.
+rule_files:
+  - prometheus-rules.yml
+evaluation_interval: 1m
+tests:
+  - name: missing accounting series never fires
+    interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: GatewayAccountingFailures
+        exp_alerts: []
+      - eval_time: 0m
+        alertname: GatewaySettlementAccountingFailures
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: GatewayAccountingFailures
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: GatewaySettlementAccountingFailures
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: GatewayAccountingFailures
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: GatewaySettlementAccountingFailures
+        exp_alerts: []
+  # A mature series increments once at 15m. The warning waits five minutes;
+  # the critical stages page immediately. By 25m both must have cleared.
+  - name: one failure on existing counters
+    interval: 1m
+    input_series:
+      - series: gateway_accounting_failures_total{stage="route_lookup",cause="deadline_in_database",instance="gateway-a"}
+        values: 1+0x14 2+0x15
+      - series: gateway_accounting_failures_total{stage="pool_acquire_and_begin",cause="deadline_in_database",instance="gateway-a"}
+        values: 1+0x14 2+0x15
+      - series: gateway_accounting_failures_total{stage="governance_storage",cause="deadline_in_database",instance="gateway-a"}
+        values: 1+0x14 2+0x15
+      - series: gateway_accounting_failures_total{stage="key_authentication",cause="deadline_in_database",instance="gateway-a"}
+        values: 1+0x14 2+0x15
+      - series: gateway_accounting_failures_total{stage="realtime_admission",cause="deadline_in_database",instance="gateway-a"}
+        values: 1+0x14 2+0x15
+      - series: gateway_accounting_failures_total{stage="job_storage",cause="deadline_in_database",instance="gateway-a"}
+        values: 1+0x14 2+0x15
+      - series: gateway_accounting_failures_total{stage="maintenance",cause="deadline_in_database",instance="gateway-a"}
+        values: 1+0x14 2+0x15
+      - series: gateway_accounting_failures_total{stage="explicit_settlement",cause="deadline_in_database",instance="gateway-a"}
+        values: 1+0x14 2+0x15
+      - series: gateway_accounting_failures_total{stage="cancellation_settlement",cause="deadline_in_database",instance="gateway-a"}
+        values: 1+0x14 2+0x15
+      - series: gateway_accounting_failures_total{stage="realtime_settlement",cause="deadline_in_database",instance="gateway-a"}
+        values: 1+0x14 2+0x15
+      - series: gateway_accounting_failures_total{stage="job_settlement",cause="deadline_in_database",instance="gateway-a"}
+        values: 1+0x14 2+0x15
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: GatewayAccountingFailures
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: GatewaySettlementAccountingFailures
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: GatewayAccountingFailures
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: GatewaySettlementAccountingFailures
+        exp_alerts: &critical_alerts
+          - exp_labels:
+              stage: explicit_settlement
+              cause: deadline_in_database
+              severity: critical
+            exp_annotations:
+              summary: Settlement failed at explicit_settlement (deadline_in_database); reservations stay held
+              description: A settlement failure in the last 10 minutes. Holds are retained, never refunded as zero, and can block budgeted admission until reconciliation. deadline_in_queue or deadline_acquiring_connection point to a starved pool, deadline_in_database to lock or statement waits; for job_settlement the cause is the database error.
+              runbook_url: docs/operations.md#accounting-failures
+          - exp_labels:
+              stage: cancellation_settlement
+              cause: deadline_in_database
+              severity: critical
+            exp_annotations:
+              summary: Settlement failed at cancellation_settlement (deadline_in_database); reservations stay held
+              description: A settlement failure in the last 10 minutes. Holds are retained, never refunded as zero, and can block budgeted admission until reconciliation. deadline_in_queue or deadline_acquiring_connection point to a starved pool, deadline_in_database to lock or statement waits; for job_settlement the cause is the database error.
+              runbook_url: docs/operations.md#accounting-failures
+          - exp_labels:
+              stage: realtime_settlement
+              cause: deadline_in_database
+              severity: critical
+            exp_annotations:
+              summary: Settlement failed at realtime_settlement (deadline_in_database); reservations stay held
+              description: A settlement failure in the last 10 minutes. Holds are retained, never refunded as zero, and can block budgeted admission until reconciliation. deadline_in_queue or deadline_acquiring_connection point to a starved pool, deadline_in_database to lock or statement waits; for job_settlement the cause is the database error.
+              runbook_url: docs/operations.md#accounting-failures
+          - exp_labels:
+              stage: job_settlement
+              cause: deadline_in_database
+              severity: critical
+            exp_annotations:
+              summary: Settlement failed at job_settlement (deadline_in_database); reservations stay held
+              description: A settlement failure in the last 10 minutes. Holds are retained, never refunded as zero, and can block budgeted admission until reconciliation. deadline_in_queue or deadline_acquiring_connection point to a starved pool, deadline_in_database to lock or statement waits; for job_settlement the cause is the database error.
+              runbook_url: docs/operations.md#accounting-failures
+      - eval_time: 19m
+        alertname: GatewayAccountingFailures
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: GatewaySettlementAccountingFailures
+        exp_alerts: *critical_alerts
+      - eval_time: 20m
+        alertname: GatewayAccountingFailures
+        exp_alerts: &warning_alerts
+          - exp_labels:
+              stage: route_lookup
+              cause: deadline_in_database
+              severity: warning
+            exp_annotations:
+              summary: Accounting failing at route_lookup (deadline_in_database); requests get 503 accounting_unavailable
+              description: A failure in the last 10 minutes, pending for 5. Check database health, pool saturation (gateway_db_pool_connections) and lock waits; the WARN log line `accounting unavailable` carries the same stage and cause.
+              runbook_url: docs/operations.md#accounting-failures
+          - exp_labels:
+              stage: pool_acquire_and_begin
+              cause: deadline_in_database
+              severity: warning
+            exp_annotations:
+              summary: Accounting failing at pool_acquire_and_begin (deadline_in_database); requests get 503 accounting_unavailable
+              description: A failure in the last 10 minutes, pending for 5. Check database health, pool saturation (gateway_db_pool_connections) and lock waits; the WARN log line `accounting unavailable` carries the same stage and cause.
+              runbook_url: docs/operations.md#accounting-failures
+          - exp_labels:
+              stage: governance_storage
+              cause: deadline_in_database
+              severity: warning
+            exp_annotations:
+              summary: Accounting failing at governance_storage (deadline_in_database); requests get 503 accounting_unavailable
+              description: A failure in the last 10 minutes, pending for 5. Check database health, pool saturation (gateway_db_pool_connections) and lock waits; the WARN log line `accounting unavailable` carries the same stage and cause.
+              runbook_url: docs/operations.md#accounting-failures
+          - exp_labels:
+              stage: key_authentication
+              cause: deadline_in_database
+              severity: warning
+            exp_annotations:
+              summary: Accounting failing at key_authentication (deadline_in_database); requests get 503 accounting_unavailable
+              description: A failure in the last 10 minutes, pending for 5. Check database health, pool saturation (gateway_db_pool_connections) and lock waits; the WARN log line `accounting unavailable` carries the same stage and cause.
+              runbook_url: docs/operations.md#accounting-failures
+          - exp_labels:
+              stage: realtime_admission
+              cause: deadline_in_database
+              severity: warning
+            exp_annotations:
+              summary: Accounting failing at realtime_admission (deadline_in_database); requests get 503 accounting_unavailable
+              description: A failure in the last 10 minutes, pending for 5. Check database health, pool saturation (gateway_db_pool_connections) and lock waits; the WARN log line `accounting unavailable` carries the same stage and cause.
+              runbook_url: docs/operations.md#accounting-failures
+          - exp_labels:
+              stage: job_storage
+              cause: deadline_in_database
+              severity: warning
+            exp_annotations:
+              summary: Accounting failing at job_storage (deadline_in_database); requests get 503 accounting_unavailable
+              description: A failure in the last 10 minutes, pending for 5. Check database health, pool saturation (gateway_db_pool_connections) and lock waits; the WARN log line `accounting unavailable` carries the same stage and cause.
+              runbook_url: docs/operations.md#accounting-failures
+          - exp_labels:
+              stage: maintenance
+              cause: deadline_in_database
+              severity: warning
+            exp_annotations:
+              summary: Accounting failing at maintenance (deadline_in_database); requests get 503 accounting_unavailable
+              description: A failure in the last 10 minutes, pending for 5. Check database health, pool saturation (gateway_db_pool_connections) and lock waits; the WARN log line `accounting unavailable` carries the same stage and cause.
+              runbook_url: docs/operations.md#accounting-failures
+      - eval_time: 20m
+        alertname: GatewaySettlementAccountingFailures
+        exp_alerts: *critical_alerts
+      - eval_time: 23m
+        alertname: GatewayAccountingFailures
+        exp_alerts: *warning_alerts
+      - eval_time: 23m
+        alertname: GatewaySettlementAccountingFailures
+        exp_alerts: *critical_alerts
+      - eval_time: 25m
+        alertname: GatewayAccountingFailures
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: GatewaySettlementAccountingFailures
+        exp_alerts: []
+  # No zero-valued warm-up: the first sample is 1 at 15m. A zero increase
+  # after the second scrape must not mask the new-series term.
+  - name: new series starts at its first failure
+    interval: 1m
+    input_series:
+      - series: gateway_accounting_failures_total{stage="route_lookup",cause="deadline_in_database",instance="gateway-a"}
+        values: _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 1+0x15
+      - series: gateway_accounting_failures_total{stage="pool_acquire_and_begin",cause="deadline_in_database",instance="gateway-a"}
+        values: _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 1+0x15
+      - series: gateway_accounting_failures_total{stage="governance_storage",cause="deadline_in_database",instance="gateway-a"}
+        values: _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 1+0x15
+      - series: gateway_accounting_failures_total{stage="key_authentication",cause="deadline_in_database",instance="gateway-a"}
+        values: _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 1+0x15
+      - series: gateway_accounting_failures_total{stage="realtime_admission",cause="deadline_in_database",instance="gateway-a"}
+        values: _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 1+0x15
+      - series: gateway_accounting_failures_total{stage="job_storage",cause="deadline_in_database",instance="gateway-a"}
+        values: _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 1+0x15
+      - series: gateway_accounting_failures_total{stage="maintenance",cause="deadline_in_database",instance="gateway-a"}
+        values: _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 1+0x15
+      - series: gateway_accounting_failures_total{stage="explicit_settlement",cause="deadline_in_database",instance="gateway-a"}
+        values: _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 1+0x15
+      - series: gateway_accounting_failures_total{stage="cancellation_settlement",cause="deadline_in_database",instance="gateway-a"}
+        values: _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 1+0x15
+      - series: gateway_accounting_failures_total{stage="realtime_settlement",cause="deadline_in_database",instance="gateway-a"}
+        values: _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 1+0x15
+      - series: gateway_accounting_failures_total{stage="job_settlement",cause="deadline_in_database",instance="gateway-a"}
+        values: _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 1+0x15
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: GatewayAccountingFailures
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: GatewaySettlementAccountingFailures
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: GatewayAccountingFailures
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: GatewaySettlementAccountingFailures
+        exp_alerts: *critical_alerts
+      - eval_time: 19m
+        alertname: GatewayAccountingFailures
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: GatewaySettlementAccountingFailures
+        exp_alerts: *critical_alerts
+      - eval_time: 20m
+        alertname: GatewayAccountingFailures
+        exp_alerts: *warning_alerts
+      - eval_time: 20m
+        alertname: GatewaySettlementAccountingFailures
+        exp_alerts: *critical_alerts
+      - eval_time: 23m
+        alertname: GatewayAccountingFailures
+        exp_alerts: *warning_alerts
+      - eval_time: 23m
+        alertname: GatewaySettlementAccountingFailures
+        exp_alerts: *critical_alerts
+      - eval_time: 25m
+        alertname: GatewayAccountingFailures
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: GatewaySettlementAccountingFailures
+        exp_alerts: []
+  - name: unchanged counters recover from a short scrape outage
+    interval: 1m
+    input_series:
+      - series: gateway_accounting_failures_total{stage="route_lookup",cause="deadline_in_database",instance="gateway-a"}
+        values: 1+0x19 stale _ _ _ _ _ 1+0x19
+      - series: gateway_accounting_failures_total{stage="explicit_settlement",cause="deadline_in_database",instance="gateway-a"}
+        values: 1+0x19 stale _ _ _ _ _ 1+0x19
+    alert_rule_test:
+      # Scrapes resume at 26m. At 30m the offset reaches the start of the gap.
+      - eval_time: 26m
+        alertname: GatewaySettlementAccountingFailures
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: GatewaySettlementAccountingFailures
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: GatewayAccountingFailures
+        exp_alerts: []

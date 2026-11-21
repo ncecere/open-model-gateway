@@ -216,6 +216,13 @@ jobs:
       - run: npm run test:structure
       - run: npm run test:rules
       - run: npm run test:monitoring
+      - name: Validate example Prometheus rules (pinned promtool, SHA-256 verified)
+        run: |
+          set -euo pipefail
+          bash .github/scripts/fetch-verified.sh https://github.com/prometheus/prometheus/releases/download/v3.5.1/prometheus-3.5.1.linux-amd64.tar.gz cd6aea0ab214b05838470668dfcee7d01a7d91913509a227b00401ca872423f0 "${RUNNER_TEMP}/prometheus.tar.gz"
+          tar -xzf "${RUNNER_TEMP}/prometheus.tar.gz" -C "${RUNNER_TEMP}" prometheus-3.5.1.linux-amd64/promtool
+          "${RUNNER_TEMP}/prometheus-3.5.1.linux-amd64/promtool" check rules deploy/monitoring/prometheus-rules.yml
+          "${RUNNER_TEMP}/prometheus-3.5.1.linux-amd64/promtool" test rules deploy/monitoring/prometheus-rules.test.yml
       - name: Install age (pinned release, SHA-256 verified; test:staging includes the encrypted backup tests)
         run: |
           set -euo pipefail
@@ -509,8 +516,9 @@ jobs:
           context: .
           load: true
           tags: open-model-gateway:staging
-          cache-from: type=gha,scope=staging
-          cache-to: type=gha,mode=max,scope=staging
+          # Cache scopes do not authenticate the job that supplied the layers.
+          # Rehearse a fresh build, just as the published images are built.
+          no-cache: true
       # The tag run's scan, before any tag exists (#475): v0.14.0 was tagged and
       # then refused for fixable HIGH findings in the runtime base. Same pinned,
       # checksum-verified Trivy 0.70.0 and the same policy as image.yml's verify

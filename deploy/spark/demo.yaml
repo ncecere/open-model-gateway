@@ -30,6 +30,13 @@ spec:
           image: &node mirror.gcr.io/library/node:22.23.4-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d
           restartPolicy: Always
           command: [node, /scripts/pg-forward.mjs]
+          # Native sidecar startup gates the next init container; probe inside its loopback network.
+          startupProbe:
+            exec:
+              command: [node, /scripts/loopback-probe.mjs, "5432"]
+            periodSeconds: 1
+            timeoutSeconds: 3
+            failureThreshold: 60
           resources: &small
             requests: {cpu: 20m, memory: 48Mi}
             limits: {cpu: 100m, memory: 128Mi}
@@ -44,6 +51,13 @@ spec:
           # ConfigMap files are symlinks; the script only starts when its entry path is its real path.
           command: [node, --preserve-symlinks-main, --preserve-symlinks, /scripts/demo-oidc.mjs]
           env: [{name: OMG_ENABLE_LOCAL_DEMO, value: "1"}]
+          # Native sidecar startup gates the next init container; probe inside its loopback network.
+          startupProbe:
+            exec:
+              command: [node, /scripts/loopback-probe.mjs, "18084"]
+            periodSeconds: 1
+            timeoutSeconds: 3
+            failureThreshold: 60
           resources: *small
           securityContext: *locked
           volumeMounts: [{name: scripts, mountPath: /scripts, readOnly: true}]
