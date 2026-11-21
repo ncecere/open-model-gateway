@@ -1,8 +1,7 @@
 // Example monitoring files (deploy/monitoring): the Prometheus rules and the
 // Grafana dashboard parse, name only metric families and labels the gateway
 // exports (apps/gateway/src/metrics_export.rs), and cover the accounting
-// failure counter (#528). promtool is not run here or in CI (#584); check the
-// rules with `promtool check rules` before deploying them.
+// failure counter (#528). CI also exercises the rules with pinned promtool.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -87,12 +86,10 @@ test("accounting failures alert, split by settlement stage (#528)", () => {
     "route_lookup",
   ]);
   const settlement = "explicit_settlement|cancellation_settlement|realtime_settlement|job_settlement";
-  // increase() plus the series that did not exist 10 minutes ago: a series
-  // exists only after a failure, so a new one is the first failure, which
-  // rate() and increase() cannot see.
+  // Keep a first failure visible when the preceding observation window is empty.
   const failures = matcher =>
-    `sum by (stage, cause) ( increase(gateway_accounting_failures_total{${matcher}}[10m]) or ` +
-    `(gateway_accounting_failures_total{${matcher}} unless gateway_accounting_failures_total{${matcher}} offset 10m) ) > 0`;
+    `sum by (stage, cause) ( increase(gateway_accounting_failures_total{${matcher}}[10m]) > 0 or ` +
+    `(gateway_accounting_failures_total{${matcher}} unless present_over_time(gateway_accounting_failures_total{${matcher}}[10m] offset 10m)) ) > 0`;
   const expected = {
     GatewayAccountingFailures: { expr: failures(`stage!~"${settlement}"`), for: "5m", severity: "warning" },
     GatewaySettlementAccountingFailures: { expr: failures(`stage=~"${settlement}"`), for: undefined, severity: "critical" },
@@ -117,10 +114,10 @@ test("accounting failures alert, split by settlement stage (#528)", () => {
   assert.match(read("docs/operations.md"), /^### Accounting failures$/m);
 });
 
-test("the docs do not claim CI validates the rules with promtool (#528)", () => {
+test("the docs describe CI promtool syntax and accounting behavior validation (#584)", () => {
   const docs = read("docs/operations.md");
-  assert.doesNotMatch(docs, /validated with `promtool/);
-  assert.match(docs, /`promtool check rules` before deploying them; it is not run in CI \(#584\)/);
+  assert.match(docs, /CI validates them with version- and SHA-256-pinned `promtool check rules`/);
+  assert.match(docs, /`promtool test rules`/);
 });
 
 test("dashboard panel ids are unique and panels do not overlap", () => {

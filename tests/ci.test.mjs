@@ -513,3 +513,34 @@ test("vendored SDK tests keep every target and all-feature/doc checks in the req
     "cargo clippy --manifest-path vendor/${{ matrix.package }}/Cargo.toml --all-features --all-targets -- -D warnings",
   ]);
 });
+
+const promtoolCommand = `set -euo pipefail
+bash .github/scripts/fetch-verified.sh https://github.com/prometheus/prometheus/releases/download/v3.5.1/prometheus-3.5.1.linux-amd64.tar.gz cd6aea0ab214b05838470668dfcee7d01a7d91913509a227b00401ca872423f0 "\${RUNNER_TEMP}/prometheus.tar.gz"
+tar -xzf "\${RUNNER_TEMP}/prometheus.tar.gz" -C "\${RUNNER_TEMP}" prometheus-3.5.1.linux-amd64/promtool
+"\${RUNNER_TEMP}/prometheus-3.5.1.linux-amd64/promtool" check rules deploy/monitoring/prometheus-rules.yml
+"\${RUNNER_TEMP}/prometheus-3.5.1.linux-amd64/promtool" test rules deploy/monitoring/prometheus-rules.test.yml
+`;
+function validatePromtool(data) {
+  required(data.jobs.web);
+  assert.deepEqual(data.permissions, { contents: "read" });
+  assert.equal(data.jobs.web.permissions, undefined);
+  assert.ok(data.jobs.image.needs.includes("web"));
+  assert.equal(data.jobs.web.steps.filter(s => s.run === promtoolCommand).length, 1);
+}
+test("read-only required CI validates example rules with checksum-pinned promtool (#584)", () => {
+  validatePromtool(loadWorkflow());
+});
+test("promtool gate rejects omitted, skipped, optional, altered and write-enabled validation", () => {
+  const original = loadWorkflow();
+  for (const mutate of [
+    d => { d.jobs.web.steps = d.jobs.web.steps.filter(s => s.run !== promtoolCommand); },
+    d => { d.jobs.web.steps.find(s => s.run === promtoolCommand).if = "false"; },
+    d => { d.jobs.web.steps.find(s => s.run === promtoolCommand)["continue-on-error"] = true; },
+    d => { d.jobs.web.steps.find(s => s.run === promtoolCommand).run += "true"; },
+    d => { d.jobs.web.permissions = { contents: "write" }; },
+  ]) {
+    const data = structuredClone(original);
+    mutate(data);
+    assert.throws(() => validatePromtool(data));
+  }
+});

@@ -216,6 +216,13 @@ jobs:
       - run: npm run test:structure
       - run: npm run test:rules
       - run: npm run test:monitoring
+      - name: Validate example Prometheus rules (pinned promtool, SHA-256 verified)
+        run: |
+          set -euo pipefail
+          bash .github/scripts/fetch-verified.sh https://github.com/prometheus/prometheus/releases/download/v3.5.1/prometheus-3.5.1.linux-amd64.tar.gz cd6aea0ab214b05838470668dfcee7d01a7d91913509a227b00401ca872423f0 "${RUNNER_TEMP}/prometheus.tar.gz"
+          tar -xzf "${RUNNER_TEMP}/prometheus.tar.gz" -C "${RUNNER_TEMP}" prometheus-3.5.1.linux-amd64/promtool
+          "${RUNNER_TEMP}/prometheus-3.5.1.linux-amd64/promtool" check rules deploy/monitoring/prometheus-rules.yml
+          "${RUNNER_TEMP}/prometheus-3.5.1.linux-amd64/promtool" test rules deploy/monitoring/prometheus-rules.test.yml
       - name: Install age (pinned release, SHA-256 verified; test:staging includes the encrypted backup tests)
         run: |
           set -euo pipefail
