@@ -10,7 +10,7 @@ async fn route(pool: &PgPool, provider: &str, endpoint: Option<&str>) -> Uuid {
     deployment
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn route_batch_scheduling_settings(pool: PgPool) {
     let f = fixture(&pool).await;
     let vllm = route(&pool, "vllm", Some("http://10.0.0.5:8000/v1")).await;

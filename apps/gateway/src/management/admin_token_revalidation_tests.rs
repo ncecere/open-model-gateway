@@ -171,7 +171,7 @@ async fn token_revoked(pool: &PgPool, token_id: Uuid) -> bool {
 /// handler transaction => no write." A token already revoked and committed
 /// before the handler's own transaction starts must fail transaction-level
 /// revalidation -- middleware preflight alone cannot see this.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn revoked_token_fails_handler_revalidation_once_committed(pool: PgPool) {
     let f = fixture(&pool).await;
     let token_id = mint(&pool, f.admin.user_id, &["catalog:write"]).await;
@@ -195,7 +195,7 @@ async fn revoked_token_fails_handler_revalidation_once_committed(pool: PgPool) {
 /// Required behaviour: "owner demoted after preflight but before handler
 /// transaction => no write," in the ordering where the demotion already
 /// committed. Migration 0051's deferred trigger also revokes the token.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn owner_demotion_committed_before_the_check_fails_the_mutation(pool: PgPool) {
     let f = fixture(&pool).await;
     let token_id = mint(&pool, f.admin.user_id, &["catalog:write"]).await;
@@ -223,7 +223,7 @@ async fn owner_demotion_committed_before_the_check_fails_the_mutation(pool: PgPo
 /// SHARE` row lock taken by `revalidate_admin_token`) must let a
 /// concurrent, in-flight explicit revoke block until it commits, then
 /// finish and commit *before* the revoke can.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_mutation_holding_its_locks_finishes_before_a_concurrent_explicit_revoke_commits(
     pool: PgPool,
 ) {
@@ -286,7 +286,7 @@ async fn a_mutation_holding_its_locks_finishes_before_a_concurrent_explicit_revo
 /// migration 0027/0051) blocks on a handler transaction already holding it
 /// shared, and only proceeds -- revoking the token -- after that handler
 /// transaction commits.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_mutation_holding_its_locks_finishes_before_a_concurrent_demotion_commits(pool: PgPool) {
     let f = fixture(&pool).await;
     let token_id = mint(&pool, f.admin.user_id, &["catalog:write"]).await;
@@ -339,7 +339,7 @@ async fn a_mutation_holding_its_locks_finishes_before_a_concurrent_demotion_comm
 /// mode, one round trip per transaction), never a separate earlier shared
 /// acquisition that could be requested in the opposite order by the other
 /// transaction.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn cross_admin_membership_changes_via_tokens_do_not_deadlock(pool: PgPool) {
     let f = fixture(&pool).await;
     let admin_b = user(&pool, "admin_b", "admin").await;
@@ -439,7 +439,7 @@ async fn bounded_bearer_delete(app: &Router, path: &str, token: &str) -> StatusC
 /// authentication (401), exactly as `authz_admin_token_tests.rs` asserts
 /// for every other revoked-token case. Both requests are bounded by a
 /// timeout, like every other concurrency assertion in this file.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn self_demotion_via_own_token_commits_then_the_token_is_revoked_next_request_401(
     pool: PgPool,
 ) {
@@ -499,7 +499,7 @@ async fn self_demotion_via_own_token_commits_then_the_token_is_revoked_next_requ
 /// survivor stays Admin with a live token), and exactly one
 /// token-attributed `role.revoked` audit row exists, correctly
 /// attributing the winner's token against the loser as its target.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn cross_admin_role_demotion_via_tokens_is_bounded_and_the_loser_is_refused(pool: PgPool) {
     let f = fixture(&pool).await;
     let admin_b = user(&pool, "admin_b", "admin").await;

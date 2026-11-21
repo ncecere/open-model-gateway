@@ -19,7 +19,7 @@ async fn get_status(s: &Store, u: &BrowserPrincipal, path: &str, label: &str) ->
         .status()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn list_reads_do_not_wait_for_a_management_write(pool: PgPool) {
     let f = fixture(&pool).await;
     // What every management write holds while it runs.
@@ -77,7 +77,7 @@ async fn list_reads_do_not_wait_for_a_management_write(pool: PgPool) {
     writer.rollback().await.unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn users_list_builds_rows_only_for_the_requested_page(pool: PgPool) {
     let _f = fixture(&pool).await;
     sqlx::query("INSERT INTO users(id,email) SELECT gen_random_uuid(),'bulk-'||i||'@example.invalid' FROM generate_series(1,300) i")
@@ -169,7 +169,7 @@ async fn bulk_catalog_models(pool: &PgPool) {
         .unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn platform_models_list_builds_rows_only_for_the_requested_page(pool: PgPool) {
     let f = fixture(&pool).await;
     bulk_catalog_models(&pool).await;
@@ -229,7 +229,7 @@ async fn platform_models_list_builds_rows_only_for_the_requested_page(pool: PgPo
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn workspace_catalog_builds_rows_only_for_the_requested_page(pool: PgPool) {
     let f = fixture(&pool).await;
     bulk_catalog_models(&pool).await;
@@ -286,7 +286,7 @@ async fn workspace_catalog_builds_rows_only_for_the_requested_page(pool: PgPool)
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn per_user_lookups_are_indexed(pool: PgPool) {
     for table in ["workspace_membership_grants", "platform_role_grants"] {
         let indexed: bool = sqlx::query_scalar(
@@ -300,7 +300,7 @@ async fn per_user_lookups_are_indexed(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn slow_management_reads_are_cancelled_at_the_deadline(pool: PgPool) {
     let f = fixture(&pool).await;
     let mut tx = resources::read_snapshot(&f.s).await.unwrap();

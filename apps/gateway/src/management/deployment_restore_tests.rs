@@ -35,7 +35,7 @@ async fn changes(pool: &PgPool, d: Uuid) -> Vec<(i64, bool, Option<Uuid>, Uuid)>
         .unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn guarded_apply_enforces_the_expected_revision(pool: PgPool) {
     let f = fixture(&pool).await;
     let d = create(&f, &pool, "guarded").await;
@@ -132,7 +132,7 @@ async fn guarded_apply_enforces_the_expected_revision(pool: PgPool) {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn restore_is_a_new_change_linked_to_its_source(pool: PgPool) {
     let f = fixture(&pool).await;
     let d = create(&f, &pool, "restore").await;
@@ -232,7 +232,7 @@ async fn restore_is_a_new_change_linked_to_its_source(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn restore_refuses_unsafe_sources_and_unauthorized_actors(pool: PgPool) {
     let f = fixture(&pool).await;
     let d = create(&f, &pool, "refusals").await;
@@ -351,7 +351,7 @@ async fn restore_refuses_unsafe_sources_and_unauthorized_actors(pool: PgPool) {
     assert_eq!(changes(&pool, d).await.len(), 2);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn concurrent_applies_at_one_revision_commit_once(pool: PgPool) {
     let f = fixture(&pool).await;
     let d = create(&f, &pool, "concurrent").await;

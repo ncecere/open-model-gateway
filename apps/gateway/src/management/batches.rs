@@ -303,7 +303,7 @@ mod tests {
 
     /// The row query is valid SQL against the real schema and reports how many
     /// attempts have unknown cost (a lower-bound total, never zero).
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn row_reports_unknown_attempt_count(pool: sqlx::PgPool) {
         let rows: Vec<serde_json::Value> = sqlx::query_scalar(&format!("SELECT {ROW} WHERE false"))
             .fetch_all(&pool)

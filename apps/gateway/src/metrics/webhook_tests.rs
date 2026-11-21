@@ -82,7 +82,7 @@ async fn assert_counts(pool: &PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn webhook_metrics_exact_counts_generations_and_lease_visibility(pool: PgPool) {
     let store = Store::new(pool.clone());
     let m = Metrics::new();
@@ -243,7 +243,7 @@ async fn explain(pool: &PgPool, history: i32) -> (u64, f64) {
     (buffers, tuples)
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 #[ignore = "seeds 1M retained terminal rows; PostgreSQL 17 plan gate, run with --ignored --nocapture"]
 async fn webhook_metrics_retained_history_work_is_bounded(pool: PgPool) {
     let server: String = sqlx::query_scalar("SHOW server_version")

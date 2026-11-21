@@ -89,7 +89,7 @@ async fn cost_center(pool: &PgPool, code: &str) -> Uuid {
 /// Every replaced foreign key: a missing parent and an out-of-scope parent
 /// are refused with 23503 at insert (and at an update of the reference);
 /// valid references are accepted.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn history_inserts_check_scoped_parents(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     let price = f.price(1_000_000).await;
@@ -209,7 +209,7 @@ async fn history_inserts_check_scoped_parents(pool: PgPool) {
 
 /// Parents are never deleted, truncated or re-keyed, by any role and also
 /// when unreferenced, so a plain existence check cannot race a removal.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn history_parents_are_never_removed_or_rekeyed(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     let price = f.price(1_000_000).await;
@@ -346,7 +346,7 @@ async fn leaves(pool: &PgPool, table: &str) -> Vec<String> {
 /// creates no MultiXact on history rows. A positive control shows the probe
 /// detects the `FOR KEY SHARE` MultiXacts a foreign key creates. (Global
 /// admission mode reads parents `FOR SHARE` by design and is not probed.)
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn concurrent_admissions_lock_no_parent_rows(pool: PgPool) {
     sqlx::query("CREATE EXTENSION IF NOT EXISTS pageinspect")
         .execute(&pool)
@@ -458,7 +458,7 @@ async fn concurrent_admissions_lock_no_parent_rows(pool: PgPool) {
 /// The verifier finds orphans and scope mismatches written around the
 /// triggers (replication role) and a disabled guard; the job opens one
 /// incident with one delivery; only a full clean run resolves it.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn verify_finds_orphans_and_raises_the_incident(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1_000_000).await;

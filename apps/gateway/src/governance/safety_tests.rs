@@ -2,7 +2,7 @@ use super::*;
 use crate::governance::tests::db::{billing, done, fixture, rates, request};
 use crate::inference::error::LimitScope;
 use sqlx::PgPool;
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn missing_reservation_history_blocks_new_monetary_and_token_caps(pool: PgPool) {
     let f = fixture(pool).await;
     // The unreserved execution must fall in the admission minute.
@@ -32,7 +32,7 @@ async fn missing_reservation_history_blocks_new_monetary_and_token_caps(pool: Pg
         );
     }
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn every_counter_and_evidence_is_preserved_through_reconciliation(pool: PgPool) {
     let f = fixture(pool).await;
     f.v2(rates()).await;
@@ -138,7 +138,7 @@ async fn every_counter_and_evidence_is_preserved_through_reconciliation(pool: Pg
         Err(InferenceError::InvalidRequest)
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn every_attempt_pins_its_own_price_and_cost_center_snapshot(pool: PgPool) {
     let f = fixture(pool).await;
     let first = f.price(1_000_000).await;
@@ -182,7 +182,7 @@ async fn every_attempt_pins_its_own_price_and_cost_center_snapshot(pool: PgPool)
         ]
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn unknown_cache_bound_denies_every_monetary_scope_before_any_execution(pool: PgPool) {
     let f = fixture(pool).await;
     f.v2(CachePricing {

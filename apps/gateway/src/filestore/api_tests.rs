@@ -129,7 +129,7 @@ fn code(v: &Value) -> &str {
     v["error"]["code"].as_str().unwrap_or_default()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn upload_list_retrieve_download_and_delete(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     allow(&pool, true, true).await;
@@ -249,7 +249,7 @@ async fn upload_list_retrieve_download_and_delete(pool: PgPool) {
     assert_eq!(row, (None, true));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn files_are_scoped_to_the_key_workspace(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     allow(&pool, true, true).await;
@@ -337,7 +337,7 @@ async fn files_are_scoped_to_the_key_workspace(pool: PgPool) {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn purpose_rules_and_store_gates(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     let rt = FileStoreRuntime::memory();
@@ -527,7 +527,7 @@ async fn set_quota(pool: &PgPool, kind: &str, bytes: Option<i64>) {
         .unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn quota_aborts_uploads_and_counts_live_files(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     allow(&pool, true, true).await;
@@ -667,7 +667,7 @@ fn slow(chunks: usize, size: usize) -> ByteStream {
         .boxed()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn concurrent_uploads_never_jointly_exceed_the_quota(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     allow(&pool, true, true).await;
@@ -712,7 +712,7 @@ async fn concurrent_uploads_never_jointly_exceed_the_quota(pool: PgPool) {
     assert_eq!(live, 0);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn upload_pipeline_limits_and_interruptions(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     allow(&pool, true, true).await;
@@ -768,7 +768,7 @@ async fn upload_pipeline_limits_and_interruptions(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn hourly_usage_is_append_only_byte_seconds(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     allow(&pool, true, true).await;
@@ -900,7 +900,7 @@ fn file_first(name: &str, data: &[u8], fields: &[(&str, &str)]) -> Vec<u8> {
     out
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn file_first_forms_are_staged_then_resolved(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     allow(&pool, true, true).await;

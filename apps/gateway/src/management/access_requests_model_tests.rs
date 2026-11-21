@@ -79,7 +79,7 @@ async fn status_of(pool: &PgPool, id: &Value) -> String {
         .unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_member_requests_a_model_and_a_workspace_admin_selects_it(pool: PgPool) {
     let f = fixture(&pool).await;
     let m = eligible_model(&pool, "company/smart").await;
@@ -170,7 +170,7 @@ async fn a_member_requests_a_model_and_a_workspace_admin_selects_it(pool: PgPool
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn only_members_request_eligible_unselected_models(pool: PgPool) {
     let f = fixture(&pool).await;
     let m = eligible_model(&pool, "company/smart").await;
@@ -241,7 +241,7 @@ async fn only_members_request_eligible_unselected_models(pool: PgPool) {
     assert_eq!(created, 0);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn approval_needs_workspace_authority_and_rechecks_everything(pool: PgPool) {
     let f = fixture(&pool).await;
     let m = eligible_model(&pool, "company/smart").await;
@@ -354,7 +354,7 @@ async fn approval_needs_workspace_authority_and_rechecks_everything(pool: PgPool
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn model_requests_are_bound_in_the_database(pool: PgPool) {
     let f = fixture(&pool).await;
     let m = eligible_model(&pool, "company/smart").await;
@@ -414,7 +414,7 @@ async fn model_requests_are_bound_in_the_database(pool: PgPool) {
     assert!(sqlx::query("INSERT INTO access_request_applications(request_id,workspace_id,requester,model_id,membership_grant_id) VALUES($1,$2,$3,$4,gen_random_uuid())").bind(id).bind(f.team).bind(f.member.user_id).bind(m).execute(&pool).await.is_err());
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn concurrent_approvals_select_once(pool: PgPool) {
     let f = fixture(&pool).await;
     let m = eligible_model(&pool, "company/smart").await;
@@ -459,7 +459,7 @@ async fn expired_kinds(pool: &PgPool, id: &Value) -> Vec<Value> {
         .unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn model_requests_expire_with_their_kind_and_are_bounded(pool: PgPool) {
     let f = fixture(&pool).await;
     // Expired by the maintenance worker and by a read: both audit the kind.
@@ -525,7 +525,7 @@ async fn model_requests_expire_with_their_kind_and_are_bounded(pool: PgPool) {
     assert_eq!(positional["model_id"], over.to_string());
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn approval_races_revocation_and_lost_authority(pool: PgPool) {
     let f = fixture(&pool).await;
     // Approval against removal of the requester's membership, both orders:
@@ -624,7 +624,7 @@ async fn approval_races_revocation_and_lost_authority(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn the_model_queue_is_bounded_per_workspace_with_its_own_error(pool: PgPool) {
     let f = fixture(&pool).await;
     // 20 members fill the workspace's 100 pending model requests.

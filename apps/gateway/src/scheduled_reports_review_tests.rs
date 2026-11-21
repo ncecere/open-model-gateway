@@ -65,7 +65,7 @@ mod db {
             }
         }
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn scheduled_reports_review_due_index_plan_bounded_before_claims(pool: PgPool) {
         let user = Uuid::new_v4();
         sqlx::query("INSERT INTO users(id,email) VALUES($1,'report-plan@example.test')")

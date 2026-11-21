@@ -82,7 +82,7 @@ fn json_handlers() -> BTreeSet<String> {
     names
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn every_json_management_write_rejects_unknown_fields_after_valid_control(pool: PgPool) {
     use crate::providers::secrets::EnvSecrets;
     let mut f = fixture(&pool).await;

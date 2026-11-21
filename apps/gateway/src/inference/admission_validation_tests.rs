@@ -222,7 +222,7 @@ async fn assert_refused(
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn anthropic_strict_tool_refusal_is_zero_write_and_zero_upstream_call(pool: PgPool) {
     let mut f = fixture(pool).await;
     let token = issue_key(&mut f).await;
@@ -257,7 +257,7 @@ async fn anthropic_strict_tool_refusal_is_zero_write_and_zero_upstream_call(pool
     .await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn anthropic_temperature_above_range_refusal_is_zero_write_and_zero_upstream_call(
     pool: PgPool,
 ) {
@@ -294,7 +294,7 @@ async fn anthropic_temperature_above_range_refusal_is_zero_write_and_zero_upstre
     .await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn bedrock_strict_tool_refusal_is_zero_write_and_zero_upstream_call(pool: PgPool) {
     let mut f = fixture(pool).await;
     let token = issue_key(&mut f).await;
@@ -326,7 +326,7 @@ async fn bedrock_strict_tool_refusal_is_zero_write_and_zero_upstream_call(pool: 
     .await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn bedrock_invalid_tool_correlation_refusal_is_zero_write_and_zero_upstream_call(
     pool: PgPool,
 ) {
@@ -375,11 +375,11 @@ fn openai_success_mock(hits: Arc<AtomicUsize>) -> Router {
     })
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn mixed_routes_refused_candidate_first_then_valid_alternative_succeeds(pool: PgPool) {
     mixed_routes_refused_and_valid_with(pool, true).await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn mixed_routes_valid_candidate_first_then_refused_alternative_still_succeeds(pool: PgPool) {
     mixed_routes_refused_and_valid_with(pool, false).await;
 }
@@ -535,11 +535,11 @@ async fn both_refusing_mixed_kinds_with(pool: PgPool, anthropic_first: bool) {
     assert_eq!(bedrock_hits.load(Ordering::SeqCst), 0);
     assert_eq!(snapshot(&f.store.pool).await, before);
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn both_refusing_mixed_error_kinds_is_invalid_request_anthropic_first(pool: PgPool) {
     both_refusing_mixed_kinds_with(pool, true).await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn both_refusing_mixed_error_kinds_is_invalid_request_bedrock_first(pool: PgPool) {
     both_refusing_mixed_kinds_with(pool, false).await;
 }
@@ -547,7 +547,7 @@ async fn both_refusing_mixed_error_kinds_is_invalid_request_bedrock_first(pool: 
 /// A valid request on a single real-adapter route still creates exactly one
 /// reservation per attempt, already pending when the upstream call is made
 /// (dispatch happens strictly after durable admission).
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn positive_control_anthropic_creates_one_reservation_before_dispatch(pool: PgPool) {
     let mut f = fixture(pool).await;
     let token = issue_key(&mut f).await;
@@ -615,7 +615,7 @@ async fn positive_control_anthropic_creates_one_reservation_before_dispatch(pool
     assert_eq!(reservations, 1);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn positive_control_bedrock_creates_one_reservation_before_dispatch(pool: PgPool) {
     let mut f = fixture(pool).await;
     let token = issue_key(&mut f).await;
@@ -715,7 +715,7 @@ impl crate::providers::ProviderAdapter for CountingAnthropic {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn validation_runs_once_per_adapter_not_once_per_route(pool: PgPool) {
     let mut f = fixture(pool).await;
     let token = issue_key(&mut f).await;
@@ -760,7 +760,7 @@ async fn validation_runs_once_per_adapter_not_once_per_route(pool: PgPool) {
 /// the caller gets the usable Anthropic route's Unsupported (501), exactly as
 /// if the excluded route did not exist. The mixed-kind tests above cover the
 /// case where both routes are usable (400).
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn residency_excluded_route_cannot_change_the_refusal(pool: PgPool) {
     let mut f = fixture(pool).await;
     let token = issue_key(&mut f).await;
@@ -827,7 +827,7 @@ async fn residency_excluded_route_cannot_change_the_refusal(pool: PgPool) {
 /// real router. A prior assistant tool call whose arguments are valid JSON
 /// but not an object is malformed on Anthropic's wire (tool `input` must be an
 /// object): 400, zero writes, zero upstream calls, streaming or not.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn anthropic_non_object_tool_arguments_refusal_is_zero_write_and_zero_upstream_call(
     pool: PgPool,
 ) {
@@ -885,7 +885,7 @@ async fn anthropic_non_object_tool_arguments_refusal_is_zero_write_and_zero_upst
 /// one excluded by residency, cannot change the caller's refusal. The cooling
 /// Bedrock route would report InvalidRequest; the only usable route
 /// (Anthropic) reports Unsupported, so the caller gets 501.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn cooling_route_cannot_change_the_refusal(pool: PgPool) {
     let mut f = fixture(pool).await;
     let token = issue_key(&mut f).await;

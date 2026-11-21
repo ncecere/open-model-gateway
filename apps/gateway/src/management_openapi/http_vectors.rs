@@ -27,6 +27,7 @@ use super::{
 };
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 /// One executed request and the handler's verdict on its input.
@@ -471,9 +472,68 @@ fn bytes_ok(document: &Value, schema: &Value, instance: &Value, depth: usize) ->
     }
 }
 
-/// The schema's verdict: JSON Schema validity plus the reviewed byte limits.
+/// Can any reviewed byte limit apply to an instance of `schema`? `false` only
+/// when no [`MAX_BYTES`] key exists anywhere in `schema` or in the schemas it
+/// references, so [`bytes_ok`] has nothing to judge. Every key and array item is
+/// followed, applicator or not, and an unresolved reference counts as a limit:
+/// the answer errs toward running the full check.
+pub(super) fn reaches_byte_limits(document: &Value, schema: &Value) -> bool {
+    fn walk(document: &Value, node: &Value, seen: &mut BTreeSet<String>) -> bool {
+        match node {
+            Value::Object(map) => {
+                if map.contains_key(MAX_BYTES) {
+                    return true;
+                }
+                if let Some(reference) = map.get("$ref") {
+                    let target = reference
+                        .as_str()
+                        .and_then(|r| r.strip_prefix('#'))
+                        .and_then(|pointer| document.pointer(pointer));
+                    match target {
+                        None => return true,
+                        Some(target) => {
+                            let first =
+                                seen.insert(reference.as_str().unwrap_or_default().to_owned());
+                            if first && walk(document, target, seen) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                map.values().any(|child| walk(document, child, seen))
+            }
+            Value::Array(items) => items.iter().any(|child| walk(document, child, seen)),
+            _ => false,
+        }
+    }
+    walk(document, schema, &mut BTreeSet::new())
+}
+
+/// [`reaches_byte_limits`], remembered for the nodes of the committed artifact
+/// (immutable, so an address names one schema for good); any other schema is
+/// searched on every call.
+fn byte_limits_apply(document: &Value, schema: &Value) -> bool {
+    static REMEMBERED: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<usize, bool>>,
+    > = std::sync::OnceLock::new();
+    if !std::ptr::eq(document, responses::artifact()) || !responses::is_artifact_node(schema) {
+        return reaches_byte_limits(document, schema);
+    }
+    let address = std::ptr::from_ref(schema) as usize;
+    let remembered = REMEMBERED.get_or_init(Default::default);
+    if let Some(found) = remembered.lock().unwrap().get(&address) {
+        return *found;
+    }
+    let found = reaches_byte_limits(document, schema);
+    remembered.lock().unwrap().insert(address, found);
+    found
+}
+
+/// The schema's verdict: JSON Schema validity plus the reviewed byte limits
+/// (judged only where one can apply).
 pub(crate) fn accepts(document: &Value, schema: &Value, instance: &Value) -> Result<bool> {
-    Ok(valid(document, schema, instance)? && bytes_ok(document, schema, instance, 0)?)
+    Ok(valid(document, schema, instance)?
+        && (!byte_limits_apply(document, schema) || bytes_ok(document, schema, instance, 0)?))
 }
 
 /// `(min, max)` repetitions of a SIMPLE anchored pattern: one character class,
@@ -683,7 +743,7 @@ fn relaxed(
     let cache_key = format!(
         "{:p} {key}={bound} {}",
         document,
-        serde_json::to_string(schema)?
+        responses::value_key(schema)
     );
     if let Some(found) = CACHE
         .get_or_init(Default::default)
@@ -1697,6 +1757,9 @@ pub(crate) async fn run_query_with<C>(
     }
     let mut accepted_seen = false;
     for (case, kind, location, expected) in plan {
+        if case.is_some() && !owns_next(kind, &location) {
+            continue;
+        }
         let (context, mut pairs) = fresh().await;
         if let Some(case) = case {
             pairs.retain(|(name, _)| !(name == &case.param && matches!(case.edit, Edit::Omit)));
@@ -1890,6 +1953,8 @@ struct Walk<'a> {
     /// The valid body the current mutations are derived from (a seeded walk
     /// derives from the body with its seed added).
     valid_body: Value,
+    /// `valid_body` as JSON text: the key of the base the walk is on.
+    valid_key: String,
     /// The caller's valid body: never sent again as a vector.
     original: &'a Value,
     /// Caller-supplied valid values for declared optional locations, by pointer.
@@ -1926,9 +1991,16 @@ impl Walk<'_> {
                 } else {
                     ""
                 },
-                serde_json::to_string(&body)?
+                responses::value_key(&body)
             ))
         {
+            return Ok(());
+        }
+        // Another shard's vector is neither classified nor kept. The integer
+        // encoding vectors are classified by every shard: they decide whether
+        // the vector exists, and their seed rule is a check of the plan.
+        let integer = kind.starts_with("integer encoding ");
+        if !integer && !owns_next(kind, &pointer(path)) {
             return Ok(());
         }
         let accept = accepts(self.document, self.root_schema, &body)?;
@@ -1940,10 +2012,13 @@ impl Walk<'_> {
             return Ok(()); // zero must be valid in the whole request, not only locally
         }
         ensure!(
-            !kind.starts_with("integer encoding ") || accept,
+            !integer || accept,
             "integer encoding vector at {} needs a whole-request-valid integer seed",
             pointer(path)
         );
+        if integer && !owns_next(kind, &pointer(path)) {
+            return Ok(());
+        }
         self.out.push(BodyCase {
             pointer: pointer(path),
             kind,
@@ -1964,10 +2039,13 @@ impl Walk<'_> {
         self.used.insert(at);
         self.push(path, "optional added", Some(seed.clone()))?;
         let base = set(&self.valid_body, path, Some(seed));
-        if self.bases.insert(serde_json::to_string(&base)?) {
+        let key = serde_json::to_string(&base)?;
+        if self.bases.insert(key.clone()) {
             let saved = std::mem::replace(&mut self.valid_body, base.clone());
+            let saved_key = std::mem::replace(&mut self.valid_key, key);
             let walked = self.walk(self.root_schema, &base, &mut Vec::new());
             self.valid_body = saved;
+            self.valid_key = saved_key;
             walked?;
         }
         Ok(())
@@ -2152,7 +2230,7 @@ impl Walk<'_> {
     fn walk(&mut self, schema: &Value, value: &Value, path: &mut Vec<Step>) -> Result<()> {
         ensure!(path.len() < 12, "request body nesting too deep");
         self.walked
-            .entry(serde_json::to_string(&self.valid_body)?)
+            .entry(self.valid_key.clone())
             .or_insert_with(|| (self.valid_body.clone(), BTreeSet::new()))
             .1
             .insert(raw_pointer(path));
@@ -2278,40 +2356,45 @@ impl Walk<'_> {
 }
 /// All schemas a property or item must satisfy, as one `allOf` when several
 /// (the base object and the matching union/conditional arms each constrain it).
-fn combine(mut parts: Vec<Value>) -> Option<Value> {
+///
+/// One schema is returned as it is, borrowed from the document when it is a node
+/// of it (so a validator for it is found by its address, not by serializing it).
+fn combine(mut parts: Vec<Cow<'_, Value>>) -> Option<Cow<'_, Value>> {
     match parts.len() {
         0 => None,
         1 => parts.pop(),
-        _ => Some(json!({"allOf": parts})),
+        _ => Some(Cow::Owned(json!({
+            "allOf": parts.into_iter().map(Cow::into_owned).collect::<Vec<_>>()
+        }))),
     }
 }
-fn child_schema(nodes: &[&Value], name: &str) -> Option<Value> {
+fn child_schema<'a>(nodes: &[&'a Value], name: &str) -> Option<Cow<'a, Value>> {
     combine(
         nodes
             .iter()
             .filter_map(|node| node["properties"].get(name))
-            .cloned()
+            .map(Cow::Borrowed)
             .collect(),
     )
 }
 /// The schema of an object member: its `properties` entry plus every
 /// `patternProperties` value whose pattern matches the name, or the schema-valued
 /// `additionalProperties` when neither selects it.
-fn member_schema(nodes: &[&Value], name: &str) -> Result<Option<Value>> {
-    let mut parts: Vec<Value> = nodes
+fn member_schema<'a>(nodes: &[&'a Value], name: &str) -> Result<Option<Cow<'a, Value>>> {
+    let mut parts: Vec<Cow<'a, Value>> = nodes
         .iter()
         .filter_map(|node| node["properties"].get(name))
-        .cloned()
+        .map(Cow::Borrowed)
         .collect();
     let mut selected = !parts.is_empty();
     for node in nodes {
         for (pattern, child) in node["patternProperties"].as_object().into_iter().flatten() {
             if child.is_object()
-                && super::validation::compile_schema(&json!({"type":"string","pattern":pattern}))?
+                && super::validation::pattern_validator(pattern)?
                     .is_valid(&Value::String(name.to_owned()))
             {
                 selected = true;
-                parts.push(child.clone());
+                parts.push(Cow::Borrowed(child));
             }
         }
     }
@@ -2320,7 +2403,7 @@ fn member_schema(nodes: &[&Value], name: &str) -> Result<Option<Value>> {
             nodes
                 .iter()
                 .filter_map(|node| node.get("additionalProperties").filter(|v| v.is_object()))
-                .cloned(),
+                .map(Cow::Borrowed),
         );
     }
     Ok(combine(parts))
@@ -2394,8 +2477,8 @@ fn distinct_variants(
     let mut seen: BTreeSet<String> = taken
         .iter()
         .chain([template])
-        .map(serde_json::to_string)
-        .collect::<Result<_, _>>()?;
+        .map(responses::value_key)
+        .collect();
     let mut queue: std::collections::VecDeque<Value> = taken.iter().cloned().collect();
     queue.push_back(template.clone());
     let mut found = Vec::new();
@@ -2406,7 +2489,7 @@ fn distinct_variants(
     {
         for candidate in mutate(&base) {
             budget = budget.saturating_sub(1);
-            if found.len() >= need || !seen.insert(serde_json::to_string(&candidate)?) {
+            if found.len() >= need || !seen.insert(responses::value_key(&candidate)) {
                 continue;
             }
             if validator.is_valid(&candidate) {
@@ -2421,14 +2504,17 @@ fn distinct_variants(
 /// its positional schema at `index` when it has one, else its homogeneous
 /// `items` (a sibling `allOf` member's `items` governs a position another
 /// member's `prefixItems` also covers).
-fn element_schema(nodes: &[&Value], index: usize) -> Option<Value> {
+fn element_schema<'a>(nodes: &[&'a Value], index: usize) -> Option<Cow<'a, Value>> {
     combine(
         nodes
             .iter()
             .filter_map(
                 |node| match node["prefixItems"].as_array().and_then(|p| p.get(index)) {
-                    Some(positional) => Some(positional.clone()),
-                    None => node.get("items").filter(|v| v.is_object()).cloned(),
+                    Some(positional) => Some(Cow::Borrowed(positional)),
+                    None => node
+                        .get("items")
+                        .filter(|v| v.is_object())
+                        .map(Cow::Borrowed),
                 },
             )
             .collect(),
@@ -2506,6 +2592,7 @@ pub(super) fn body_plan(
         document,
         root_schema: schema,
         valid_body: valid_body.clone(),
+        valid_key: serde_json::to_string(valid_body)?,
         original: valid_body,
         seeds: seeds.iter().cloned().collect(),
         used: BTreeSet::new(),
@@ -2577,6 +2664,93 @@ pub(super) async fn run_body(
             .await?
             .exchanges,
     )
+}
+
+thread_local! {
+    /// `(index, count)` of the fixture journey being divided, how many planned
+    /// vectors this thread has met so far, and a digest of what they were.
+    static SHARD: std::cell::Cell<Option<(usize, usize)>> = const { std::cell::Cell::new(None) };
+    static PLANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static PLAN_DIGEST: std::cell::Cell<u64> = const { std::cell::Cell::new(PLAN_DIGEST_START) };
+}
+/// FNV-1a, 64 bits.
+const PLAN_DIGEST_START: u64 = 0xcbf2_9ce4_8422_2325;
+/// Keeps a journey divided into shards for as long as it lives (see
+/// [`PositiveFixtures::sharded`]).
+pub(crate) struct ShardScope {
+    journey: &'static std::panic::Location<'static>,
+    index: usize,
+    count: usize,
+}
+impl Drop for ShardScope {
+    fn drop(&mut self) {
+        let plan = (PLANNED.get(), PLAN_DIGEST.get());
+        SHARD.set(None);
+        PLANNED.set(0);
+        PLAN_DIGEST.set(PLAN_DIGEST_START);
+        // A journey that already failed stopped part-way through its plan.
+        if std::thread::panicking() {
+            return;
+        }
+        // Ownership by ordinal divides the vectors only while every shard of a
+        // journey plans the same vectors in the same order. The shards of one
+        // journey that run in this process must therefore agree on the number
+        // of planned vectors and on their kinds and locations.
+        /// The journey (where it is divided, and into how many) and the first
+        /// shard seen with its plan (vectors planned, their digest).
+        type Plans = std::collections::BTreeMap<(&'static str, u32, usize), (usize, (usize, u64))>;
+        static PLANS: std::sync::Mutex<Plans> =
+            std::sync::Mutex::new(std::collections::BTreeMap::new());
+        let key = (self.journey.file(), self.journey.line(), self.count);
+        let first = *PLANS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(key)
+            .or_insert((self.index, plan));
+        assert!(
+            first.1 == plan,
+            "shards {} and {} of the journey at {} planned different vectors \
+             ({} and {} planned): vectors are owned by ordinal, so some were sent twice or not at all",
+            first.0,
+            self.index,
+            self.journey,
+            first.1.0,
+            plan.0,
+        );
+    }
+}
+/// The caller's location names the journey: shards of one journey are divided
+/// at the same place.
+#[track_caller]
+pub(crate) fn divide(index: usize, count: usize) -> ShardScope {
+    assert!(index < count, "shard index out of range");
+    SHARD.set(Some((index, count)));
+    PLANNED.set(0);
+    PLAN_DIGEST.set(PLAN_DIGEST_START);
+    ShardScope {
+        journey: std::panic::Location::caller(),
+        index,
+        count,
+    }
+}
+/// Whether this shard owns the next planned vector, which `kind` and
+/// `location` describe. Every shard plans the same vectors in the same order,
+/// so the n-th belongs to shard `n % count` in all of them: each is sent by
+/// exactly one. (The valid request of a run is not a planned vector: every
+/// shard sends it.) The description excludes the vector's values: identifiers
+/// differ between the shards' databases.
+pub(super) fn owns_next(kind: &str, location: &str) -> bool {
+    let Some((index, count)) = SHARD.get() else {
+        return true;
+    };
+    let mut digest = PLAN_DIGEST.get();
+    for byte in kind.bytes().chain([0]).chain(location.bytes()).chain([0]) {
+        digest = (digest ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    PLAN_DIGEST.set(digest);
+    let ordinal = PLANNED.get();
+    PLANNED.set(ordinal + 1);
+    ordinal % count == index
 }
 
 /// `OMG_OPENAPI_PLAN_ONLY=1`: a fast development run. Body vector runs are

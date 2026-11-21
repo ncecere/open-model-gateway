@@ -112,7 +112,7 @@ async fn admit_on(f: &Fixture, store: &Store, p: Principal) -> Result<(), Infere
 /// stale (B still authenticates the key from its cache): admission re-checks
 /// the key, user, membership, workspace, entitlement, catalog and budgets
 /// live under its locks.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn changes_on_one_replica_deny_admission_immediately_on_a_stale_replica(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1_000_000).await;
@@ -365,7 +365,7 @@ async fn changes_on_one_replica_deny_admission_immediately_on_a_stale_replica(po
 /// Every domain's change bumps its version exactly once per transaction and
 /// notifies `<topic>:<version>` after commit; changes that cannot affect a
 /// cached result (display names, new keys, sign-in's no-op upsert) do not.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn every_domain_bumps_once_per_transaction_and_notifies(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     let mut listener = sqlx::postgres::PgListener::connect_with(&pool)
@@ -485,7 +485,7 @@ async fn until(what: &str, limit: Duration, mut check: impl AsyncFnMut() -> bool
 /// With change notifications running (LISTEN plus the 1 s poll), replica
 /// B's caches follow every domain's change made on replica A well within the
 /// 1.5 s bound (typically milliseconds through LISTEN).
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn another_replicas_caches_follow_every_domain_within_the_bound(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1_000_000).await;
@@ -608,7 +608,7 @@ async fn another_replicas_caches_follow_every_domain_within_the_bound(pool: PgPo
 /// so a revoked key is refused at authentication), both when the poll is
 /// stale and when it fails; caching resumes once a poll succeeds. A lost
 /// LISTEN connection reconnects and flushes every entry.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn caches_fail_closed_and_flush_on_reconnect(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1_000_000).await;

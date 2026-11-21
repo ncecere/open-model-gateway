@@ -67,7 +67,7 @@ async fn get(f: &Fixture, u: &BrowserPrincipal, path: &str) -> (StatusCode, Valu
     call(&f.s, u, "GET", path, json!({})).await
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn model_setup_is_one_audited_transaction(pool: PgPool) {
     let f = fixture(&pool).await;
     let conn = connection(&pool, "Cloud", true).await;
@@ -179,7 +179,7 @@ async fn model_setup_is_one_audited_transaction(pool: PgPool) {
     assert!(!v.to_string().contains("SETUP_PRIVATE_REFERENCE"));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn model_setup_failure_at_any_stage_creates_nothing(pool: PgPool) {
     let f = fixture(&pool).await;
     let conn = connection(&pool, "Cloud", true).await;
@@ -267,7 +267,7 @@ async fn model_setup_failure_at_any_stage_creates_nothing(pool: PgPool) {
     assert_eq!(counts(&pool).await, before);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn setup_overview_and_model_catalogs_are_admin_write_auditor_read_member_denied(
     pool: PgPool,
 ) {
@@ -369,7 +369,7 @@ async fn setup_overview_and_model_catalogs_are_admin_write_auditor_read_member_d
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn readiness_counts_routes_connections_pricing_and_offer_sources(pool: PgPool) {
     let f = fixture(&pool).await;
     let on = connection(&pool, "Zulu", true).await;
@@ -522,7 +522,7 @@ async fn selections(pool: &PgPool, lineage: Uuid) -> Vec<Uuid> {
     .unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn model_catalog_put_retires_like_catalog_put_and_never_resurrects(pool: PgPool) {
     let f = fixture(&pool).await;
     let m = model(&pool, "retire/me").await;
@@ -638,7 +638,7 @@ async fn model_catalog_put_retires_like_catalog_put_and_never_resurrects(pool: P
     assert_eq!(ids, json!({"catalog_ids":[]}));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn overview_counts_setup_and_aggregates_recent_attempts_and_known_cost(pool: PgPool) {
     let f = fixture(&pool).await;
     let (_, empty) = get(&f, &f.auditor, "/api/v1/platform/overview").await;
@@ -730,7 +730,7 @@ async fn overview_counts_setup_and_aggregates_recent_attempts_and_known_cost(poo
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn readiness_flags_ceilings_over_type_token_limits_and_blocked_free_routes(pool: PgPool) {
     let f = fixture(&pool).await;
     let on = connection(&pool, "Cloud", true).await;
@@ -841,7 +841,7 @@ fn assert_unsupported(status: StatusCode, v: &Value, profile: &str, workload: &s
 /// Routes are validated against the shared capability table (the one the
 /// inference path uses for `unsupported_capability`) at model setup, route
 /// creation, route enabling and model protocol changes.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn routes_the_adapter_cannot_serve_are_rejected(pool: PgPool) {
     let f = fixture(&pool).await;
     let vllm = local_connection(&pool, "Spark embeddings", "vllm").await;
@@ -939,7 +939,7 @@ async fn routes_the_adapter_cannot_serve_are_rejected(pool: PgPool) {
 
 /// Routes accepted before validation existed are not migrated: readiness says
 /// they cannot serve, enabling one again is refused, disabling is allowed.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn existing_unservable_routes_read_not_serving(pool: PgPool) {
     let f = fixture(&pool).await;
     let vllm = local_connection(&pool, "Spark embeddings", "vllm").await;
@@ -1016,7 +1016,7 @@ async fn existing_unservable_routes_read_not_serving(pool: PgPool) {
 
 /// Model setup publishes through the same price rule: an embeddings v3 price
 /// must state every meter an embeddings route can use, or nothing is created.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn model_setup_refuses_v3_prices_with_omitted_meters(pool: PgPool) {
     let f = fixture(&pool).await;
     let vllm = local_connection(&pool, "Spark embeddings", "vllm").await;

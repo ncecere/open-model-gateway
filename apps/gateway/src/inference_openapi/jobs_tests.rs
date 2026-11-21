@@ -211,7 +211,7 @@ mod fixtures {
         format!("batch_{}", id.simple())
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn inference_openapi_jobs_wire_fixtures(pool: PgPool) {
         let (app, keys) = gateway(&pool).await;
         sqlx::query(
@@ -647,7 +647,7 @@ mod legacy {
             })
         }
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn inference_openapi_legacy_video_wire_fixtures(pool: PgPool) {
         let f = fixture(pool).await;
         video_setup(&f).await;

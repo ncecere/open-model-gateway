@@ -170,7 +170,7 @@ fn count(codes: &[StatusCode], status: StatusCode) -> usize {
     codes.iter().filter(|c| **c == status).count()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn type_defaults_are_50_per_holder_and_500_per_workspace_for_every_kind(pool: PgPool) {
     for kind in ["personal", "team", "project"] {
         let row: (Option<i64>, Option<i64>) = sqlx::query_as("SELECT key_issuances_per_holder,key_issuances_per_workspace FROM workspace_type_policies WHERE kind=$1")
@@ -208,7 +208,7 @@ async fn type_defaults_are_50_per_holder_and_500_per_workspace_for_every_kind(po
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn the_default_holder_budget_admits_50_and_refuses_the_51st_with_429(pool: PgPool) {
     let f = fixture(&pool).await;
     seed(&pool, f.team, f.member.user_id, 49, 60).await;
@@ -227,7 +227,7 @@ async fn the_default_holder_budget_admits_50_and_refuses_the_51st_with_429(pool:
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn refusal_is_a_detailed_429_without_amounts_audit_or_rows(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(2), Some(500)).await;
@@ -284,7 +284,7 @@ async fn refusal_is_a_detailed_429_without_amounts_audit_or_rows(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn parallel_creates_at_limit_minus_one_admit_exactly_one(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(5), Some(500)).await;
@@ -295,7 +295,7 @@ async fn parallel_creates_at_limit_minus_one_admit_exactly_one(pool: PgPool) {
     assert_eq!(keys_of(&pool, f.team).await, 5);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn parallel_rotations_at_limit_minus_one_admit_exactly_one(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(5), Some(500)).await;
@@ -315,7 +315,7 @@ async fn parallel_rotations_at_limit_minus_one_admit_exactly_one(pool: PgPool) {
     assert_eq!(revoked, 1);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn parallel_create_and_rotate_mix_admits_exactly_one(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(5), Some(500)).await;
@@ -328,7 +328,7 @@ async fn parallel_create_and_rotate_mix_admits_exactly_one(pool: PgPool) {
     assert_eq!(keys_of(&pool, f.team).await, 5);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_rotation_reports_its_operation_and_counts_like_a_create(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(2), Some(500)).await;
@@ -346,7 +346,7 @@ async fn a_rotation_reports_its_operation_and_counts_like_a_create(pool: PgPool)
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn holder_at_its_cap_does_not_block_another_holder(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(2), Some(500)).await;
@@ -358,7 +358,7 @@ async fn holder_at_its_cap_does_not_block_another_holder(pool: PgPool) {
     assert_eq!(create(&f, &f.owner, f.team).await.0, StatusCode::OK);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn workspace_cap_binds_every_holder_and_holder_is_checked_first(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(10), Some(3)).await;
@@ -375,7 +375,7 @@ async fn workspace_cap_binds_every_holder_and_holder_is_checked_first(pool: PgPo
     assert_eq!(v["error"]["scope"], "holder");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn parallel_creates_by_different_holders_respect_the_workspace_cap(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(100), Some(5)).await;
@@ -389,7 +389,7 @@ async fn parallel_creates_by_different_holders_respect_the_workspace_cap(pool: P
     assert_eq!(keys_of(&pool, f.team).await, 5);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn workspaces_are_budgeted_independently(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(1), Some(500)).await;
@@ -404,7 +404,7 @@ async fn workspaces_are_budgeted_independently(pool: PgPool) {
     assert_eq!(create(&f, &f.owner, f.personal).await.0, StatusCode::OK);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn the_window_rolls_at_24_hours(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(1), Some(500)).await;
@@ -435,7 +435,7 @@ async fn the_window_rolls_at_24_hours(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn the_window_edge_is_exact_for_a_given_now(pool: PgPool) {
     use crate::management::keys::issuance::{Holder, usage};
     let f = fixture(&pool).await;
@@ -488,7 +488,7 @@ async fn the_window_edge_is_exact_for_a_given_now(pool: PgPool) {
 /// (a volatile `clock_timestamp()` in them could not), so a count does not
 /// read lifetime history. `enable_seqscan=off` tests that the index is usable
 /// for the exact query, not the planner's cost choice on a small table.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn window_counts_bound_the_workspace_created_index_on_created_at(pool: PgPool) {
     use crate::management::keys::issuance::{Holder, usage_sql};
     let f = fixture(&pool).await;
@@ -540,7 +540,7 @@ async fn window_counts_bound_the_workspace_created_index_on_created_at(pool: PgP
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn retry_after_names_the_row_that_must_age_out(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(2), Some(500)).await;
@@ -557,7 +557,7 @@ async fn retry_after_names_the_row_that_must_age_out(pool: PgPool) {
     assert!((DAY - 3_602..=DAY - 3_598).contains(&retry), "{retry}");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn raising_admits_at_once_and_lowering_never_revokes(pool: PgPool) {
     let f = fixture(&pool).await;
     let path = "/api/v1/platform/workspace-types/team/policy";
@@ -627,7 +627,7 @@ async fn raising_admits_at_once_and_lowering_never_revokes(pool: PgPool) {
     assert_eq!(create(&f, &f.member, f.team).await.0, StatusCode::OK);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_platform_override_replaces_the_type_default(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(1), Some(500)).await;
@@ -660,7 +660,7 @@ async fn a_platform_override_replaces_the_type_default(pool: PgPool) {
     assert_eq!(create(&f, &f.member, f.team).await.0, StatusCode::OK);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn local_limits_are_tighten_only_and_compose_with_the_platform(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(5), Some(500)).await;
@@ -723,7 +723,7 @@ async fn local_limits_are_tighten_only_and_compose_with_the_platform(pool: PgPoo
     assert_eq!(v["policy"]["key_issuances_per_workspace"], 3);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn limits_are_validated_and_keys_have_no_issuance_layer(pool: PgPool) {
     let f = fixture(&pool).await;
     let type_path = "/api/v1/platform/workspace-types/team/policy";
@@ -787,7 +787,7 @@ async fn limits_are_validated_and_keys_have_no_issuance_layer(pool: PgPool) {
     assert_eq!(v["policy"]["key_issuances_per_holder"], Value::Null);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_missing_platform_value_means_the_10000_ceiling_not_unlimited(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", None, None).await;
@@ -823,7 +823,7 @@ async fn a_missing_platform_value_means_the_10000_ceiling_not_unlimited(pool: Pg
 /// An old replica still running during the migrate overlap writes override rows
 /// without the new columns (NULL). Those rows must inherit the type default,
 /// never loosen the workspace to the 10000 ceiling.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn an_override_written_by_an_old_replica_still_gets_the_type_default(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(2), Some(500)).await;
@@ -850,7 +850,7 @@ async fn an_override_written_by_an_old_replica_still_gets_the_type_default(pool:
     assert_eq!(v["error"]["scope"], "holder");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn empty_override_fields_report_and_compose_as_the_type_default_without_snapshotting_it(
     pool: PgPool,
 ) {
@@ -939,7 +939,7 @@ async fn empty_override_fields_report_and_compose_as_the_type_default_without_sn
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn personal_workspaces_use_the_type_default_only(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "personal", Some(2), Some(500)).await;
@@ -970,7 +970,7 @@ async fn personal_workspaces_use_the_type_default_only(pool: PgPool) {
     assert_eq!(create(&f, &f.owner, f.personal).await.0, StatusCode::OK);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn service_account_keys_count_against_their_account_and_the_workspace(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(2), Some(5)).await;
@@ -1010,7 +1010,7 @@ async fn service_account_keys_count_against_their_account_and_the_workspace(pool
     assert_eq!(keys_of(&pool, f.team).await, 5);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn service_account_churn_cannot_exceed_the_workspace_budget(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(100), Some(3)).await;
@@ -1045,7 +1045,7 @@ async fn service_account_churn_cannot_exceed_the_workspace_budget(pool: PgPool) 
     assert_eq!(keys_of(&pool, f.team).await, 3);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn authority_and_validation_errors_precede_the_429(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(1), Some(1)).await;
@@ -1147,7 +1147,7 @@ async fn authority_and_validation_errors_precede_the_429(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn issuance_runs_at_read_committed_and_counts_after_the_workspace_lock(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(2), Some(500)).await;
@@ -1191,7 +1191,7 @@ async fn issuance_runs_at_read_committed_and_counts_after_the_workspace_lock(poo
     assert_eq!(keys_of(&pool, f.team).await, 2);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_limit_change_is_seen_atomically_by_a_queued_issuance(pool: PgPool) {
     let f = fixture(&pool).await;
     seed(&pool, f.team, f.member.user_id, 1, 60).await;
@@ -1223,7 +1223,7 @@ async fn a_limit_change_is_seen_atomically_by_a_queued_issuance(pool: PgPool) {
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{v}");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn concurrent_local_policy_puts_and_creates_never_exceed_the_limit(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(6), Some(500)).await;
@@ -1263,7 +1263,7 @@ async fn concurrent_local_policy_puts_and_creates_never_exceed_the_limit(pool: P
     assert_eq!(v["effective"]["key_issuances_per_holder"], 2);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_issuance_view_shows_the_callers_budget_and_admins_the_workspace(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(3), Some(4)).await;
@@ -1336,7 +1336,7 @@ async fn key_issuance_view_shows_the_callers_budget_and_admins_the_workspace(poo
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn policy_changes_keep_their_audit_shape_and_refusals_count_in_a_metric(pool: PgPool) {
     let f = fixture(&pool).await;
     let before = crate::metrics::METRICS.key_issuance_refused_count("holder", "create");
@@ -1392,7 +1392,7 @@ async fn store_at(pool: &PgPool, level: &'static str) -> Store {
     Store::new(pool)
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn issuance_normalizes_elevated_session_defaults(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(4), Some(500)).await;
@@ -1443,7 +1443,7 @@ async fn issuance_normalizes_elevated_session_defaults(pool: PgPool) {
     assert_eq!(revoked, 2, "a refused rotation revokes nothing");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn issuance_fails_closed_under_explicit_elevated_isolation(pool: PgPool) {
     use crate::management::keys::issuance::{Holder, Operation, check};
     let f = fixture(&pool).await;
@@ -1482,7 +1482,7 @@ async fn issuance_fails_closed_under_explicit_elevated_isolation(pool: PgPool) {
 /// Two transactions on separate connections hold only the workspace row lock
 /// (no installation row): the second `check` must wait for the first, then
 /// count its committed row. Removing `check`'s lock or its count fails this.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn the_workspace_lock_alone_serializes_check_and_insert(pool: PgPool) {
     use crate::management::keys::issuance::{Holder, Operation, check};
     let f = fixture(&pool).await;

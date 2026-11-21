@@ -1,5 +1,5 @@
 use super::*;
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn organization_free_me_is_live_and_capabilities_match_authority_not_session_hints(
     pool: PgPool,
 ) {
@@ -103,7 +103,7 @@ async fn organization_free_me_is_live_and_capabilities_match_authority_not_sessi
         StatusCode::FORBIDDEN
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn management_router_requires_browser_session_not_inference_key(pool: PgPool) {
     let f = fixture(&pool).await;
     let identity = IdentityState::new(f.s.clone(), None).await.unwrap();

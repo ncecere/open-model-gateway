@@ -94,7 +94,7 @@ fn rerank_usage(tokens: u64, search_units: Option<u64>) -> Usage {
     usage
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn rerank_v3_hold_uses_max_units_and_request_ceiling_then_settles_exactly(pool: PgPool) {
     let f = fixture(pool).await;
     let deployment = protocols(&f, "rerank").await;
@@ -145,7 +145,7 @@ async fn rerank_v3_hold_uses_max_units_and_request_ceiling_then_settles_exactly(
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn rerank_unbounded_search_units_deny_budget_and_unknown_count_keeps_floor(pool: PgPool) {
     let f = fixture(pool).await;
     let deployment = protocols(&f, "rerank").await;
@@ -184,7 +184,7 @@ async fn rerank_unbounded_search_units_deny_budget_and_unknown_count_keeps_floor
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn rerank_not_applicable_search_units_settle_and_output_must_stay_zero(pool: PgPool) {
     let f = fixture(pool).await;
     let deployment = protocols(&f, "rerank").await;
@@ -216,7 +216,7 @@ async fn rerank_not_applicable_search_units_settle_and_output_must_stay_zero(poo
     assert_eq!(amounts(&f, start.id).await.2, Some(25));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn systemone_reserves_price_output_ceiling_and_free_output_settles(pool: PgPool) {
     let f = fixture(pool).await;
     let deployment = protocols(&f, "systemone").await;
@@ -261,7 +261,7 @@ async fn systemone_reserves_price_output_ceiling_and_free_output_settles(pool: P
     assert_eq!(amounts(&f, start.id).await.1, Some(100 + 100));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn workload_admission_requires_a_matching_model_protocol(pool: PgPool) {
     let f = fixture(pool).await;
     let deployment = protocols(&f, "rerank").await;

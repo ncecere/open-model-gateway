@@ -155,7 +155,7 @@ mod db {
         sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,actual_microusd,held_microusd,unbounded_cost,price_id,input_tokens,output_tokens) SELECT $1,$2,$3,$4,e.started_at,date_trunc('minute',e.started_at,'UTC'),date_trunc('month',e.started_at,'UTC'),now()-interval '1 day',$5,$6,$7,$8,$9,$6,CASE WHEN $6::bigint IS NOT NULL THEN 0 END FROM inference_executions e WHERE e.id=$1").bind(id).bind(workspace).bind(key).bind(f.deployment).bind(state).bind(actual).bind(held).bind(held.is_none()&&actual.is_none()).bind(price).execute(&f.store.pool).await.unwrap();
         id
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn policy_roles_privacy_scope_and_transactional_audit(pool: PgPool) {
         let f = fixture(pool).await;
         let admin = user(f.owner, true);
@@ -213,7 +213,7 @@ mod db {
             StatusCode::FORBIDDEN
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn platform_override_audit_excludes_all_personal_updates_and_resets(pool: PgPool) {
         let f = fixture(pool).await;
         let admin = user(f.owner, true);
@@ -278,7 +278,7 @@ mod db {
         );
         assert!(!audit.to_string().contains(&foreign_personal.to_string()));
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn v1_inclusive_settlement_reports_only_aggregate_legacy_cost(pool: PgPool) {
         let f = fixture(pool).await;
         f.price(1_000_000).await;
@@ -327,7 +327,7 @@ mod db {
             assert_eq!(row["input_tokens"], "6");
         }
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn key_and_cross_workspace_resources_never_leak(pool: PgPool) {
         let f = fixture(pool).await;
         let member = user(f.other, false);
@@ -387,7 +387,7 @@ mod db {
             );
         }
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn pricing_append_only_and_authority_rechecked(pool: PgPool) {
         let f = fixture(pool).await;
         let p = format!("/api/v1/platform/deployments/{}/prices", f.deployment);
@@ -426,7 +426,7 @@ mod db {
         let (_, prices) = call(&f, &admin, "GET", &p, Value::Null).await;
         assert_eq!(prices["data"][0]["pricing_version"], 1);
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn malformed_bodies_money_and_pagination_bounded(pool: PgPool) {
         let f = fixture(pool).await;
         let u = user(f.owner, true);
@@ -467,7 +467,7 @@ mod db {
             );
         }
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn routing_bounds_unknown_health_and_audit(pool: PgPool) {
         let f = fixture(pool).await;
         let u = user(f.owner, true);
@@ -497,7 +497,7 @@ mod db {
             2
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn monthly_member_scope_unknown_is_not_zero_and_csv_formula_safe(pool: PgPool) {
         let f = fixture(pool).await;
         let member = user(f.other, false);
@@ -560,7 +560,7 @@ mod db {
         assert!(csv.contains("\"'=formula\""));
         assert!(!csv.contains("secret"));
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn reconciliation_operator_private_scoped_atomic(pool: PgPool) {
         let f = fixture(pool).await;
         f.price(1_000_000).await;
@@ -603,7 +603,7 @@ mod db {
             5
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn replacement_type_defaults_compose_local_and_installation_not_exposed(pool: PgPool) {
         let f = fixture(pool).await;
         let admin = user(f.owner, true);
@@ -637,7 +637,7 @@ mod db {
         assert_eq!(v["mode"], "inherit");
         assert_eq!(v["effective"]["monthly_budget_microusd"], "1000");
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn delegated_admin_tighten_requires_live_membership_and_masked_caps_persist(
         pool: PgPool,
     ) {
@@ -686,7 +686,7 @@ mod db {
             StatusCode::FORBIDDEN
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn configuration_authority_rechecked_after_installation_lock_wait(pool: PgPool) {
         let f = fixture(pool).await;
         let u = user(f.owner, true);
@@ -716,7 +716,7 @@ mod db {
         tx.commit().await.unwrap();
         assert_eq!(op.await.0, StatusCode::FORBIDDEN);
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn platform_personal_totals_never_details_or_key_breakdowns(pool: PgPool) {
         let f = fixture(pool).await;
         execution(
@@ -792,7 +792,7 @@ mod db {
             StatusCode::NOT_FOUND
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn health_indicators_overlap_cache_components_exact_and_unknown_ledger_not_additive(
         pool: PgPool,
     ) {
@@ -868,7 +868,7 @@ mod db {
         assert_eq!(v["cost_components"]["cache_write_1h_microusd"], "16");
         assert_eq!(v["billing_usage"]["cache_write_input_tokens"], "15");
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn report_filter_comparison_dates_and_output_bounds_consistent(pool: PgPool) {
         let f = fixture(pool).await;
         let mut ids = Vec::new();
@@ -945,7 +945,7 @@ mod db {
         assert_eq!(v["totals"]["known_cost_microusd"], "105");
         assert_eq!(v["daily"].as_array().unwrap().len(), 1);
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn report_admission_installation_lock_contention_is_measured(pool: PgPool) {
         let f = fixture(pool).await;
         f.price(1_000_000).await;
@@ -1033,7 +1033,7 @@ mod db {
     /// Every meter the route's workload can use must be stated (priced,
     /// `not_applicable` or `unknown`); omitted meters are refused with
     /// `price_meters_incomplete` instead of silently making budgeted keys fail.
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn v3_prices_must_state_every_meter_the_route_can_use(pool: PgPool) {
         let f = fixture(pool).await;
         let admin = user(f.owner, true);
@@ -1120,7 +1120,7 @@ mod db {
             StatusCode::OK
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn v3_prices_publish_display_and_report_meter_totals(pool: PgPool) {
         let f = fixture(pool).await;
         let admin = user(f.owner, true);
@@ -1311,7 +1311,7 @@ mod db {
         assert_eq!(row["meter_usage"]["requests"], "1");
         assert_eq!(row["provider_cost_microusd"], "5");
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn openrouter_price_suggestion_uses_mock_catalog_without_key(pool: PgPool) {
         use super::super::suggestion::{OpenRouterCatalog, tests::mock};
         use std::sync::{
@@ -1452,7 +1452,7 @@ mod db {
     }
     /// #634: a malformed catalog entry is a well-formed draft, never a panic
     /// (a dropped connection, which the client sees as a failed request).
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn price_suggestion_survives_a_malformed_top_provider(pool: PgPool) {
         use super::super::suggestion::{OpenRouterCatalog, tests::mock};
         use std::sync::Arc;
@@ -1510,7 +1510,7 @@ mod db {
         assert_eq!(v["endpoint"]["selection"], "cheapest");
         task.abort();
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn budget_headroom_hidden_scopes_never_read_totals_and_failures_are_not_zero(
         pool: PgPool,
     ) {
@@ -1544,7 +1544,7 @@ mod db {
         tx.rollback().await.unwrap();
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn budget_headroom_invalid_window_preserves_neighbors_and_sql_errors_remain_503(
         pool: PgPool,
     ) {
@@ -1631,7 +1631,7 @@ mod db {
             .unwrap();
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn budget_headroom_stacked_scopes_keep_consumption_and_periods_distinct(pool: PgPool) {
         let f = fixture(pool).await;
         let admin = user(f.owner, true);
@@ -1715,7 +1715,7 @@ mod db {
         }
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn budget_headroom_unknown_floors_limit_raise_and_personal_privacy(pool: PgPool) {
         let f = fixture(pool).await;
         let admin = user(f.owner, true);
@@ -1849,7 +1849,7 @@ mod db {
         }
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn budget_periods_round_trip_tighten_audit_and_scoped_usage(pool: PgPool) {
         let f = fixture(pool).await;
         let admin = user(f.owner, true);

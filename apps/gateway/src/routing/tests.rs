@@ -257,7 +257,7 @@ mod database {
     use crate::governance::tests::db::fixture;
     use crate::inference::repository::InferenceRepository;
     use sqlx::PgPool;
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn circuit_opens_expires_and_success_resets(pool: PgPool) {
         let f = fixture(pool).await;
         let deployment = f
@@ -351,7 +351,7 @@ mod database {
             Err(InferenceError::ModelUnavailable)
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn concurrent_failures_are_atomic_and_health_is_global(pool: PgPool) {
         let f = fixture(pool).await;
         let deployment = f
@@ -419,7 +419,7 @@ mod database {
     /// Successes on a healthy, recently observed route write nothing (no
     /// per-success hot-row update); failures, recoveries and a stale
     /// observation still write.
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn healthy_successes_write_only_on_change(pool: PgPool) {
         let f = fixture(pool).await;
         let deployment = f
@@ -483,7 +483,7 @@ mod database {
     /// elsewhere), concurrent healthy successes must not all queue on the one
     /// row, each holding a pooled connection (#132): one refreshes it, the
     /// rest return at once.
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn stale_refresh_is_single_flight_and_never_queues_on_the_row(pool: PgPool) {
         let f = fixture(pool).await;
         let deployment = f

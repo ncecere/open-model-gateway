@@ -67,7 +67,7 @@ impl CorruptedDayBudget {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn day_budget_corruption_pins_current_bucket_and_restores_original(pool: PgPool) {
     for scope in [
         Scope::Workspace(uuid::Uuid::new_v4()),

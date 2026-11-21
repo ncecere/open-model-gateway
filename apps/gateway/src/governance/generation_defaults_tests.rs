@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use std::sync::{Arc, Mutex};
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn generation_defaults_running_gateway_records_real_adapter_wire_and_refusals(
     pool: sqlx::PgPool,
 ) {
@@ -271,7 +271,7 @@ async fn counts(f: &Fixture) -> (i64, i64, i64) {
     sqlx::query_as("SELECT (SELECT count(*) FROM inference_executions),(SELECT count(*) FROM governance_reservations),(SELECT count(*) FROM monetary_ledger)")
         .fetch_one(&f.store.pool).await.unwrap()
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn generation_defaults_dispatch_chat_responses_and_explicit_limits(pool: sqlx::PgPool) {
     let f = fixture(pool).await;
     let price = f.price(1_000_000).await;
@@ -373,7 +373,7 @@ impl ProviderAdapter for CeilingSensitive {
         }))
     }
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn generation_defaults_interactive_omitted_maximum_pre_admission_validation_still_sees_the_raw_omission(
     pool: sqlx::PgPool,
 ) {
@@ -403,7 +403,7 @@ async fn generation_defaults_interactive_omitted_maximum_pre_admission_validatio
     assert_eq!(*adapter.seen.lock().unwrap(), vec![Some(50)]);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn generation_defaults_wire_and_invalid_server_defaults_write_nothing(pool: sqlx::PgPool) {
     let f = fixture(pool).await;
     let (e, a) = engine(&f, i32::MAX as u32, None);
@@ -432,7 +432,7 @@ async fn generation_defaults_wire_and_invalid_server_defaults_write_nothing(pool
         .await
         .unwrap();
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn generation_defaults_keep_unpriced_omissions_and_existing_limit_refusals(
     pool: sqlx::PgPool,
 ) {
@@ -457,7 +457,7 @@ async fn generation_defaults_keep_unpriced_omissions_and_existing_limit_refusals
     );
     assert_eq!(counts(&f).await, before);
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn generation_defaults_compose_tpm_and_budget_without_clamping(pool: sqlx::PgPool) {
     let f = fixture(pool).await;
     f.price(1_000_000).await;
@@ -516,7 +516,7 @@ async fn generation_defaults_compose_tpm_and_budget_without_clamping(pool: sqlx:
         .await
         .unwrap();
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn generation_defaults_failover_uses_each_attempt_price_not_prior_cap(pool: sqlx::PgPool) {
     let f = fixture(pool).await;
     let first = f.price(1_000_000).await;
@@ -701,16 +701,16 @@ async fn publication_barrier(pool: sqlx::PgPool, mode: locks::AdmissionMode) {
         new
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn generation_defaults_publication_barrier_scoped(pool: sqlx::PgPool) {
     publication_barrier(pool, locks::AdmissionMode::Scoped).await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn generation_defaults_publication_barrier_global(pool: sqlx::PgPool) {
     publication_barrier(pool, locks::AdmissionMode::Global).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn generation_defaults_unknown_price_keeps_unknown_hold_and_budget_refusal(
     pool: sqlx::PgPool,
 ) {
@@ -752,7 +752,7 @@ async fn generation_defaults_unknown_price_keeps_unknown_hold_and_budget_refusal
     assert_eq!(counts(&f).await, before);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn generation_defaults_cancellation_and_expired_lease_keep_exact_holds(pool: sqlx::PgPool) {
     let f = fixture(pool).await;
     f.price(1_000_000).await;

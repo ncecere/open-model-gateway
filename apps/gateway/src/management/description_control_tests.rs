@@ -14,7 +14,7 @@ const REFUSED: [&str; 7] = [
     "\u{9f}",
 ];
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn descriptions_refuse_control_characters(pool: PgPool) {
     let f = fixture(&pool).await;
     let model = |name: &str, description: &str| json!({"public_name":name,"display_name":"Described","description":description,"enabled":false,"supported_protocols":["chat_completions"]});
@@ -93,7 +93,7 @@ async fn descriptions_refuse_control_characters(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn descriptions_keep_multiline_text(pool: PgPool) {
     let f = fixture(&pool).await;
     let text = "First line\nsecond line\twith a tab\r\nand a 2000-byte limit: caf\u{e9}";

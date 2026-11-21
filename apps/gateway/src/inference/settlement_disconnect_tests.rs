@@ -246,7 +246,7 @@ fn assert_settled_with_reported_usage(found: &Rows) {
 }
 
 /// The client disconnects while a non-streamed success is being settled.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_dropped_request_still_settles_a_complete_response(pool: PgPool) {
     let world = Arc::new(world(pool, Behaviour::Complete, true).await);
     let id = Uuid::now_v7();
@@ -268,7 +268,7 @@ async fn a_dropped_request_still_settles_a_complete_response(pool: PgPool) {
 
 /// The client disconnects after the stream delivered its final usage, while
 /// the settlement at `Done` is in flight.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_dropped_stream_still_settles_after_its_final_usage(pool: PgPool) {
     let world = Arc::new(world(pool, Behaviour::Stream, true).await);
     let id = Uuid::now_v7();
@@ -293,7 +293,7 @@ async fn a_dropped_stream_still_settles_after_its_final_usage(pool: PgPool) {
 /// A drop before the upstream outcome is complete is unchanged: the
 /// cancellation settlement keeps the hold as unknown cost and records no
 /// usage.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_stream_dropped_before_its_final_usage_stays_unknown_with_its_hold(pool: PgPool) {
     let world = world(pool, Behaviour::Stalled, false).await;
     let id = Uuid::now_v7();

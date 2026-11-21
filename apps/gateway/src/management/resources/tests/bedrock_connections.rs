@@ -17,7 +17,7 @@ async fn stored(pool: &PgPool, id: Uuid) -> (String, Option<String>) {
         .unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn bedrock_identity_modes_are_validated_stored_canonically_and_never_returned(pool: PgPool) {
     let f = fixture(&pool).await;
     let post = |body: Value| call(&f.s, &f.admin, "POST", "/api/v1/platform/providers", body);
@@ -105,7 +105,7 @@ async fn bedrock_identity_modes_are_validated_stored_canonically_and_never_retur
     assert_eq!(count, 2);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn bedrock_identity_replacement_and_endpoint_patch_are_bedrock_only(pool: PgPool) {
     let f = fixture(&pool).await;
     let (_, v) = call(
@@ -179,7 +179,7 @@ async fn bedrock_identity_replacement_and_endpoint_patch_are_bedrock_only(pool: 
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn bedrock_routes_accept_inference_profiles_and_same_region_arns_only(pool: PgPool) {
     let f = fixture(&pool).await;
     let m = model(&pool, "claude").await;
@@ -230,7 +230,7 @@ async fn bedrock_routes_accept_inference_profiles_and_same_region_arns_only(pool
     assert_eq!(status, StatusCode::OK);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn database_constrains_aws_reference_shapes_and_bedrock_endpoints(pool: PgPool) {
     let insert = |provider: &'static str, reference: String, endpoint: Option<&'static str>| {
         let pool = pool.clone();

@@ -2433,7 +2433,7 @@ mod database {
             .collect()
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn only_shared_events_are_queued_and_only_while_enabled(pool: sqlx::PgPool) {
         let store = Store::new(pool.clone());
         let (team, project, personal) = (
@@ -2531,7 +2531,7 @@ mod database {
     /// same token (still excluded: token attribution never widens what is
     /// exported). Delivered to a loopback HTTP receiver, not just read
     /// back from the database.
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn delivered_events_carry_admin_token_attribution_and_personal_events_stay_excluded(
         pool: sqlx::PgPool,
     ) {
@@ -2636,7 +2636,7 @@ mod database {
     /// #174: every exported event carries a gap-free, never reused sequence
     /// number, fixed before its first delivery attempt, so a receiver can see
     /// lost events; an idle export sends a signed heartbeat.
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn sequence_numbers_reveal_lost_events_and_idle_exports_heartbeat(pool: sqlx::PgPool) {
         let store = Store::new(pool.clone());
         let receiver = receiver().await;
@@ -2757,7 +2757,7 @@ mod database {
     /// heartbeat; a number planted on a queued row becomes a gap, not a
     /// collision that stalls export; a backlog over one numbering batch is
     /// numbered in order across runs.
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn tampering_with_the_export_state_shows_up_at_the_receiver(pool: sqlx::PgPool) {
         let store = Store::new(pool.clone());
         let receiver = receiver().await;
@@ -2833,7 +2833,7 @@ mod database {
         assert!(got.windows(2).all(|w| w[1] == w[0] + 1), "consecutive");
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn batches_are_delivered_in_order_signed_and_then_dequeued(pool: sqlx::PgPool) {
         let store = Store::new(pool.clone());
         let receiver = receiver().await;
@@ -2903,7 +2903,7 @@ mod database {
         assert_eq!(total, BATCH + 20);
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn an_outage_backs_off_loses_nothing_and_recovers(pool: sqlx::PgPool) {
         let store = Store::new(pool.clone());
         let receiver = receiver().await;
@@ -2967,7 +2967,7 @@ mod database {
         assert_eq!(bodies[0]["events"], bodies[1]["events"]);
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn a_stale_lease_term_commits_nothing(pool: sqlx::PgPool) {
         let store = Store::new(pool.clone());
         let receiver = receiver().await;
@@ -2988,7 +2988,7 @@ mod database {
         );
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn a_queued_event_no_longer_in_the_database_is_skipped(pool: sqlx::PgPool) {
         let store = Store::new(pool.clone());
         let receiver = receiver().await;
@@ -3172,7 +3172,7 @@ mod database {
         receiver.frames.lock().unwrap().clone()
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn syslog_delivers_octet_counted_rfc_5424_messages_in_sequence_order(pool: sqlx::PgPool) {
         let store = Store::new(pool.clone());
         let receiver = syslog_receiver(pki::SERVER_CERT, None).await;
@@ -3239,7 +3239,7 @@ mod database {
         );
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn syslog_refuses_an_untrusted_or_misnamed_certificate(pool: sqlx::PgPool) {
         let store = Store::new(pool.clone());
         let receiver = syslog_receiver(pki::SERVER_CERT, None).await;
@@ -3278,7 +3278,7 @@ mod database {
         assert_eq!(status(&store).await.unwrap()["last_error"], "tls");
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn syslog_a_receiver_that_fails_mid_batch_gets_the_whole_batch_again(pool: sqlx::PgPool) {
         let store = Store::new(pool.clone());
         let receiver = syslog_receiver(pki::SERVER_CERT, None).await;
@@ -3329,7 +3329,7 @@ mod database {
         );
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn syslog_mutual_tls_presents_the_configured_client_certificate(pool: sqlx::PgPool) {
         let store = Store::new(pool.clone());
         let receiver = syslog_receiver(pki::SERVER_CERT, Some(pki::CA)).await;
@@ -3371,7 +3371,7 @@ mod database {
         assert_eq!(received(&receiver).len(), 1);
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn syslog_heartbeat_and_test_delivery_framing(pool: sqlx::PgPool) {
         let store = Store::new(pool.clone());
         let receiver = syslog_receiver(pki::SERVER_CERT, None).await;
@@ -3416,7 +3416,7 @@ mod database {
         );
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn syslog_connects_only_where_the_egress_policy_allows(pool: sqlx::PgPool) {
         // #352: refuses a Purpose::Audit destination; see
         // `log_capture_test`'s doc comment.
@@ -3571,7 +3571,7 @@ mod database {
             .unwrap()
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn otlp_maps_each_event_to_one_log_record_with_the_webhook_event_as_body(
         pool: sqlx::PgPool,
     ) {
@@ -3692,7 +3692,7 @@ mod database {
         );
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn otlp_sends_the_configured_headers(pool: sqlx::PgPool) {
         let store = Store::new(pool.clone());
         let collector = collector().await;
@@ -3718,7 +3718,7 @@ mod database {
     /// A 2xx is success whatever its body, unless `partialSuccess` says the
     /// collector refused records: those are dequeued (OTLP says not to retry
     /// them), counted and shown, and receivers see the gap through `seq`.
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn otlp_a_partial_rejection_is_dequeued_recorded_counted_and_not_retried(
         pool: sqlx::PgPool,
     ) {
@@ -3843,7 +3843,7 @@ mod database {
         assert_ne!(last(&v), ten_minutes_ago);
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn otlp_an_unavailable_collector_keeps_the_batch_and_the_retry_has_the_same_seq(
         pool: sqlx::PgPool,
     ) {
@@ -3904,7 +3904,7 @@ mod database {
         assert_eq!(status(&store).await.unwrap()["last_error"], Value::Null);
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn otlp_heartbeat_and_test_records(pool: sqlx::PgPool) {
         let store = Store::new(pool.clone());
         let collector = collector().await;

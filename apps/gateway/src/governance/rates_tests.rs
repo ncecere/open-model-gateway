@@ -192,7 +192,7 @@ async fn insert_job(
 
 const BILLING: &str = r#"{"total_input_tokens":"500","uncached_input_tokens":"100","cache_read_input_tokens":"300","cache_write_input_tokens":"100","cache_write_default_input_tokens":null,"cache_write_5m_input_tokens":null,"cache_write_1h_input_tokens":null}"#;
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn random_interleavings_keep_rate_counters_equal_to_the_scan(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1_000_000).await; // 110 reserved tokens (100 input ceiling + 10 output)
@@ -452,7 +452,7 @@ async fn random_interleavings_keep_rate_counters_equal_to_the_scan(pool: PgPool)
 
 /// Requests per minute reset exactly at the UTC minute boundary; a lease that
 /// expires at the admission instant no longer holds a concurrency slot.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn minute_and_lease_boundaries_on_the_pinned_clock(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1_000_000).await;
@@ -521,7 +521,7 @@ async fn minute_and_lease_boundaries_on_the_pinned_clock(pool: PgPool) {
 
 /// Tokens per minute: observed excess raises consumption, an unreserved
 /// execution blocks the minute, jobs and batch lines are exempt.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn tokens_per_minute_match_the_scan(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1_000_000).await; // 110 reserved tokens with max_output_tokens 10
@@ -630,7 +630,7 @@ async fn migrations_backfill_existing_history_exactly(pool: PgPool) {
 
 /// Expiry reconciliation works in SKIP LOCKED batches: concurrent callers
 /// never process a row twice, holds are retained, counters release slots.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn batched_expiry_reconciliation_is_exact_and_concurrent_safe(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1_000_000).await;
@@ -671,7 +671,7 @@ async fn batched_expiry_reconciliation_is_exact_and_concurrent_safe(pool: PgPool
 
 /// Pruning removes only minutes admission no longer reads; the guard refuses
 /// removing retained minutes even for the runtime's own DELETE.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn pruning_keeps_the_retained_window(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1_000_000).await;
@@ -696,7 +696,7 @@ async fn pruning_keeps_the_retained_window(pool: PgPool) {
 /// The one-statement admission revalidation equals the multi-statement form
 /// for every live-authority state (key, workspace, user, roles, membership,
 /// service account, personal ownership).
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn admission_revalidation_matches_the_multi_statement_form(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     let account = Uuid::new_v4();

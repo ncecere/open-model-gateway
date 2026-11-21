@@ -177,7 +177,7 @@ fn response_id(response: &reqwest::Response) -> Uuid {
         .unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn healthy_http_stream_beyond_old_cap_records_success(pool: PgPool) {
     let w = world(pool, Script::Healthy, Duration::from_secs(5)).await;
     let start = Instant::now();
@@ -192,7 +192,7 @@ async fn healthy_http_stream_beyond_old_cap_records_success(pool: PgPool) {
     w.recorded(id, "succeeded", None, Some(0)).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn paused_engine_reader_beyond_both_timers_records_success(pool: PgPool) {
     let w = world(pool, Script::Gated, Duration::from_secs(5)).await;
     let id = Uuid::now_v7();
@@ -204,7 +204,7 @@ async fn paused_engine_reader_beyond_both_timers_records_success(pool: PgPool) {
     w.recorded(id, "succeeded", None, Some(0)).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn active_http_read_stall_records_failure_and_retains_hold(pool: PgPool) {
     let mut w = world(pool, Script::Stalled, Duration::from_secs(5)).await;
     let (response, _server) = w.http().await;
@@ -234,16 +234,16 @@ async fn deadline(pool: PgPool, duration: Duration) {
     drop(output);
     w.recorded(id, "failed", Some("timeout_error"), None).await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn engine_deadline_shorter_than_old_cap_is_neutral(pool: PgPool) {
     deadline(pool, Duration::from_millis(350)).await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn engine_deadline_longer_than_old_cap_is_neutral(pool: PgPool) {
     deadline(pool, Duration::from_millis(900)).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn http_client_disconnect_is_neutral_and_retains_unknown_hold(pool: PgPool) {
     let mut w = world(pool, Script::Stalled, Duration::from_secs(5)).await;
     let (mut response, _server) = w.http().await;
@@ -278,7 +278,7 @@ async fn active_deadline(
     w.mock.cancelled().await;
     w.recorded(id, "failed", Some("timeout_error"), None).await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn active_engine_deadline_before_read_timer_is_neutral(pool: PgPool) {
     // Allow real database admission and SDK headers to finish before testing
     // the returned stream. The engine deadline still precedes the read bound.
@@ -293,12 +293,12 @@ async fn active_engine_deadline_before_read_timer_is_neutral(pool: PgPool) {
     )
     .await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn active_engine_deadline_after_old_total_cap_is_neutral(pool: PgPool) {
     active_deadline(pool, Script::Flowing, Duration::from_secs(2), timeouts()).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn healthy_frames_queued_during_pending_reader_pause_record_success(pool: PgPool) {
     let w = world(pool, Script::Gated, Duration::from_secs(5)).await;
     let id = Uuid::now_v7();
@@ -311,7 +311,7 @@ async fn healthy_frames_queued_during_pending_reader_pause_record_success(pool: 
     w.recorded(id, "succeeded", None, Some(0)).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn partial_frame_backpressure_stays_healthy_and_settles(pool: PgPool) {
     let w = world(pool, Script::Fragmented, Duration::from_secs(5)).await;
     let id = Uuid::now_v7();

@@ -2,7 +2,8 @@
 //! `oneshot`, synthetic schemas, no database. A handler that is looser or
 //! stricter than its schema must FAIL, and the failure names no sent value.
 use super::http_vectors::{
-    Edit, Probe, binary_cases, body_cases, query_cases, run_binary, run_body, run_query,
+    Edit, Probe, binary_cases, body_cases, query_cases, reaches_byte_limits, run_binary, run_body,
+    run_query,
 };
 use super::responses::Captured;
 use axum::{
@@ -385,6 +386,114 @@ async fn management_openapi_http_vectors_body_agreement_passes() {
     let document = body_document();
     let exchanges = run_bodies(&body_app(true, 10), &document).await.unwrap();
     assert!(exchanges.len() > 40, "{}", exchanges.len());
+}
+
+/// The bodies one body run sent, in order.
+async fn sent_bodies(app: &Router, document: &Value) -> Vec<String> {
+    let sent = std::cell::RefCell::new(Vec::new());
+    run_body(
+        document,
+        "POST",
+        TEMPLATE,
+        valid_body(),
+        &[],
+        &async |body: Value| {
+            let request = Request::builder()
+                .method("POST")
+                .uri(TEMPLATE)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    crate::management::openapi::http_vectors::wire_bytes(&body),
+                ))
+                .unwrap();
+            let probe = Probe::from(exchange(app, "POST", request).await);
+            sent.borrow_mut().push(body.to_string());
+            probe
+        },
+    )
+    .await
+    .unwrap();
+    sent.into_inner()
+}
+
+/// Ownership by ordinal is only a division while the shards plan alike: a
+/// shard whose plan differs from an earlier shard's of the same journey fails.
+#[test]
+#[should_panic(expected = "planned different vectors")]
+fn management_openapi_http_vectors_shards_that_plan_differently_fail() {
+    for index in 0..2 {
+        let scope = super::http_vectors::divide(index, 2);
+        for _ in 0..=index {
+            super::http_vectors::owns_next("minimum", "/amount");
+        }
+        drop(scope);
+    }
+}
+
+/// The same number of vectors at another location is a different plan too.
+#[test]
+#[should_panic(expected = "planned different vectors")]
+fn management_openapi_http_vectors_shards_that_plan_other_locations_fail() {
+    for location in ["/amount", "/name"] {
+        let scope = super::http_vectors::divide(0, 3);
+        super::http_vectors::owns_next("minimum", location);
+        drop(scope);
+    }
+}
+
+/// Shards divide the planned vectors and nothing else: every shard sends the
+/// run's valid request first, and across the shards each other vector is sent
+/// exactly once, so the shards together make the undivided run.
+#[tokio::test]
+async fn management_openapi_http_vectors_shards_divide_the_planned_vectors() {
+    let document = body_document();
+    let app = body_app(true, 10);
+    let whole = sent_bodies(&app, &document).await;
+    assert!(whole.len() > 40, "{}", whole.len());
+    let mut vectors = whole[1..].to_vec();
+    vectors.sort();
+    for count in [2, 3, 5, 64] {
+        let mut union = Vec::new();
+        for index in 0..count {
+            let scope = super::http_vectors::divide(index, count);
+            let sent = sent_bodies(&app, &document).await;
+            drop(scope);
+            assert_eq!(
+                sent[0], whole[0],
+                "shard {index} of {count}: the valid request"
+            );
+            union.extend_from_slice(&sent[1..]);
+        }
+        union.sort();
+        assert_eq!(union, vectors, "{count} shards");
+    }
+    // Outside a shard everything is sent again.
+    assert_eq!(sent_bodies(&app, &document).await, whole);
+}
+
+/// A body is judged against reviewed byte limits only where one can apply: the
+/// search follows every reference (cycles included) and never answers "none"
+/// when a reference cannot be followed.
+#[test]
+fn management_openapi_http_vectors_byte_limits_are_found_through_references() {
+    let document = json!({"components":{"schemas":{
+        "Holder":{"type":"object","properties":{"url":{"$ref":"#/components/schemas/Limited"}}},
+        "Limited":{"type":"string","x-omg-max-bytes":10},
+        "Plain":{"type":"object","properties":{"again":{"$ref":"#/components/schemas/Plain"}}},
+        "Listing":{"type":"array","items":{"oneOf":[{"$ref":"#/components/schemas/Plain"},{"$ref":"#/components/schemas/Holder"}]}}}}});
+    let reaches = |name: &str| {
+        reaches_byte_limits(
+            &document,
+            &json!({"$ref": format!("#/components/schemas/{name}")}),
+        )
+    };
+    assert!(reaches("Holder") && reaches("Limited") && reaches("Listing"));
+    assert!(!reaches("Plain"));
+    assert!(reaches("Missing"));
+    assert!(reaches_byte_limits(
+        &document,
+        &json!({"$ref":"https://elsewhere.invalid/x"})
+    ));
 }
 
 #[tokio::test]

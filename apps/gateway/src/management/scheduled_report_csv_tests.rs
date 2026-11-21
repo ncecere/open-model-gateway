@@ -10,7 +10,7 @@ async fn response(f: &Fixture, who: &BrowserPrincipal, path: &str) -> Response {
         .await
         .unwrap()
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn report_csv_scope_bounds_escaping_expiry_and_no_store(pool: PgPool) {
     let f = fixture(&pool).await;
     let body = json!({"totals":{"known_cost_microusd":"9007199254740993","held_microusd":"1","root_requests":null},"breakdowns":{"models":[{"id":"m","name":" \t=HYPERLINK(\"bad\")\r\nnext","totals":{"known_cost_microusd":"1","root_requests":null}}]},"coverage":{"priced_attempts":null},"unavailable":{"pricing_coverage":"not_in_rollups"},"breakdowns_truncated":true,"truncated_dimensions":["models"],"held_is_floor":true});

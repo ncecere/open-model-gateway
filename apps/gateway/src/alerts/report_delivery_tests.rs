@@ -113,7 +113,7 @@ async fn state(pool: &PgPool) -> String {
         .await
         .unwrap()
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_delivery_enqueue_idempotent_and_lineage(pool: PgPool) {
     let (_, _, run, _, _) = published(&pool, "installation").await;
     let mut tx = pool.begin().await.unwrap();
@@ -141,7 +141,7 @@ async fn scheduled_reports_delivery_enqueue_idempotent_and_lineage(pool: PgPool)
     );
     assert!(sqlx::query("INSERT INTO alert_deliveries(id,event_id,report_run_id,transition) VALUES(gen_random_uuid(),NULL,gen_random_uuid(),'fired')").execute(&pool).await.is_err());
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_delivery_live_refusals_never_redirect_or_reactivate(pool: PgPool) {
     let (store, schedule, _, user, _) = published(&pool, "installation").await;
     configured(&pool).await;
@@ -174,7 +174,7 @@ async fn scheduled_reports_delivery_live_refusals_never_redirect_or_reactivate(p
     let audits: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE resource_id=$1 AND action='report.delivery_outcome'").bind(schedule).fetch_one(&pool).await.unwrap();
     assert!(audits > 0);
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_delivery_revoked_role(pool: PgPool) {
     let (store, _, _, user, _) = published(&pool, "installation").await;
     configured(&pool).await;
@@ -198,7 +198,7 @@ async fn scheduled_reports_delivery_revoked_role(pool: PgPool) {
     assert!(report_claim(&store).await.is_none());
     assert_eq!(state(&pool).await, "ineligible");
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_delivery_removed_membership(pool: PgPool) {
     let (store, _, _, user, ws) = published(&pool, "workspace").await;
     configured(&pool).await;
@@ -211,7 +211,7 @@ async fn scheduled_reports_delivery_removed_membership(pool: PgPool) {
     assert!(report_claim(&store).await.is_none());
     assert_eq!(state(&pool).await, "ineligible");
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_delivery_suspended_user(pool: PgPool) {
     let (store, _, _, user, _) = published(&pool, "personal").await;
     configured(&pool).await;
@@ -223,7 +223,7 @@ async fn scheduled_reports_delivery_suspended_user(pool: PgPool) {
     assert!(report_claim(&store).await.is_none());
     assert_eq!(state(&pool).await, "ineligible");
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_delivery_retry_backoff_expiry_fencing_and_not_configured(pool: PgPool) {
     let (store, _, _, _, _) = published(&pool, "installation").await;
     configured(&pool).await;
@@ -281,7 +281,7 @@ async fn scheduled_reports_delivery_retry_backoff_expiry_fencing_and_not_configu
     assert_eq!(state(&pool).await, "not_configured");
     assert!(!complete(&store, &current, Ok(())).await.unwrap());
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_delivery_five_attempts_exhaust_without_replay(pool: PgPool) {
     let (store, _, _, _, _) = published(&pool, "installation").await;
     configured(&pool).await;
@@ -305,14 +305,14 @@ async fn scheduled_reports_delivery_five_attempts_exhaust_without_replay(pool: P
     assert_eq!(state(&pool).await, "exhausted");
     assert_eq!(deliver_pending(&store, 25).await, 0);
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_delivery_24h_cleanup_and_initial_not_configured(pool: PgPool) {
     let (store, _, _, _, _) = published(&pool, "installation").await;
     assert_eq!(deliver_pending(&store, 25).await, 1);
     assert_eq!(state(&pool).await, "not_configured");
     assert_eq!(deliver_pending(&store, 25).await, 0);
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_delivery_expired_lease_24h_is_fenced(pool: PgPool) {
     let (store, _, _, _, _) = published(&pool, "installation").await;
     configured(&pool).await;
@@ -327,7 +327,7 @@ async fn scheduled_reports_delivery_expired_lease_24h_is_fenced(pool: PgPool) {
     assert_eq!(state(&pool).await, "exhausted");
     assert!(!complete(&store, &c, Ok(())).await.unwrap());
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_delivery_paused_schedule_suppresses(pool: PgPool) {
     let (store, schedule, _, _, _) = published(&pool, "workspace").await;
     configured(&pool).await;
@@ -339,7 +339,7 @@ async fn scheduled_reports_delivery_paused_schedule_suppresses(pool: PgPool) {
     assert!(report_claim(&store).await.is_none());
     assert_eq!(state(&pool).await, "ineligible");
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_delivery_disabled_workspace_suppresses(pool: PgPool) {
     let (store, _, _, _, ws) = published(&pool, "workspace").await;
     configured(&pool).await;
@@ -351,7 +351,7 @@ async fn scheduled_reports_delivery_disabled_workspace_suppresses(pool: PgPool) 
     assert!(report_claim(&store).await.is_none());
     assert_eq!(state(&pool).await, "ineligible");
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_delivery_smtp_link_only_and_shared_fair_bucket(pool: PgPool) {
     let (store, schedule, run, _, ws) = published(&pool, "workspace").await;
     let (port, mut rx) = mock::serve(Behaviour::default()).await;

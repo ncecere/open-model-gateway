@@ -1,5 +1,5 @@
 use super::*;
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_restrictions_null_empty_subset_validation_rotation_lineage_and_visibility(
     pool: PgPool,
 ) {
@@ -97,7 +97,7 @@ async fn key_restrictions_null_empty_subset_validation_rotation_lineage_and_visi
     assert!(!keys.to_string().contains("token"));
     assert!(!keys.to_string().contains("secret_hash"));
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn shared_admin_revocation_is_not_human_impersonation_and_members_see_only_own_keys(
     pool: PgPool,
 ) {
@@ -193,7 +193,7 @@ async fn shared_admin_revocation_is_not_human_impersonation_and_members_see_only
         StatusCode::OK
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn service_account_disable_reenable_cannot_resurrect_credentials_and_is_shared_only(
     pool: PgPool,
 ) {

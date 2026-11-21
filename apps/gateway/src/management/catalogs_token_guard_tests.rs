@@ -10,7 +10,7 @@
 use super::*;
 use crate::identity::AdminTokenContext;
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn change_model_non_direct_branch_refuses_a_token_actor(pool: PgPool) {
     let f = fixture(&pool).await;
     let team = f.team;

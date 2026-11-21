@@ -780,7 +780,7 @@ mod tests {
         sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_token_limit,output_token_limit,pricing_version,price_lines,max_units) VALUES($1,$2,100,10,3,'[{\"meter\":\"requests\",\"not_applicable\":true}]','{}')").bind(uuid::Uuid::new_v4()).bind(deployment).execute(&pool).await.unwrap();
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn unrelated_public_relations_are_rejected_without_modification(pool: PgPool) {
         let store = Store::new(pool.clone());
         assert!(store.is_ready().await);
@@ -832,7 +832,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn capabilities_cache_shapes_and_provider_auth_modes_are_database_invariants(
         pool: PgPool,
     ) {

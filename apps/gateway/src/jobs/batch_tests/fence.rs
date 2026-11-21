@@ -63,7 +63,7 @@ async fn envelope(w: &World, job: &JobRow) -> String {
 
 /// The old runner's provider call returns after the new runner finished the
 /// batch: its line is already `interrupted`, counted and reported unavailable.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_runner_that_lost_the_batch_cannot_change_a_batch_the_new_owner_finished(pool: PgPool) {
     let log = crate::log_capture_test::Capture::start();
     let (w, job) = batch(pool, &[("a", "hold-a")]).await;
@@ -154,7 +154,7 @@ async fn a_runner_that_lost_the_batch_cannot_change_a_batch_the_new_owner_finish
 
 /// The old runner returns while the new owner still runs: it must not finish
 /// or settle the batch, and the owner's own results must all be recorded.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_runner_that_lost_the_batch_neither_finalizes_it_nor_costs_the_owner_a_result(
     pool: PgPool,
 ) {
@@ -210,7 +210,7 @@ async fn a_runner_that_lost_the_batch_neither_finalizes_it_nor_costs_the_owner_a
 
 /// A runner that lost the batch starts no further line, even one nobody
 /// claimed yet.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_runner_that_lost_the_batch_claims_and_runs_no_further_line(pool: PgPool) {
     let (w, job) = batch(pool, &[("a", "hold-a"), ("b", "hold-b"), ("c", "plain-c")]).await;
     let (held_a, held_b) = (w.openai.gate("hold-a"), w.openai.gate("hold-b"));
@@ -272,7 +272,7 @@ async fn claim(w: &World, job: &JobRow) -> BatchFence {
     fence
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn every_claim_of_a_batch_moves_its_epoch_on(pool: PgPool) {
     let (w, job) = batch(pool, &[("a", "plain")]).await;
     let first = claim(&w, &job).await;
@@ -314,7 +314,7 @@ async fn every_claim_of_a_batch_moves_its_epoch_on(pool: PgPool) {
     assert!(back.is_err());
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_stale_claim_writes_nothing_and_a_current_one_everything(pool: PgPool) {
     let (w, job) = batch(pool, &[("a", "plain"), ("b", "plain")]).await;
     let old = claim(&w, &job).await;
@@ -388,7 +388,7 @@ async fn a_stale_claim_writes_nothing_and_a_current_one_everything(pool: PgPool)
 
 /// A process that predates the epoch (or a stale writer) took the next
 /// segment number: the owner takes the one after it and keeps flushing.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_taken_segment_number_never_blocks_the_owners_later_flushes(pool: PgPool) {
     let (w, job) = batch(pool, &[("a", "plain")]).await;
     let fence = claim(&w, &job).await;
@@ -437,7 +437,7 @@ async fn a_taken_segment_number_never_blocks_the_owners_later_flushes(pool: PgPo
 
 /// A stale runner is refused at admission: no execution, no reservation, no
 /// provider call, and the current claim admits the same line.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_stale_claim_admits_no_line(pool: PgPool) {
     let (w, job) = batch(pool, &[("a", "plain")]).await;
     let old = claim(&w, &job).await;
@@ -503,7 +503,7 @@ async fn a_stale_claim_admits_no_line(pool: PgPool) {
 /// A process that predates the epoch claims with the runner id only (its
 /// statement, verbatim): the claim it replaces is fenced all the same, by the
 /// runner id, and the epoch does not move.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_claim_by_a_process_without_the_epoch_still_fences_the_old_claim(pool: PgPool) {
     let (w, job) = batch(pool, &[("a", "plain")]).await;
     let ours = claim(&w, &job).await;
@@ -570,18 +570,18 @@ async fn claim_skips_a_write_in_flight(pool: PgPool, hold: crate::jobs::fence::H
         "the old claim still holds"
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_claim_skips_a_batch_with_a_row_hold_in_flight(pool: PgPool) {
     claim_skips_a_write_in_flight(pool, crate::jobs::fence::Hold::Rows).await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_claim_skips_a_batch_with_an_update_hold_in_flight(pool: PgPool) {
     claim_skips_a_write_in_flight(pool, crate::jobs::fence::Hold::Update).await;
 }
 
 /// A fenced transaction that stops talking is ended by the server, which
 /// releases the batch for a claim.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_fenced_transaction_carries_an_idle_timeout(pool: PgPool) {
     use crate::jobs::fence::{Hold, IDLE_IN_TRANSACTION};
     let (w, job) = batch(pool, &[("a", "plain")]).await;
@@ -617,7 +617,7 @@ async fn a_fenced_transaction_carries_an_idle_timeout(pool: PgPool) {
 
 /// A run that loses the batch between creating its result files and recording
 /// the batch finished removes those files; the owner finalises alone.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_takeover_between_the_result_files_and_finishing_leaves_no_duplicate_files(pool: PgPool) {
     let (w, job) = batch(pool, &[("a", "plain")]).await;
     w.jobs.finalize_hold.arm();
@@ -655,7 +655,7 @@ async fn a_takeover_between_the_result_files_and_finishing_leaves_no_duplicate_f
 /// A line recorded `succeeded` whose result was still in the old run's
 /// buffer when the batch was taken over has no stored result: it is reported
 /// unavailable and counted failed, so counters and error file agree.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_result_still_buffered_at_takeover_is_counted_with_the_error_file(pool: PgPool) {
     let (w, job) = batch(pool, &[("a", "plain"), ("b", "hold-b")]).await;
     let held = w.openai.gate("hold-b");
@@ -698,7 +698,7 @@ async fn a_result_still_buffered_at_takeover_is_counted_with_the_error_file(pool
 
 /// Every statement the scheduler and the job row accept from a claim that
 /// ended is refused or does nothing; the current claim's go through.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduler_and_job_row_writes_follow_the_claim(pool: PgPool) {
     use crate::jobs::schedule::{Claim, Pause, Scheduler, WaitRow};
     let (w, job) = batch(pool, &[("a", "plain"), ("b", "plain")]).await;
@@ -825,7 +825,7 @@ async fn scheduler_and_job_row_writes_follow_the_claim(pool: PgPool) {
 
 /// The first failed renewal makes the writer store what it holds, before a
 /// takeover can refuse it; a writer whose claim ended stores nothing.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_failed_renewal_stores_the_buffered_results_at_once(pool: PgPool) {
     use crate::jobs::runner::SegmentProbe;
     let (w, job) = batch(pool, &[("a", "plain"), ("b", "plain")]).await;
@@ -884,7 +884,7 @@ async fn a_failed_renewal_stores_the_buffered_results_at_once(pool: PgPool) {
 /// A run that only doubts its lease (soft loss) never ends the batch: it
 /// finishes its in-flight lines, releases, and the batch stays open with the
 /// unstarted lines pending for the next claim.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_soft_lost_run_leaves_the_batch_open_and_a_second_runner_completes_it(pool: PgPool) {
     let (w, job) = batch(
         pool,
@@ -946,7 +946,7 @@ fn only_a_connection_failure_leaves_the_outcome_unknown() {
 
 /// A server error is certain: nothing was applied (a file id that does not
 /// exist violates a foreign key).
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_rejected_finish_is_a_certain_failure_and_a_refused_one_is_stale(pool: PgPool) {
     let (w, job) = batch(pool, &[("a", "plain")]).await;
     let old = claim(&w, &job).await;

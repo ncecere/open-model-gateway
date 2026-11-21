@@ -33,7 +33,7 @@ fn rejected(status: StatusCode, v: &Value, code: StatusCode, reason: &str, detai
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn key_create_applies_policy_atomically_and_rejections_have_reasons(pool: PgPool) {
     let f = fixture(&pool).await;
     let keys = format!("/api/v1/workspaces/{}/keys", f.team);
@@ -233,7 +233,7 @@ async fn key_create_applies_policy_atomically_and_rejections_have_reasons(pool: 
     assert_eq!(v["error"]["reason"], "personal_limits_platform_controlled");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn single_key_read_follows_list_visibility(pool: PgPool) {
     let f = fixture(&pool).await;
     let (_, mine) = key(&f, &f.member, f.team, Value::Null).await;
@@ -303,7 +303,7 @@ async fn raw_get(f: &Fixture, u: &BrowserPrincipal, path: &str) -> (StatusCode, 
     (status, rows, String::from_utf8(bytes.to_vec()).unwrap())
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn usage_and_records_filters_are_strict_scoped_and_series_are_strings(pool: PgPool) {
     let f = fixture(&pool).await;
     let ra = route(&pool, "flt-alpha", "openai").await;
@@ -574,7 +574,7 @@ async fn usage_and_records_filters_are_strict_scoped_and_series_are_strings(pool
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn platform_member_rows_show_totals_never_personal_key_identity(pool: PgPool) {
     let f = fixture(&pool).await;
     let r = route(&pool, "priv-model", "openai").await;
@@ -692,7 +692,7 @@ async fn platform_member_rows_show_totals_never_personal_key_identity(pool: PgPo
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn model_reads_include_created_at_and_catalog_sorts(pool: PgPool) {
     let f = fixture(&pool).await;
     let old = route(&pool, "srt-old", "openai").await;
@@ -753,7 +753,7 @@ async fn model_reads_include_created_at_and_catalog_sorts(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn jobs_at_once_stacks_like_other_limits(pool: PgPool) {
     let f = fixture(&pool).await;
     // Type defaults start at 2; the effective workspace limit inherits it.

@@ -51,7 +51,7 @@ mod fixtures {
         body
     }
 
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn inference_openapi_media_wire_fixtures(pool: PgPool) {
         let (app, keys) = gateway(&pool).await;
         let key = &keys.personal_key.token;

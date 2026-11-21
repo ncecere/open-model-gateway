@@ -134,7 +134,7 @@ mod db {
             .await
             .unwrap()
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn scheduled_reports_delivery_boundary_defers_then_catches_up_once(pool: PgPool) {
         let (s, f, id, _) = setup(&pool).await;
         let before = at("2026-10-26T00:00:30Z");
@@ -200,7 +200,7 @@ mod db {
         assert_eq!(count(&pool).await, 1);
         assert_eq!(cursor(&pool, id).await, completed_cursor);
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn scheduled_reports_frozen_scheduling_preserves_claim_expiry_and_lease_fences(
         pool: PgPool,
     ) {
@@ -273,7 +273,7 @@ mod db {
         ));
         assert_eq!(count(&pool).await, 0);
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn scheduled_reports_generation_two_replicas_idempotent_catchup_lineage(pool: PgPool) {
         let (s, f, id, _) = setup(&pool).await;
         let (a, b) = tokio::join!(tick(&s, &f), tick(&s, &f));
@@ -314,7 +314,7 @@ mod db {
                 .any(|m| m.version == 63 && m.description == "report generation")
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn scheduled_reports_generation_revision_token_expiry_and_lease_fences(pool: PgPool) {
         let (s, f, id, _) = setup(&pool).await;
         let c = claim(&s, &f, id).await.unwrap().unwrap();
@@ -363,7 +363,7 @@ mod db {
         ));
         assert_eq!(count(&pool).await, 0);
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn scheduled_reports_occurrence_failure_categories_are_immutable_and_bounded(
         pool: PgPool,
     ) {
@@ -416,7 +416,7 @@ mod db {
             .unwrap()
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn scheduled_reports_generation_snapshot_cap_rolls_back_cursor_and_occurrence(
         pool: PgPool,
     ) {
@@ -443,7 +443,7 @@ mod db {
         assert!(complete(&s, &f, &c, &body).await.unwrap());
         assert_eq!(count(&pool).await, 1);
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn scheduled_reports_generation_authority_loss_pauses_audited(pool: PgPool) {
         let (s, f, id, user) = setup(&pool).await;
         let c = claim(&s, &f, id).await.unwrap().unwrap();
@@ -465,7 +465,7 @@ mod db {
         assert_eq!(audit["category"], "creator_authority_lost");
         assert!(sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT FROM report_generation_outcomes WHERE schedule_id=$1 AND category='authority_lost' AND period_start IS NOT NULL)").bind(id).fetch_one(&pool).await.unwrap());
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn scheduled_reports_generation_workspace_and_personal_live_authority(pool: PgPool) {
         let (s, f, _, user) = setup(&pool).await;
         for kind in ["team", "personal"] {
@@ -502,7 +502,7 @@ mod db {
         }
         assert_eq!(count(&pool).await, 0);
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn scheduled_reports_generation_immutable_snapshot_retention_and_dedup(pool: PgPool) {
         let (s, f, _, _) = setup(&pool).await;
         tick(&s, &f).await.unwrap();

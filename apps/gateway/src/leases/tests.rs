@@ -30,7 +30,7 @@ fn holders_with_ttl(n: usize, ttl: Duration) -> Vec<Arc<Leases>> {
 
 /// Concurrent elections: every lease has exactly one holder; renewals keep
 /// the holder and its epoch.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn exactly_one_of_three_replicas_holds_each_lease(pool: PgPool) {
     // Exercise unexpired renewal even under load; expiry and fencing have separate tests.
     let replicas = holders_with_ttl(3, Duration::from_secs(60));
@@ -139,7 +139,7 @@ async fn assert_no_early_takeover(pool: &PgPool, original: &[LeaseRow], when: &s
 /// A holder that dies (stops renewing) loses its leases once the term
 /// expires; another replica takes over with a larger epoch, and the former
 /// holder's fenced writes fail.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_dead_holder_is_replaced_after_expiry_and_fenced(pool: PgPool) {
     let replicas = holders(3);
     let store = replica(&pool).await;
@@ -227,7 +227,7 @@ async fn a_dead_holder_is_replaced_after_expiry_and_fenced(pool: PgPool) {
 
 /// A job transaction holds its term: a takeover waits until the running job
 /// commits, and the paused former leader cannot start another transaction.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_takeover_waits_for_the_running_job_transaction(pool: PgPool) {
     let replicas = holders(2);
     assert_eq!(replicas[0].renew_once(&pool).await, Lease::ALL.len());
@@ -255,7 +255,7 @@ async fn a_takeover_waits_for_the_running_job_transaction(pool: PgPool) {
 
 /// Singleton ticks on three replicas: every tick runs exactly once in total,
 /// including across a handover; release hands over at once.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn singleton_jobs_run_once_per_tick_across_three_replicas(pool: PgPool) {
     let replicas = holders(3);
     let stores = [
@@ -329,7 +329,7 @@ async fn singleton_jobs_run_once_per_tick_across_three_replicas(pool: PgPool) {
 /// The real lifecycle job on three replicas at once: a due account is
 /// cleaned exactly once (one audit event), and nothing-due ticks take no
 /// installation lock.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn lifecycle_cleanup_runs_once_with_three_replicas(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     sqlx::query("UPDATE users SET disabled_at=now(),cleanup_due_at=now()-interval '1 minute',disable_reason='admin_suspension' WHERE id=$1")
@@ -389,7 +389,7 @@ async fn lifecycle_cleanup_runs_once_with_three_replicas(pool: PgPool) {
 /// The expired-lease queue on three replicas at once: every expired
 /// reservation is reconciled exactly once (`FOR UPDATE SKIP LOCKED`), the
 /// replicas share the work, and the totals stay exact.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn skip_locked_reconciliation_is_shared_without_duplicates(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1_000_000).await;
@@ -431,7 +431,7 @@ async fn skip_locked_reconciliation_is_shared_without_duplicates(pool: PgPool) {
 
 /// The stored-file sweeper claims through `SKIP LOCKED` row leases: two
 /// sweeps at once never claim the same file.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn concurrent_file_sweeps_claim_disjoint_rows(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     for _ in 0..40 {
@@ -457,7 +457,7 @@ async fn concurrent_file_sweeps_claim_disjoint_rows(pool: PgPool) {
 
 /// #106: a replica that can't do a lease's work never takes it, so the
 /// replicas that can (audit export with a destination) always do.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn an_excluded_lease_goes_to_a_replica_that_can_do_the_work(pool: PgPool) {
     let (without, with) = (
         Arc::new(Leases::with_ttl(SHORT).without(Lease::AuditExport)),

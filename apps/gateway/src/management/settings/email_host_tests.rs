@@ -1,7 +1,7 @@
 //! Disallowed SMTP relays fail before connecting, but still record the test.
 use super::*;
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn email_test_disallowed_host_records_failure(pool: PgPool) {
     let f = fixture(&pool).await;
     let admin = browser(&pool, &f.admin).await;

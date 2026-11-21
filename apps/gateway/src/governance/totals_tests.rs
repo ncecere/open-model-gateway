@@ -14,7 +14,7 @@ use sqlx::{PgPool, migrate::Migrator};
 
 /// Reporting never changes admission's older lower-bound contract. In
 /// particular, a bounded unknown hold is NOT a known available allowance.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn budget_report_exact_holds_unknown_union_and_missing_buckets(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1_000_000).await;
@@ -113,7 +113,7 @@ async fn budget_report_exact_holds_unknown_union_and_missing_buckets(pool: PgPoo
     assert_consistent(&pool, "reporting exposure union").await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn budget_report_boundaries_large_amounts_and_rotation_lineage(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     let ws = f.principal.workspace_id;
@@ -176,7 +176,7 @@ async fn budget_report_boundaries_large_amounts_and_rotation_lineage(pool: PgPoo
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn budget_report_rejects_corrupt_or_unrepresentable_totals(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     let at = UtcInstant::now();
@@ -315,7 +315,7 @@ async fn assert_consistent(pool: &PgPool, context: &str) {
     tx.rollback().await.unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn random_interleavings_keep_totals_equal_to_the_scan(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1_000_000).await; // 110 µUSD hold per admission (100 in + 10 out)
@@ -455,7 +455,7 @@ async fn random_interleavings_keep_totals_equal_to_the_scan(pool: PgPool) {
     assert_eq!(held, expected);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn unknown_cost_keeps_its_hold_and_blocks_like_the_scan(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1_000_000).await; // 110 µUSD hold (100 input ceiling + 10 output)
@@ -492,7 +492,7 @@ async fn unknown_cost_keeps_its_hold_and_blocks_like_the_scan(pool: PgPool) {
 
 /// Concurrent admissions/settlements under a tight budget, plus unlocked
 /// direct writers on other scopes, never deadlock and never drift.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn concurrent_writers_keep_totals_exact(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1_000_000).await;

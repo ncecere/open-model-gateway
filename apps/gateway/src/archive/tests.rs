@@ -29,7 +29,7 @@ fn refusal(e: anyhow::Error) -> Refusal {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn closed_months_archive_only_when_settled_rolled_and_past_retention(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     let upper: UtcInstant = sqlx::query_scalar(

@@ -24,7 +24,7 @@ fn actions(body: &Value) -> Vec<String> {
 /// A user's activity is the platform audit filtered by actor: the same
 /// Admin/Auditor authority and the same exclusion of every personal-workspace
 /// event, whoever the actor or owner is.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn platform_audit_filters_by_actor_and_never_reveals_personal_events(pool: PgPool) {
     let f = fixture(&pool).await;
     let admin_personal = workspace(&pool, "Admin personal", "personal", f.admin.user_id).await;
@@ -111,7 +111,7 @@ async fn platform_audit_filters_by_actor_and_never_reveals_personal_events(pool:
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn platform_audit_filters_are_strictly_validated(pool: PgPool) {
     let f = fixture(&pool).await;
     let many = vec!["test.code"; 21].join(",");

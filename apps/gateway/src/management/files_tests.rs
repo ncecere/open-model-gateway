@@ -83,7 +83,7 @@ async fn stored(files: &FileStorage, ws: Uuid, user: Uuid, name: &str) -> String
     public_id(file.id)
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn files_follow_workspace_visibility(pool: PgPool) {
     let f = fixture(&pool).await;
     enable(&pool).await;
@@ -234,7 +234,7 @@ async fn files_follow_workspace_visibility(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn dashboard_upload_uses_the_files_pipeline(pool: PgPool) {
     let f = fixture(&pool).await;
     let rt = FileStoreRuntime::memory();
@@ -344,7 +344,7 @@ async fn dashboard_upload_uses_the_files_pipeline(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn storage_limit_stacks_and_is_tighten_only(pool: PgPool) {
     let f = fixture(&pool).await;
     let gib = 1i64 << 30;
@@ -446,7 +446,7 @@ async fn storage_limit_stacks_and_is_tighten_only(pool: PgPool) {
     assert_eq!(audited, 3);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn storage_usage_is_not_charged_and_private(pool: PgPool) {
     let f = fixture(&pool).await;
     let hour: gateway_datetime_compat::UtcInstant =

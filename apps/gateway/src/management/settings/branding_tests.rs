@@ -184,7 +184,7 @@ async fn current(pool: &PgPool) -> Option<Uuid> {
         .unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn logo_is_admin_write_auditor_read(pool: PgPool) {
     let f = fixture(&pool).await;
     let rt = FileStoreRuntime::memory();
@@ -266,7 +266,7 @@ async fn logo_is_admin_write_auditor_read(pool: PgPool) {
     assert_eq!(public(&f.s, Some(&rt), None).await.status(), StatusCode::OK);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn logo_requires_the_file_store(pool: PgPool) {
     let f = fixture(&pool).await;
     let (status, v) = send(&f.s, &f.admin, None, "PUT", LOGO, "image/png", png(64, 64)).await;
@@ -300,7 +300,7 @@ async fn logo_requires_the_file_store(pool: PgPool) {
     assert_eq!(me["installation"]["logo"], Value::Null);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn logo_upload_validates_type_structure_size_and_dimensions(pool: PgPool) {
     let f = fixture(&pool).await;
     let rt = FileStoreRuntime::memory();
@@ -372,7 +372,7 @@ async fn logo_upload_validates_type_structure_size_and_dimensions(pool: PgPool) 
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn public_logo_is_served_with_safe_cacheable_headers(pool: PgPool) {
     let f = fixture(&pool).await;
     let rt = FileStoreRuntime::memory();
@@ -454,7 +454,7 @@ async fn sign_in_config(s: &Store, rt: &FileStoreRuntime) -> Value {
     serde_json::from_slice(&to_bytes(response.into_body(), 1 << 16).await.unwrap()).unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn replacing_and_removing_delete_the_previous_logo(pool: PgPool) {
     let f = fixture(&pool).await;
     let rt = FileStoreRuntime::memory();

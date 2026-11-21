@@ -72,7 +72,7 @@ async fn create_import(f: &Fixture, body: Value) -> Value {
     value
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn provider_cost_import_exactness_duplicate_supersession_and_concurrent_upload(pool: PgPool) {
     let f = fixture(&pool).await;
     let body = upload();
@@ -144,7 +144,7 @@ async fn provider_cost_import_exactness_duplicate_supersession_and_concurrent_up
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn provider_cost_import_rejects_malformed_incomplete_duplicate_and_oversized_evidence(
     pool: PgPool,
 ) {
@@ -230,7 +230,7 @@ async fn provider_cost_import_rejects_malformed_incomplete_duplicate_and_oversiz
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn provider_cost_mapping_lineage_attestation_and_authority(pool: PgPool) {
     let f = fixture(&pool).await;
     let c = connection(&pool).await;
@@ -317,7 +317,7 @@ async fn financial_state(pool: &PgPool) -> Value {
     Value::Object(state)
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn provider_cost_reconciliation_aggregate_privacy_shared_unknown_and_estimates_unchanged(
     pool: PgPool,
 ) {
@@ -404,7 +404,7 @@ async fn provider_cost_reconciliation_aggregate_privacy_shared_unknown_and_estim
     assert!(report.to_string().contains("estimate_only"));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn provider_cost_pagination_fingerprints_and_incomplete_revision_rollback(pool: PgPool) {
     let f = fixture(&pool).await;
     let mut b = upload();
@@ -448,7 +448,7 @@ async fn provider_cost_pagination_fingerprints_and_incomplete_revision_rollback(
         .bind(id(&original)).execute(&pool).await.is_err(),"cannot append a child to a committed revision");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn provider_cost_history_append_only_even_for_owner(pool: PgPool) {
     let f = fixture(&pool).await;
     let imported = create_import(&f, upload()).await;

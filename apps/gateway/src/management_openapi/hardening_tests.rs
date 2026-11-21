@@ -171,7 +171,12 @@ fn bindings(sources: &[String]) -> BTreeSet<String> {
                 .attrs
                 .iter()
                 .any(|a| path(a) == ["cfg"] || path(a) == ["ignore"]);
-            if runs && function.attrs.iter().any(|a| path(a) == ["sqlx", "test"]) {
+            if runs
+                && function
+                    .attrs
+                    .iter()
+                    .any(|a| path(a) == ["sqlx", "test"] || path(a) == ["dbtest", "test"])
+            {
                 let mut finish = Finish::default();
                 finish.visit_block(&function.block);
                 self.0.extend(finish.0);
@@ -238,7 +243,7 @@ fn management_openapi_hardening_area_groups_have_sqlx_finish_bindings() {
         assert!(names.insert(name.clone()), "duplicate group name {name}");
         assert!(
             bound.contains(&name),
-            "{name} has no finish({name}) in a #[sqlx::test] runner"
+            "{name} has no finish({name}) in a #[sqlx::test] or #[dbtest::test] runner"
         );
     }
 }
@@ -283,12 +288,20 @@ fn management_openapi_hardening_finish_inventory_ignores_claimed_helpers() {
         // A runner that never compiles or never runs by default proves nothing.
         "#[cfg(any())] #[sqlx::test] async fn runner() { observed.finish(MISSING); }",
         "#[sqlx::test] #[ignore] async fn runner() { observed.finish(MISSING); }",
+        "#[dbtest::test] #[ignore] async fn runner() { observed.finish(MISSING); }",
+        "#[dbtest::test] async fn runner() { fn unused() { observed.finish(MISSING); } }",
     ] {
         assert!(!bindings(&[source.into()]).contains("MISSING"));
     }
     assert!(
         bindings(&[
             "#[sqlx::test] async fn runner() { observed.finish(responses::GROUP); }".into()
+        ])
+        .contains("GROUP")
+    );
+    assert!(
+        bindings(&[
+            "#[dbtest::test] async fn runner() { observed.finish(responses::GROUP); }".into()
         ])
         .contains("GROUP")
     );
@@ -332,4 +345,168 @@ fn management_openapi_hardening_notification_money_details_are_individually_sign
     }
     // An unknown producer's money field is still an integer string (signed).
     assert!(accepts("other_microusd", "-1") && !accepts("other_microusd", "x"));
+}
+
+/// A divided fixture (`PositiveFixtures::sharded(index, COUNT)`) is complete only
+/// when every one of its `COUNT` shards runs: each refused vector is sent by
+/// exactly one of them. So for every `*_SHARDS` count the database-test runners
+/// (`#[dbtest::test]` or `#[sqlx::test]`)
+/// must call the fixture's helper with each index `0..COUNT` exactly once.
+/// A runner counts only when it compiles and runs by default (no `#[cfg]`, no
+/// `#[ignore]`) and calls `finish`, the only place a shard's vector failures
+/// are reported; a helper that calls `sharded` must hand it its own shard parameter.
+#[test]
+fn management_openapi_hardening_every_shard_of_a_divided_fixture_has_a_runner() {
+    use syn::visit::{self, Visit};
+    #[derive(Default)]
+    struct Body {
+        counts: BTreeSet<String>,
+        calls: Vec<(String, usize)>,
+        /// `(index argument, count constant)` of each `sharded(index, COUNT)` call.
+        sharded: Vec<(String, String)>,
+        finishes: bool,
+    }
+    impl<'ast> Visit<'ast> for Body {
+        fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+            if let Some(last) = path.path.segments.last()
+                && last.ident.to_string().ends_with("_SHARDS")
+            {
+                self.counts.insert(last.ident.to_string());
+            }
+            visit::visit_expr_path(self, path);
+        }
+        fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+            if let syn::Expr::Path(callee) = &*call.func
+                && let Some(callee) = callee.path.segments.last()
+                && call.args.len() == 2
+                && let syn::Expr::Lit(literal) = &call.args[1]
+                && let syn::Lit::Int(index) = &literal.lit
+                && let Ok(index) = index.base10_parse::<usize>()
+            {
+                self.calls.push((callee.ident.to_string(), index));
+            }
+            let name = |expr: &syn::Expr| match expr {
+                syn::Expr::Path(path) => path.path.segments.last().map(|s| s.ident.to_string()),
+                _ => None,
+            };
+            if name(&call.func).as_deref() == Some("sharded")
+                && call.args.len() == 2
+                && let (Some(index), Some(count)) = (name(&call.args[0]), name(&call.args[1]))
+            {
+                self.sharded.push((index, count));
+            }
+            visit::visit_expr_call(self, call);
+        }
+        fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+            self.finishes |= call.method == "finish";
+            visit::visit_expr_method_call(self, call);
+        }
+    }
+    fn sources(dir: &std::path::Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                sources(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(std::fs::read_to_string(path).unwrap());
+            }
+        }
+    }
+    let mut all = Vec::new();
+    sources(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut all,
+    );
+    let mut divided = 0;
+    for source in all.iter().filter(|s| s.contains("_SHARDS")) {
+        let file = syn::parse_file(source).unwrap();
+        let mut counts = std::collections::BTreeMap::new();
+        for item in &file.items {
+            if let syn::Item::Const(constant) = item
+                && constant.ident.to_string().ends_with("_SHARDS")
+                && let syn::Expr::Lit(literal) = &*constant.expr
+                && let syn::Lit::Int(count) = &literal.lit
+            {
+                counts.insert(
+                    constant.ident.to_string(),
+                    count.base10_parse::<usize>().unwrap(),
+                );
+            }
+        }
+        for (name, count) in counts {
+            let mut helpers = BTreeSet::new();
+            let mut runners = Vec::new();
+            let mut divides = false;
+            for item in &file.items {
+                let syn::Item::Fn(function) = item else {
+                    continue;
+                };
+                let mut body = Body::default();
+                body.visit_block(&function.block);
+                let attribute = |a: &syn::Attribute| -> Vec<String> {
+                    a.path()
+                        .segments
+                        .iter()
+                        .map(|s| s.ident.to_string())
+                        .collect()
+                };
+                let runner = function.attrs.iter().any(|a| {
+                    let path = attribute(a);
+                    path == ["sqlx", "test"] || path == ["dbtest", "test"]
+                });
+                let runs = !function.attrs.iter().any(|a| {
+                    let path = attribute(a);
+                    path == ["cfg"] || path == ["ignore"]
+                });
+                if runner {
+                    if runs && body.finishes {
+                        runners.extend(body.calls);
+                    }
+                } else if body.counts.contains(&name) {
+                    // The helper's shard parameter is its second (after the pool).
+                    let shard = function
+                        .sig
+                        .inputs
+                        .iter()
+                        .nth(1)
+                        .and_then(|input| match input {
+                            syn::FnArg::Typed(typed) => match &*typed.pat {
+                                syn::Pat::Ident(pat) => Some(pat.ident.to_string()),
+                                _ => None,
+                            },
+                            syn::FnArg::Receiver(_) => None,
+                        });
+                    for (index, count) in &body.sharded {
+                        if *count == name {
+                            assert_eq!(
+                                Some(index),
+                                shard.as_ref(),
+                                "{}: sharded(_, {name}) must take the helper's shard parameter",
+                                function.sig.ident
+                            );
+                            divides = true;
+                        }
+                    }
+                    helpers.insert(function.sig.ident.to_string());
+                }
+            }
+            assert!(
+                divides,
+                "{name} is passed to no sharded(shard, {name}) call"
+            );
+            let mut indices: Vec<usize> = runners
+                .into_iter()
+                .filter(|(callee, _)| helpers.contains(callee))
+                .map(|(_, index)| index)
+                .collect();
+            indices.sort_unstable();
+            assert_eq!(
+                indices,
+                (0..count).collect::<Vec<_>>(),
+                "{name}: each shard index needs exactly one database-test runner"
+            );
+            divided += 1;
+        }
+    }
+    assert_eq!(divided, 6, "divided fixtures found");
 }

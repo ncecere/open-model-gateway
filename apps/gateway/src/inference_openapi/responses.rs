@@ -94,10 +94,26 @@ pub(super) fn validator(
     schema: &Value,
 ) -> Result<std::sync::Arc<jsonschema::Validator>> {
     fn compile(document: &Value, schema: &Value) -> Result<std::sync::Arc<jsonschema::Validator>> {
-        let mut root = document.clone();
-        root["$defs"] = json!({"observed":schema});
-        root["$ref"] = json!("#/$defs/observed");
-        Ok(std::sync::Arc::new(validation::compile_schema(&root)?))
+        // The committed artifact is registered once; any other document is
+        // registered for this compilation alone.
+        static REGISTRY: std::sync::OnceLock<jsonschema::Registry<'static>> =
+            std::sync::OnceLock::new();
+        if std::ptr::eq(document, artifact()) {
+            let registry = match REGISTRY.get() {
+                Some(registry) => registry,
+                None => {
+                    let built = validation::document_registry(artifact())?;
+                    REGISTRY.get_or_init(|| built)
+                }
+            };
+            return Ok(std::sync::Arc::new(validation::compile_in_document(
+                registry, schema,
+            )?));
+        }
+        let registry = validation::document_registry(document)?;
+        Ok(std::sync::Arc::new(validation::compile_in_document(
+            &registry, schema,
+        )?))
     }
     if !std::ptr::eq(document, artifact()) {
         return compile(document, schema);
@@ -424,6 +440,12 @@ pub(crate) fn probe(captured: Captured) -> Probe {
 pub(crate) struct Fixtures(PositiveFixtures);
 #[cfg(feature = "integration-tests")]
 impl Fixtures {
+    /// Shard `index` of `count` parallel runs of one fixture journey (see
+    /// `PositiveFixtures::sharded`).
+    #[track_caller]
+    pub(crate) fn sharded(index: usize, count: usize) -> Self {
+        Self(PositiveFixtures::sharded(index, count))
+    }
     pub(crate) fn observe(&mut self, captured: &Captured) {
         let template = captured
             .template

@@ -247,7 +247,7 @@ async fn call(
         serde_json::from_slice(&captured.bytes).unwrap_or(Value::Null),
     )
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn me_exposes_inference_base_url_to_regular_users(pool: PgPool) {
     let f = fixture(&pool).await;
     let (status, unset) = call(&f.s, &f.member, "GET", "/api/v1/me", Value::Null).await;
@@ -396,7 +396,7 @@ async fn key(f: &Fixture, u: &BrowserPrincipal, ws: Uuid, models: Value) -> (Sta
     .await
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn personal_details_are_owner_only_even_platform_admin_and_auditor(pool: PgPool) {
     let f = fixture(&pool).await;
     for user in [&f.admin, &f.auditor, &f.outsider] {
@@ -442,7 +442,7 @@ async fn personal_details_are_owner_only_even_platform_admin_and_auditor(pool: P
         StatusCode::NOT_FOUND
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn legacy_organization_paths_are_not_registered(pool: PgPool) {
     let f = fixture(&pool).await;
     let org = Uuid::new_v4();
@@ -462,7 +462,7 @@ async fn legacy_organization_paths_are_not_registered(pool: PgPool) {
         }
     }
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn shared_request_details_usage_and_audit_are_actor_filtered_before_pagination(pool: PgPool) {
     let f = fixture(&pool).await;
     let m = model(&pool, "request-model").await;
@@ -549,7 +549,7 @@ async fn shared_request_details_usage_and_audit_are_actor_filtered_before_pagina
                 && a["resource_id"] != private_id.to_string())
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn sanitized_audit_failure_rolls_back_resource_creation(pool: PgPool) {
     let f = fixture(&pool).await;
     sqlx::query("CREATE FUNCTION reject_management_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'test audit outage'; END $$").execute(&pool).await.unwrap();

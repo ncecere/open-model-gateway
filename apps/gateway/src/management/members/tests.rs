@@ -1,5 +1,5 @@
 use super::*;
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn manual_membership_changes_preserve_group_sources_last_owner_and_revoke_departed_human_keys(
     pool: PgPool,
 ) {
@@ -144,7 +144,7 @@ async fn manual_membership_changes_preserve_group_sources_last_owner_and_revoke_
         StatusCode::OK
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn invitations_match_verified_principal_not_profile_and_preserve_manual_admin(pool: PgPool) {
     let f = fixture(&pool).await;
     // Direct-controller fixtures simulate the trusted verified principal; the identity
@@ -200,7 +200,7 @@ async fn invitations_match_verified_principal_not_profile_and_preserve_manual_ad
     assert_eq!(role, "admin");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn invitations_bind_verified_session_email_are_one_time_and_recheck_inviter_authority(
     pool: PgPool,
 ) {
@@ -337,7 +337,7 @@ async fn invitations_bind_verified_session_email_are_one_time_and_recheck_invite
         StatusCode::FORBIDDEN
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn platform_membership_routes_are_platform_scoped_and_shared_only(pool: PgPool) {
     let f = fixture(&pool).await;
     let path = format!("/api/v1/platform/workspaces/{}/members", f.project);
@@ -416,7 +416,7 @@ async fn platform_membership_routes_are_platform_scoped_and_shared_only(pool: Pg
         );
     }
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn member_candidates_are_bounded_entitled_non_members_for_workspace_admins(pool: PgPool) {
     let f = fixture(&pool).await;
     for i in 0..25 {

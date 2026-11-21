@@ -11,7 +11,7 @@ fn mapping(issuer: &str) -> Value {
     json!({"issuer":issuer,"group_value":"control-test","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":false})
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn mapping_issuer_refuses_control_characters(pool: PgPool) {
     let f = fixture(&pool).await;
     let (status, created) = call(
@@ -102,7 +102,7 @@ async fn mapping_issuer_refuses_control_characters(pool: PgPool) {
 /// A row stored before #427 with a control character in its issuer (it could
 /// never match a real OIDC `iss`): a PATCH of another field now answers 400,
 /// because the merged mapping is validated, and DELETE still removes it.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn legacy_control_character_issuer_can_be_deleted_not_patched(pool: PgPool) {
     let f = fixture(&pool).await;
     let legacy = Uuid::new_v4();

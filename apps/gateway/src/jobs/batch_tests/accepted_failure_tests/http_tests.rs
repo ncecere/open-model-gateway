@@ -40,7 +40,7 @@ fn client() -> reqwest::Client {
         .unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn running_gateway_openrouter_nonstream_200_rejection_keeps_free_zero(pool: PgPool) {
     let f = fixture(pool).await;
     price(&f, true).await;
@@ -94,7 +94,7 @@ async fn running_gateway_openrouter_nonstream_200_rejection_keeps_free_zero(pool
     assert_eq!(tokens, (Some(0), Some(0)));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn running_gateway_accepted_video_failure_and_refusals(pool: PgPool) {
     use crate::jobs::db_tests::{self, Fake, upstream_video, video_setup};
     let f = fixture(pool).await;
@@ -155,7 +155,7 @@ async fn running_gateway_accepted_video_failure_and_refusals(pool: PgPool) {
     unknown(&f, execution, Usage::default(), Some(0)).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn running_gateway_native_batch_failure_and_refusals(pool: PgPool) {
     let mut w = world(pool, true, false, 1).await;
     price(&w.f, true).await;

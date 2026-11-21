@@ -137,18 +137,12 @@ fn resolved<'a>(document: &'a Value, value: &'a Value) -> Result<&'a Value> {
     Ok(value)
 }
 
-/// The validator cache key: the schema's serialized content. A node of the
-/// committed artifact (immutable and `'static`, so its address is stable and
-/// never reused) has its key serialized once and remembered by address; any
-/// other value is serialized on every call, so a temporary can never match an
-/// entry by address. Serializing per call cost ~88 % of the slice 3 fixture's
-/// validation time in the unoptimized test profile (#444).
-pub(super) fn cache_key(schema: &Value) -> Result<std::sync::Arc<str>> {
+/// The address of every node of the committed artifact: immutable and
+/// `'static`, so an address names one node for the life of the process and is
+/// never taken by another value.
+fn artifact_nodes() -> &'static std::collections::HashSet<usize> {
     static NODES: std::sync::OnceLock<std::collections::HashSet<usize>> =
         std::sync::OnceLock::new();
-    static KEYS: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<str>>>,
-    > = std::sync::OnceLock::new();
     fn walk(value: &Value, out: &mut std::collections::HashSet<usize>) {
         out.insert(std::ptr::from_ref(value) as usize);
         match value {
@@ -157,17 +151,76 @@ pub(super) fn cache_key(schema: &Value) -> Result<std::sync::Arc<str>> {
             _ => {}
         }
     }
-    let serialize = || -> Result<std::sync::Arc<str>> {
-        KEY_SERIALIZATIONS.with(|n| n.set(n.get() + 1));
-        Ok(serde_json::to_string(schema)?.into())
-    };
-    let address = std::ptr::from_ref(schema) as usize;
-    let nodes = NODES.get_or_init(|| {
+    NODES.get_or_init(|| {
         let mut nodes = std::collections::HashSet::new();
         walk(artifact(), &mut nodes);
         nodes
-    });
-    if !nodes.contains(&address) {
+    })
+}
+/// Is `value` a node of the committed artifact (not a copy of one)?
+pub(super) fn is_artifact_node(value: &Value) -> bool {
+    artifact_nodes().contains(&(std::ptr::from_ref(value) as usize))
+}
+
+/// A text that is equal for two JSON values exactly when the values are equal:
+/// every encoding is self-delimiting (a string carries its byte length instead
+/// of escapes, a number its `Display` text up to `;`), so concatenations decode
+/// uniquely. It is a key, not JSON: the vector planner and the validator cache
+/// build one per candidate body or schema fragment, where `serde_json::to_string`
+/// was the largest single cost of planning in the unoptimized test profile.
+pub(super) fn value_key(value: &Value) -> String {
+    use std::fmt::Write;
+    fn text(out: &mut String, text: &str) {
+        let _ = write!(out, "\"{}:", text.len());
+        out.push_str(text);
+    }
+    fn write_value(out: &mut String, value: &Value) {
+        match value {
+            Value::Null => out.push('n'),
+            Value::Bool(true) => out.push('t'),
+            Value::Bool(false) => out.push('f'),
+            Value::Number(number) => {
+                let _ = write!(out, "#{number};");
+            }
+            Value::String(string) => text(out, string),
+            Value::Array(items) => {
+                out.push('[');
+                for item in items {
+                    write_value(out, item);
+                }
+                out.push(']');
+            }
+            Value::Object(map) => {
+                out.push('{');
+                for (key, item) in map {
+                    text(out, key);
+                    write_value(out, item);
+                }
+                out.push('}');
+            }
+        }
+    }
+    let mut out = String::new();
+    write_value(&mut out, value);
+    out
+}
+
+/// The validator cache key: the schema's serialized content. A node of the
+/// committed artifact (immutable and `'static`, so its address is stable and
+/// never reused) has its key serialized once and remembered by address; any
+/// other value is serialized on every call, so a temporary can never match an
+/// entry by address. Serializing per call cost ~88 % of the slice 3 fixture's
+/// validation time in the unoptimized test profile (#444).
+pub(super) fn cache_key(schema: &Value) -> Result<std::sync::Arc<str>> {
+    static KEYS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<str>>>,
+    > = std::sync::OnceLock::new();
+    let serialize = || -> Result<std::sync::Arc<str>> {
+        KEY_SERIALIZATIONS.with(|n| n.set(n.get() + 1));
+        Ok(value_key(schema).into())
+    };
+    let address = std::ptr::from_ref(schema) as usize;
+    if !artifact_nodes().contains(&address) {
         return serialize();
     }
     let keys = KEYS.get_or_init(Default::default);
@@ -188,6 +241,78 @@ pub(crate) fn key_serializations() -> usize {
     KEY_SERIALIZATIONS.with(std::cell::Cell::get)
 }
 
+/// Validators and completed-operation checks for ONE caller-owned copy of the
+/// document, kept for the duration of [`with_document_cache`]. The copy is
+/// borrowed for that whole call, so it cannot change and its address cannot be
+/// taken by another document; the entries never reach the artifact's cache and
+/// are dropped with the scope.
+struct Scope {
+    document: usize,
+    registry: jsonschema::Registry<'static>,
+    validators: std::collections::HashMap<String, std::sync::Arc<jsonschema::Validator>>,
+    checked: BTreeSet<String>,
+}
+thread_local! {
+    static SCOPE: std::cell::RefCell<Option<Scope>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` with the validators and completed-operation checks of `document`
+/// cached, for a mutation control that validates MANY exchanges against its own
+/// copy of the artifact. The copy is never the artifact's pointer, so nothing it
+/// compiles can be reused by, or reuse, the artifact's trusted entries; a
+/// different copy (a mutated one) outside this scope still compiles its own.
+pub(crate) fn with_document_cache<R>(document: &Value, f: impl FnOnce() -> R) -> R {
+    assert!(
+        !std::ptr::eq(document, artifact()),
+        "the artifact has its own cache"
+    );
+    struct Clear;
+    impl Drop for Clear {
+        fn drop(&mut self) {
+            SCOPE.with(|scope| *scope.borrow_mut() = None);
+        }
+    }
+    let registry = super::validation::owned_document_registry(document).unwrap();
+    SCOPE.with(|scope| {
+        let mut scope = scope.borrow_mut();
+        assert!(scope.is_none(), "document caches do not nest");
+        *scope = Some(Scope {
+            document: std::ptr::from_ref(document) as usize,
+            registry,
+            validators: Default::default(),
+            checked: BTreeSet::new(),
+        });
+    });
+    let _clear = Clear;
+    f()
+}
+
+/// The scoped validator of `document`, when `document` is the scoped copy.
+fn scoped_validator(
+    document: &Value,
+    schema: &Value,
+) -> Result<Option<std::sync::Arc<jsonschema::Validator>>> {
+    SCOPE.with(|scope| {
+        let mut scope = scope.borrow_mut();
+        let Some(scope) = scope
+            .as_mut()
+            .filter(|scope| scope.document == std::ptr::from_ref(document) as usize)
+        else {
+            return Ok(None);
+        };
+        let key = serde_json::to_string(schema)?;
+        if let Some(found) = scope.validators.get(&key) {
+            return Ok(Some(found.clone()));
+        }
+        let compiled = std::sync::Arc::new(super::validation::compile_in_document(
+            &scope.registry,
+            schema,
+        )?);
+        scope.validators.insert(key, compiled.clone());
+        Ok(Some(compiled))
+    })
+}
+
 pub(crate) fn validator(
     document: &Value,
     schema: &Value,
@@ -197,19 +322,19 @@ pub(crate) fn validator(
     if std::ptr::eq(document, crate::inference_openapi::committed_artifact()) {
         return crate::inference_openapi::cached_validator(document, schema);
     }
-    fn compile(document: &Value, schema: &Value) -> Result<std::sync::Arc<jsonschema::Validator>> {
-        let mut root = document.clone();
-        root["$defs"] = json!({"observed":schema});
-        root["$ref"] = json!("#/$defs/observed");
-        Ok(std::sync::Arc::new(super::validation::compile_schema(
-            &root,
-        )?))
-    }
     // Pointer identity, not value equality: mutated-document controls must
     // always compile their own document and can never reuse a trusted result.
     if !std::ptr::eq(document, artifact()) {
-        return compile(document, schema);
+        if let Some(scoped) = scoped_validator(document, schema)? {
+            return Ok(scoped);
+        }
+        let registry = super::validation::document_registry(document)?;
+        return Ok(std::sync::Arc::new(super::validation::compile_in_document(
+            &registry, schema,
+        )?));
     }
+    static REGISTRY: std::sync::OnceLock<jsonschema::Registry<'static>> =
+        std::sync::OnceLock::new();
     static CACHE: std::sync::OnceLock<
         std::sync::Mutex<
             std::collections::BTreeMap<std::sync::Arc<str>, std::sync::Arc<jsonschema::Validator>>,
@@ -220,15 +345,23 @@ pub(crate) fn validator(
     if let Some(validator) = cache.get(&key) {
         return Ok(validator.clone());
     }
-    // Bounded: every entry carries its own copy of the whole artifact, and the
-    // vector walks validate many distinct combined fragments (union arms,
-    // conditionals, positional items), so an unbounded cache grew to the size of
-    // the CI runner's memory. A full cache is flushed; hot fragments recompile.
-    const CAPACITY: usize = 128;
+    // Bounded: the vector walks validate many distinct combined fragments
+    // (union arms, conditionals, positional items), so an unbounded cache grows
+    // with the run. An entry is only the compiled fragment (the document is
+    // registered once, not copied per entry). A full cache is flushed; hot
+    // fragments recompile.
+    const CAPACITY: usize = 1024;
     if cache.len() >= CAPACITY {
         cache.clear();
     }
-    let validator = compile(document, schema)?;
+    let registry = match REGISTRY.get() {
+        Some(registry) => registry,
+        None => {
+            let built = super::validation::document_registry(artifact())?;
+            REGISTRY.get_or_init(|| built)
+        }
+    };
+    let validator = std::sync::Arc::new(super::validation::compile_in_document(registry, schema)?);
     cache.insert(key, validator.clone());
     Ok(validator)
 }
@@ -497,8 +630,34 @@ fn require_complete(document: &Value, operation: &Value) -> Result<()> {
         checked.insert(id.to_owned());
         return Ok(());
     }
+    // A scoped copy reuses its own verification of an operation (the copy cannot
+    // change while the scope lives).
+    let scoped = SCOPE.with(|scope| {
+        scope
+            .borrow()
+            .as_ref()
+            .filter(|scope| scope.document == std::ptr::from_ref(document) as usize)
+            .and_then(|scope| {
+                operation["operationId"]
+                    .as_str()
+                    .map(|id| scope.checked.contains(id))
+            })
+    });
+    if scoped == Some(true) {
+        return Ok(());
+    }
     walk(document, operation, &mut BTreeSet::new())?;
-    super::quality::operation(document, operation)
+    super::quality::operation(document, operation)?;
+    if scoped == Some(false) {
+        SCOPE.with(|scope| {
+            if let Some(scope) = scope.borrow_mut().as_mut()
+                && let Some(id) = operation["operationId"].as_str()
+            {
+                scope.checked.insert(id.to_owned());
+            }
+        });
+    }
+    Ok(())
 }
 
 fn require_positives(expected: &BTreeSet<String>, observed: &BTreeSet<String>) -> Result<()> {
@@ -536,22 +695,41 @@ pub(crate) fn area(template: &str) -> &str {
 /// example /platform/models/compare versus /platform/models/{id}); equally
 /// specific ambiguous declarations are errors, not first-match wins.
 fn template(method: &str, path: &str) -> Result<Option<String>> {
+    /// One documented template with its path segments, split once.
+    struct Indexed {
+        template: &'static str,
+        item: &'static Value,
+        segments: Vec<&'static str>,
+    }
+    static INDEX: std::sync::OnceLock<Vec<Indexed>> = std::sync::OnceLock::new();
+    let index = INDEX.get_or_init(|| {
+        artifact()["paths"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(template, item)| Indexed {
+                template: template.as_str(),
+                item,
+                segments: template.split('/').collect(),
+            })
+            .collect()
+    });
     let path = path.split('?').next().unwrap();
-    let mut candidates = artifact()["paths"]
-        .as_object()
-        .unwrap()
+    let concrete = path.split('/').collect::<Vec<_>>();
+    let verb = method.to_ascii_lowercase();
+    let mut candidates = index
         .iter()
-        .filter(|(template, item)| {
-            let verb = method.to_ascii_lowercase();
-            let a = template.split('/').collect::<Vec<_>>();
-            let b = path.split('/').collect::<Vec<_>>();
-            (item.get(verb).is_some() || (method == "HEAD" && item.get("get").is_some()))
-                && a.len() == b.len()
-                && a.iter()
-                    .zip(b)
-                    .all(|(a, b)| (a.starts_with('{') && a.ends_with('}')) || *a == b)
+        .filter(|indexed| {
+            (indexed.item.get(&verb).is_some()
+                || (method == "HEAD" && indexed.item.get("get").is_some()))
+                && indexed.segments.len() == concrete.len()
+                && indexed
+                    .segments
+                    .iter()
+                    .zip(&concrete)
+                    .all(|(a, b)| (a.starts_with('{') && a.ends_with('}')) || a == b)
         })
-        .map(|(p, _)| p.clone())
+        .map(|indexed| indexed.template.to_owned())
         .collect::<Vec<_>>();
     let specificity = |path: &str| {
         path.split('/')
@@ -773,8 +951,27 @@ pub(crate) struct PositiveFixtures {
     /// Sanitised contract failures of vector runs (method, template, kind,
     /// pointers; never a captured value), reported together by `finish`.
     failures: Vec<String>,
+    /// Present when this run is one shard of a divided fixture journey (see
+    /// [`PositiveFixtures::sharded`]).
+    _shard: Option<super::http_vectors::ShardScope>,
 }
 impl PositiveFixtures {
+    /// One of `count` parallel runs of the same fixture journey. Every shard
+    /// replays the whole journey (every positive request, pinned probe and valid
+    /// request of a vector run) and plans every vector run, but classifies and
+    /// sends only its share of the planned vectors: the n-th planned vector of the
+    /// journey belongs to shard `n % count`, so each is judged against the
+    /// handler by exactly one shard. The positive observations come from the
+    /// journey and the valid requests, which every shard makes, so each shard's
+    /// `finish` judges the complete group; a coverage item that only one planned
+    /// vector provides fails the gate of the shards that do not send it.
+    #[track_caller]
+    pub(crate) fn sharded(index: usize, count: usize) -> Self {
+        Self {
+            _shard: Some(super::http_vectors::divide(index, count)),
+            ..Self::default()
+        }
+    }
     /// Record that every HTTP boundary vector of `kind` (`query` or `body`)
     /// for the exact operation ran and matched the handler.
     pub(crate) fn record_vectors(&mut self, method: &str, template: &str, kind: &'static str) {

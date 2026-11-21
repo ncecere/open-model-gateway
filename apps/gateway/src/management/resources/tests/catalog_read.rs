@@ -57,7 +57,7 @@ async fn allowed(pool: &PgPool, ws: Uuid, m: Uuid) -> bool {
         .await
         .unwrap()
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn live_multi_catalog_defaults_replace_override_and_no_selection_resurrection(pool: PgPool) {
     let f = fixture(&pool).await;
     let m1 = model(&pool, "local").await;
@@ -160,7 +160,7 @@ async fn live_multi_catalog_defaults_replace_override_and_no_selection_resurrect
         1
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn direct_source_survives_catalog_loss_and_catalog_source_survives_direct_revocation(
     pool: PgPool,
 ) {
@@ -263,7 +263,7 @@ async fn direct_source_survives_catalog_loss_and_catalog_source_survives_direct_
         StatusCode::FORBIDDEN
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn self_service_directory_flags_literal_queries_and_personal_defaults(pool: PgPool) {
     let f = fixture(&pool).await;
     let m1 = model(&pool, "model_a").await;

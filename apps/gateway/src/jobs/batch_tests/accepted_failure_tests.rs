@@ -84,7 +84,7 @@ async fn unknown(f: &Fixture, id: Uuid, observed: Usage, held: Option<i64>) {
     consistent(f).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn accepted_failed_video_preserves_unknown_usage(pool: PgPool) {
     use crate::jobs::db_tests::{self, Fake, upstream_video, video_request, video_setup};
     let f = fixture(pool).await;
@@ -123,7 +123,7 @@ async fn accepted_failed_video_preserves_unknown_usage(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn accepted_failed_native_batch_preserves_unknown_usage(pool: PgPool) {
     let w = world(pool, true, false, 1).await;
     w.openai.script.lock().unwrap().unique_upstream_ids = true;
@@ -185,7 +185,7 @@ async fn accepted_failed_native_batch_preserves_unknown_usage(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn accepted_failed_legacy_batch_preserves_unknown_usage(pool: PgPool) {
     let w = world(pool, true, false, 1).await;
     sqlx::query("UPDATE models SET supported_protocols=ARRAY['batches'] WHERE id=$1")
@@ -287,7 +287,7 @@ async fn accepted_failed_legacy_batch_preserves_unknown_usage(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn native_submission_rejection_preserves_free_zero(pool: PgPool) {
     let w = world(pool, true, false, 1).await;
     price(&w.f, true).await;
@@ -309,7 +309,7 @@ async fn native_submission_rejection_preserves_free_zero(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn native_acceptance_survives_a_concurrent_encoder_failure(pool: PgPool) {
     let w = world(pool, true, false, 1).await;
     price(&w.f, true).await;

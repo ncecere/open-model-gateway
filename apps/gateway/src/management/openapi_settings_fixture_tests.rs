@@ -224,9 +224,24 @@ async fn reject_json_configuration(
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn management_openapi_slice5_fixtures(pool: PgPool) {
-    let mut observed = PositiveFixtures::default();
+    slice5_fixtures(pool, 0)
+        .await
+        .finish(openapi::responses::SLICE5_AREAS);
+}
+#[dbtest::test]
+async fn management_openapi_slice5_fixtures_shard_2(pool: PgPool) {
+    slice5_fixtures(pool, 1)
+        .await
+        .finish(openapi::responses::SLICE5_AREAS);
+}
+/// The slice 5 journey as shard `shard` of [`SLICE5_SHARDS`] parallel runs (see
+/// `PositiveFixtures::sharded`): the observations are returned for the coverage
+/// gate, which the calling test applies.
+const SLICE5_SHARDS: usize = 2;
+async fn slice5_fixtures(pool: PgPool, shard: usize) -> PositiveFixtures {
+    let mut observed = PositiveFixtures::sharded(shard, SLICE5_SHARDS);
     let mut f = fixture(&pool).await;
     f.s = f.s.with_alert_webhooks(
         crate::config::AlertWebhookPolicy::parse(
@@ -1113,5 +1128,5 @@ async fn management_openapi_slice5_fixtures(pool: PgPool) {
     vectors::settings(&g, &pool, &mut observed, port).await;
     vectors::pinned(&g, &pool, port).await;
     vectors::pinned_webhooks(&g, &pool).await;
-    observed.finish(openapi::responses::SLICE5_AREAS);
+    observed
 }

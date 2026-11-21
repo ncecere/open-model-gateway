@@ -48,7 +48,7 @@ async fn generation_project(s: &Seed) -> (Uuid, Uuid) {
 /// normally serializes jobs, but must not hide a bucket-order regression.
 /// The trigger makes this RED deterministically before the union prelock,
 /// regardless of which concurrent task the scheduler happens to run first.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_generation_prelocks_before_retirement_and_opposite_rule_order(pool: PgPool) {
     let s = seed(pool).await;
     let now = expiry_now(&s).await;
@@ -163,7 +163,7 @@ async fn aged_hold_generation_prelocks_before_retirement_and_opposite_rule_order
 
 type AgedGenerationRow = (Option<Uuid>, Uuid, String, bool);
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_generation_quota_consumption_suppression_and_personal_nil_bucket(pool: PgPool) {
     let s = seed(pool).await;
     let now = expiry_now(&s).await;
@@ -246,7 +246,7 @@ async fn aged_hold_generation_quota_consumption_suppression_and_personal_nil_buc
         "retirement remains silent, even at email capacity");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_exact_boundaries_escalation_no_step_down_and_cooldown(pool: PgPool) {
     let s = seed(pool).await;
     let now = expiry_now(&s).await;
@@ -313,7 +313,7 @@ async fn aged_hold_exact_boundaries_escalation_no_step_down_and_cooldown(pool: P
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_tick_and_rolling_caps_defer_without_losing_candidates(pool: PgPool) {
     let s = seed(pool).await;
     let now = expiry_now(&s).await;
@@ -348,7 +348,7 @@ async fn aged_hold_tick_and_rolling_caps_defer_without_losing_candidates(pool: P
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_real_evaluator_fires_deduplicates_and_clears(pool: PgPool) {
     let s = seed(pool).await;
     attempt(&s, s.team, s.key, "failed", None, "unknown", None, 1500).await;
@@ -391,7 +391,7 @@ async fn aged_hold_real_evaluator_fires_deduplicates_and_clears(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_job_is_fenced_and_serialized(pool: PgPool) {
     let s = seed(pool).await;
     attempt(&s, s.team, s.key, "failed", None, "unknown", None, 1500).await;
@@ -426,7 +426,7 @@ async fn aged_hold_job_is_fenced_and_serialized(pool: PgPool) {
     ));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_unknown_clock_not_admission_and_excluded_states(pool: PgPool) {
     let s = seed(pool).await;
     for state in ["unknown", "pending", "settled"] {
@@ -443,7 +443,7 @@ async fn aged_hold_unknown_clock_not_admission_and_excluded_states(pool: PgPool)
     assert_eq!(evaluate(&s).await.fired, 1);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_personal_incident_has_no_workspace_identity(pool: PgPool) {
     let s = seed(pool).await;
     attempt(

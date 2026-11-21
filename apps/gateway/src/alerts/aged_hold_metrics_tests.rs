@@ -9,7 +9,7 @@ async fn measured(s: &Seed, now: UtcInstant) -> super::super::super::aged_hold::
     counts
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_metrics_escalation_survives_cooldown_across_ticks_for_shared_and_personal(
     pool: PgPool,
 ) {
@@ -52,7 +52,7 @@ async fn aged_hold_metrics_escalation_survives_cooldown_across_ticks_for_shared_
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_metrics_escalation_survives_per_tick_cap_after_warning_retirement(pool: PgPool) {
     let s = seed(pool).await;
     let now = expiry_now(&s).await;
@@ -80,7 +80,7 @@ async fn aged_hold_metrics_escalation_survives_per_tick_cap_after_warning_retire
     assert_eq!((counts.fired, counts.escalated, counts.deferred), (0, 1, 0));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_metrics_escalation_survives_installation_daily_cap(pool: PgPool) {
     let s = seed(pool).await;
     let now = expiry_now(&s).await;
@@ -103,7 +103,7 @@ async fn aged_hold_metrics_escalation_survives_installation_daily_cap(pool: PgPo
     assert_eq!((counts.fired, counts.escalated, counts.deferred), (0, 1, 0));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_metrics_distinguish_initial_critical_escalation_clear_and_suppression(
     pool: PgPool,
 ) {
@@ -147,7 +147,7 @@ async fn aged_hold_metrics_distinguish_initial_critical_escalation_clear_and_sup
     assert_eq!((counts.fired, counts.escalated, counts.cleared), (0, 0, 2));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_metrics_deferred_is_a_bounded_backlog_signal_including_exhausted_day(
     pool: PgPool,
 ) {

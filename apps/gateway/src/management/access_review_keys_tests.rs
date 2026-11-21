@@ -116,7 +116,7 @@ async fn revoked(pool: &PgPool, key: Uuid) -> bool {
         .unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn live_keys_of_shared_workspaces_are_snapshotted_by_lineage(pool: PgPool) {
     let f = fixture(&pool).await;
     let (human, service) = team_keys(&f).await;
@@ -282,7 +282,7 @@ async fn guard_code(
         .and_then(|e| e.as_database_error().and_then(|d| d.code()).map(|c| c.into_owned()))
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn the_database_snapshots_only_live_shared_keys(pool: PgPool) {
     let f = fixture(&pool).await;
     let admin = f.admin.user_id;
@@ -410,7 +410,7 @@ async fn the_database_snapshots_only_live_shared_keys(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn platform_views_never_name_keys_or_holders(pool: PgPool) {
     let f = fixture(&pool).await;
     let (human, service) = team_keys(&f).await;
@@ -641,7 +641,7 @@ async fn platform_views_never_name_keys_or_holders(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn owners_and_admins_review_keys_but_never_their_own(pool: PgPool) {
     let f = fixture(&pool).await;
     let (human, service) = team_keys(&f).await;
@@ -760,7 +760,7 @@ async fn owners_and_admins_review_keys_but_never_their_own(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn remove_revokes_the_whole_lineage_and_it_never_returns(pool: PgPool) {
     let f = fixture(&pool).await;
     let (human, service) = team_keys(&f).await;
@@ -867,7 +867,7 @@ async fn remove_revokes_the_whole_lineage_and_it_never_returns(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_key_remove_decision_needs_the_lineage_revoked(pool: PgPool) {
     let f = fixture(&pool).await;
     let (human, _) = team_keys(&f).await;

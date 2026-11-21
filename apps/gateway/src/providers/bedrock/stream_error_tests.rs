@@ -345,12 +345,12 @@ async fn matrix(pool: PgPool, free: bool) {
     assert!(problems.is_empty(), "{problems:#?}");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn exception_frames_end_the_stream_with_their_own_class(pool: PgPool) {
     matrix(pool, false).await;
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn exception_frames_on_a_free_price_never_settle_as_a_known_zero(pool: PgPool) {
     matrix(pool, true).await;
 }
@@ -359,7 +359,7 @@ async fn exception_frames_on_a_free_price_never_settle_as_a_known_zero(pool: PgP
 /// content, is never retried or failed over, however permissive the route's
 /// policy. Control: the same throttle as an HTTP error before any stream does
 /// fail over under that policy, so the policy is live.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_failed_stream_is_never_failed_over(pool: PgPool) {
     let mut f = fixture(pool).await;
     let token = issue_key(&mut f).await;
@@ -516,7 +516,7 @@ impl crate::providers::ProviderAdapter for EndsInRejection {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn any_adapters_in_stream_rejection_on_a_free_price_stays_unknown(pool: PgPool) {
     use crate::inference::error::InferenceError as E;
     let mut f = fixture(pool).await;
@@ -622,7 +622,7 @@ fn bedrock_frames() -> Vec<Vec<u8>> {
 /// `invalid_upstream_response` (Messages: `api_error`) and does not. Content
 /// already delivered stays delivered, usage the stream did not report stays
 /// unknown, and the reservation stays `unknown` with its hold.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn transport_failures_end_the_stream_as_unavailable_and_count(pool: PgPool) {
     let g = scripted(pool).await;
     let f = bedrock_frames();
@@ -743,7 +743,7 @@ async fn transport_failures_end_the_stream_as_unavailable_and_count(pool: PgPool
 
 /// Three resets open the breaker (the next request is refused as cooling
 /// down); three whole frames with wrong content do not.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn the_breaker_opens_on_resets_and_not_on_invalid_frames(pool: PgPool) {
     let g = scripted(pool).await;
     let f = bedrock_frames();
@@ -804,7 +804,7 @@ async fn the_breaker_opens_on_resets_and_not_on_invalid_frames(pool: PgPool) {
 
 /// A client that goes away mid-stream cancels the attempt: no failure and no
 /// success is recorded against the route, whatever the provider was doing.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_client_that_goes_away_mid_stream_is_not_a_provider_failure(pool: PgPool) {
     let g = scripted(pool).await;
     let f = bedrock_frames();
@@ -865,7 +865,7 @@ async fn a_client_that_goes_away_mid_stream_is_not_a_provider_failure(pool: PgPo
 
 /// A reset or truncation is never failed over either, however permissive the
 /// route's policy.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_stream_that_breaks_in_transport_is_never_failed_over(pool: PgPool) {
     let mut f = fixture(pool).await;
     let token = issue_key(&mut f).await;

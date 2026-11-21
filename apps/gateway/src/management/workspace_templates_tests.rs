@@ -32,7 +32,7 @@ fn tid(v: &Value) -> String {
     v["id"].as_str().unwrap().to_owned()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn templates_are_reviewed_by_another_admin_before_publication(pool: PgPool) {
     let f = fixture(&pool).await;
     let reviewer = user(&pool, "second-admin", "admin").await;
@@ -204,7 +204,7 @@ async fn templates_are_reviewed_by_another_admin_before_publication(pool: PgPool
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn template_content_is_references_only_and_validated(pool: PgPool) {
     let f = fixture(&pool).await;
     let c = catalog(&pool, "Valid").await;
@@ -298,7 +298,7 @@ async fn template_content_is_references_only_and_validated(pool: PgPool) {
     assert_eq!(created, 1);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn templates_are_platform_admin_only_and_immutable(pool: PgPool) {
     let f = fixture(&pool).await;
     let c = catalog(&pool, "Only").await;
@@ -390,7 +390,7 @@ async fn templates_are_platform_admin_only_and_immutable(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn template_steps_hold_under_races_demotion_and_a_single_admin(pool: PgPool) {
     let f = fixture(&pool).await;
     let c = catalog(&pool, "Races").await;
@@ -502,7 +502,7 @@ async fn template_steps_hold_under_races_demotion_and_a_single_admin(pool: PgPoo
     assert_eq!((actor, meta), (reviewer.user_id, json!({"version":1})));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn template_limits_and_forms_are_strict(pool: PgPool) {
     let f = fixture(&pool).await;
     let c = catalog(&pool, "Strict").await;

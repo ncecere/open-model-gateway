@@ -94,7 +94,7 @@ async fn scheduled_reports_delivery_upgrade_preserves_generation_functions_and_h
     assert!(sqlx::query("UPDATE alert_deliveries SET status='pending',completed_at=NULL WHERE status='suppressed'").execute(&s.pool).await.is_err());
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_delivery_quota_exempt_alerts_still_charged_and_suppressed(pool: PgPool) {
     let s = seed(pool).await;
     sqlx::query("INSERT INTO alert_webhook_destinations(label,url,current_secret_ref) VALUES('test','https://receiver.invalid/','env:HOOK')").execute(&s.pool).await.unwrap();
@@ -143,7 +143,7 @@ async fn scheduled_reports_delivery_quota_exempt_alerts_still_charged_and_suppre
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_delivery_recipient_guard_50_51_and_stale_isolation(pool: PgPool) {
     let s = seed(pool).await;
     let run = report_runs(&s, None, 50, 1).await[0];
@@ -226,7 +226,7 @@ async fn scheduled_reports_delivery_recipient_guard_50_51_and_stale_isolation(po
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn scheduled_reports_delivery_envelope_isolation_and_recipient_lineage(pool: PgPool) {
     let s = seed(pool).await;
     let run = report_runs(&s, Some(s.team), 1, 1).await[0];

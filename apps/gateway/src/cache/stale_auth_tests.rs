@@ -306,7 +306,7 @@ fn restale(b: &Store, w: &Warm) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_stale_replica_refuses_invalid_keys_exactly_like_the_uncached_path(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     f.price(1_000_000).await;
@@ -475,7 +475,7 @@ async fn a_stale_replica_refuses_invalid_keys_exactly_like_the_uncached_path(poo
 
 /// The live candidate listing of a stale replica (key cached, candidates
 /// not) refuses the key the same way and forgets it.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_live_candidate_listing_of_an_invalid_key_is_an_authentication_error(pool: PgPool) {
     let f = fixture(pool.clone()).await;
     let (token, p) = issue(&pool, f.team.workspace_id, Some(f.owner), None).await;

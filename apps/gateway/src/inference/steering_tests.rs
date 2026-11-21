@@ -1266,7 +1266,7 @@ fn assert_no_attacker(world: &World, label: &str, case: &str) {
 // ---------------------------------------------------------------- tests ----
 
 /// Holding the caller's only connection must not starve the world's store.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn steering_world_dispatch_is_independent_of_the_provided_pool(pool: PgPool) {
     // No SQLx parent: exhausting this pool cannot consume the shared test pool's
     // capacity or starve unrelated fixtures running alongside this regression.
@@ -1320,7 +1320,7 @@ async fn steering_world_dispatch_is_independent_of_the_provided_pool(pool: PgPoo
 }
 
 /// Neither protocol's storage-error envelope is a baseline, even after a real hop.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn steering_control_rejects_accounting_unavailable_after_a_real_upstream_hop(pool: PgPool) {
     use axum::middleware::{Next, from_fn};
     use futures_util::FutureExt;
@@ -1476,7 +1476,7 @@ fn steering_phase_projection_reports_missing_capture_as_unavailable() {
 
 /// An injected accounting error must still fail the original strict comparison,
 /// but only after a secret-safe diagnostic has captured the real hop's phases.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn steering_expect_records_diagnostics_before_rejecting_injected_503(pool: PgPool) {
     use axum::middleware::{Next, from_fn};
     use futures_util::FutureExt;
@@ -1650,7 +1650,7 @@ async fn steering_expect_records_diagnostics_before_rejecting_injected_503(pool:
 }
 
 /// Reviewed native fields may carry attacker strings as data, never destinations.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn anthropic_fidelity_data_cannot_steer_transport(pool: PgPool) {
     let w = world(pool).await;
     let t = targets()
@@ -1710,7 +1710,7 @@ async fn anthropic_fidelity_data_cannot_steer_transport(pool: PgPool) {
 }
 
 /// Every JSON inference protocol, on every adapter and local profile that serves it.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn no_json_inference_input_can_steer_the_upstream(pool: PgPool) {
     let w = world(pool).await;
     let key = w.keys.personal_key.token.clone();
@@ -1946,7 +1946,7 @@ fn wav(ms: u64) -> Vec<u8> {
 
 /// Audio transcription is multipart: form fields, file names and headers
 /// cannot steer either, alone or together.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn no_multipart_audio_input_can_steer_the_upstream(pool: PgPool) {
     let w = world(pool).await;
     let key = w.keys.personal_key.token.clone();
@@ -2059,7 +2059,7 @@ fn is(got: &(u16, String), status: u16, why: &str, case: &str) {
 
 /// Files and Batches: the file store is local and a batch runs only the
 /// validated lines of a gateway file on the routes the catalog names.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn files_and_batches_cannot_steer_the_upstream(pool: PgPool) {
     let w = world(pool).await;
     let key = w.keys.personal_key.token.clone();
@@ -2234,7 +2234,7 @@ async fn files_and_batches_cannot_steer_the_upstream(pool: PgPool) {
 /// Model resolution is exact: whatever string a request carries (arbitrary
 /// text, near misses of real names, confusables, separators), the candidates
 /// are those of a configured public name byte for byte, or none, never an error.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn only_an_exact_configured_name_ever_resolves(pool: PgPool) {
     use crate::inference::repository::InferenceRepository;
     use proptest::{prelude::*, strategy::ValueTree, test_runner::TestRunner};
@@ -2336,7 +2336,7 @@ async fn only_an_exact_configured_name_ever_resolves(pool: PgPool) {
 /// accented letter) resolved before #196 and must keep doing so; only what can
 /// never match and would break the query (empty, control characters, longer
 /// than an index key) is turned away before it.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn names_outside_the_management_charset_keep_resolving(pool: PgPool) {
     use crate::inference::repository::InferenceRepository;
     let w = world(pool).await;
@@ -2427,9 +2427,9 @@ async fn rejection_fault_signature(pool: PgPool, fault: SettlementFault) {
     use crate::db::diagnostics::{Outcome, SqlxKind, Stage};
     use sqlx::Connection;
 
-    // Installs the log subscriber before any request, so the faulted request's
+    // Records spans from before any request, so the faulted request's
     // `http.request` span exists when its accounting failure is logged.
-    drop(crate::log_capture_test::exclusive());
+    let _spans = crate::log_capture_test::keep_spans();
     // A shorter acquisition bound distinguishes pool timeout from the unchanged
     // three-second finalizer. The other hypotheses retain SQLx's default bound.
     let options = sqlx::postgres::PgPoolOptions::new();
@@ -2753,7 +2753,7 @@ async fn rejection_fault_signature(pool: PgPool, fault: SettlementFault) {
 
 /// #389: a request whose accounting succeeds records no accounting-failure
 /// signal, whether the upstream answered 200 or refused the request.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn accounted_requests_record_no_accounting_failure_signal(pool: PgPool) {
     let w = world(pool).await;
     for (label, status) in [("chat/openai", 200), ("rerank/sglang", 400)] {
@@ -2790,32 +2790,32 @@ async fn blocked_settlement(pool: &PgPool, blocker: i32) -> i32 {
     }).await.expect("settlement reached the held reservation lock")
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn settlement_fault_pool_exhaustion_reports_pool_timed_out(pool: PgPool) {
     rejection_fault_signature(pool, SettlementFault::PoolExhaustion).await;
 }
 /// #389: under the production pool configuration a starved pool at settlement
 /// meets the settlement deadline first; it is still attributed to the wait
 /// for a connection, not to the database.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn settlement_fault_pool_exhaustion_at_the_production_acquire_timeout_names_the_connection_wait(
     pool: PgPool,
 ) {
     rejection_fault_signature(pool, SettlementFault::PoolExhaustionAtProductionTimeout).await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn settlement_fault_lock_timeout_reports_55p03(pool: PgPool) {
     rejection_fault_signature(pool, SettlementFault::LockTimeout).await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn settlement_fault_statement_timeout_reports_57014(pool: PgPool) {
     rejection_fault_signature(pool, SettlementFault::StatementTimeout).await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn settlement_fault_backend_termination_reports_57p01(pool: PgPool) {
     rejection_fault_signature(pool, SettlementFault::BackendTermination).await;
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn settlement_fault_finalization_deadline_reports_explicit_timeout(pool: PgPool) {
     rejection_fault_signature(pool, SettlementFault::FinalizationDeadline).await;
 }

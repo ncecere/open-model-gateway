@@ -92,9 +92,23 @@
 //! not need this lock; most of `egress`'s and `egress_property_tests.rs`'s
 //! tests are exactly that and are not listed above.
 
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 static SUBSCRIBER: OnceLock<()> = OnceLock::new();
+/// Whether a [`Capture`] session is live. The global subscriber formats an
+/// event only then: installed for the rest of the process, an always-on JSON
+/// formatter cost every other test about a tenth of its CPU (each request
+/// emits spans and events) for output nobody reads. Only [`Capture::start`]
+/// sets it, under [`CAPTURE_LOCK`], so a session is the only reader and sees
+/// every event emitted while it lives.
+static CAPTURING: AtomicBool = AtomicBool::new(false);
+/// How many [`Spans`] guards are live. A span exists only if it was enabled
+/// when it was created, so a test whose request starts before its
+/// [`Capture`] (the request's `http.request` span must exist when its failure
+/// is logged) keeps spans on from before the request; events stay unformatted
+/// until the session starts.
+static SPANS_KEPT: AtomicUsize = AtomicUsize::new(0);
 static CAPTURE_LOCK: Mutex<()> = Mutex::new(());
 static BUFFER: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
 
@@ -134,12 +148,21 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Writer {
 /// every test that wants to capture: only the first call does anything.
 fn ensure_global_subscriber() {
     SUBSCRIBER.get_or_init(|| {
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .with_writer(Writer)
-            .with_ansi(false)
-            .with_env_filter(tracing_subscriber::EnvFilter::new(FILTER))
-            .finish();
+        use tracing_subscriber::Layer as _;
+        use tracing_subscriber::filter::{FilterExt as _, dynamic_filter_fn};
+        use tracing_subscriber::layer::SubscriberExt as _;
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_writer(Writer)
+                .with_ansi(false)
+                .with_filter(
+                    tracing_subscriber::EnvFilter::new(FILTER).and(dynamic_filter_fn(|meta, _| {
+                        CAPTURING.load(Ordering::Acquire)
+                            || (meta.is_span() && SPANS_KEPT.load(Ordering::Acquire) > 0)
+                    })),
+                ),
+        );
         // `set_global_default` can only ever succeed once per process.
         // Ignored on error (another caller won the race into `get_or_init`
         // in a way this type can't observe); in practice this module is
@@ -164,12 +187,34 @@ pub(crate) fn exclusive() -> Lock {
     Lock(CAPTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
+/// Keeps spans created from now on recorded, until dropped (see
+/// [`SPANS_KEPT`]). Installs the subscriber, like [`exclusive`], but takes no lock.
+pub(crate) struct Spans(());
+impl Drop for Spans {
+    fn drop(&mut self) {
+        SPANS_KEPT.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+pub(crate) fn keep_spans() -> Spans {
+    ensure_global_subscriber();
+    SPANS_KEPT.fetch_add(1, Ordering::AcqRel);
+    tracing::callsite::rebuild_interest_cache();
+    Spans(())
+}
+
 /// An exclusive capture session: only one may exist at a time (enforced by
 /// [`exclusive`]), so its buffer never mixes with another concurrently
 /// running capturing test's lines, regardless of which thread (including a
 /// Tokio blocking-pool thread) logged them.
 pub(crate) struct Capture {
     _lock: Lock,
+}
+impl Drop for Capture {
+    fn drop(&mut self) {
+        // Before `_lock` is released (fields drop after this body), so the next
+        // session starts with formatting off and switches it on itself.
+        CAPTURING.store(false, Ordering::Release);
+    }
 }
 
 impl Capture {
@@ -183,6 +228,7 @@ impl Capture {
     pub(crate) fn start() -> Self {
         let lock = exclusive();
         buffer().lock().unwrap_or_else(|e| e.into_inner()).clear();
+        CAPTURING.store(true, Ordering::Release);
         tracing::callsite::rebuild_interest_cache();
         Self { _lock: lock }
     }

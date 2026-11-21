@@ -50,7 +50,7 @@ async fn reconcile_hold(s: &Seed, execution: Uuid) {
     assert_eq!(audited, 1);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_real_reconciliation_before_first_claim_suppresses_mail_and_retires_silently(
     pool: PgPool,
 ) {
@@ -89,7 +89,7 @@ async fn aged_hold_real_reconciliation_before_first_claim_suppresses_mail_and_re
     assert!(rx.try_recv().is_err());
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_real_reconciliation_between_eligibility_read_and_first_lease_keeps_authorized_claim(
     pool: PgPool,
 ) {
@@ -136,7 +136,7 @@ async fn aged_hold_real_reconciliation_between_eligibility_read_and_first_lease_
     assert_eq!(count(&s, "SELECT count(*) FROM alert_recipient_outbox WHERE state='ineligible' AND attempt_count=1").await, 1);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_real_reconciliation_during_smtp_accepts_claimed_mail_but_refuses_next_recipient(
     pool: PgPool,
 ) {
@@ -182,7 +182,7 @@ async fn aged_hold_real_reconciliation_during_smtp_accepts_claimed_mail_but_refu
     assert!(rx.try_recv().is_err());
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn aged_hold_warning_then_critical_smtp_and_real_reconciliation_retirement(pool: PgPool) {
     let s = seed(pool).await;
     let warning_hold = priced_hold(&s, 50).await;

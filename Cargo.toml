@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/gateway", "tools/mock-upstream", "tools/loadgen", "crates/datetime"]
+members = ["apps/gateway", "tools/mock-upstream", "tools/loadgen", "crates/datetime", "crates/dbtest"]
 exclude = ["vendor/oauth2", "vendor/openidconnect"]
 resolver = "3"
 

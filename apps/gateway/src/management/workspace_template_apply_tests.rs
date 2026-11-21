@@ -103,7 +103,7 @@ async fn workspaces(pool: &PgPool) -> i64 {
         .unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn applying_a_published_template_creates_the_whole_workspace(pool: PgPool) {
     let f = fixture(&pool).await;
     let t = published(&f, &pool, limits()).await;
@@ -169,7 +169,7 @@ async fn applying_a_published_template_creates_the_whole_workspace(pool: PgPool)
     assert_eq!(workspaces(&pool).await, 4);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_template_that_no_longer_fits_changes_nothing(pool: PgPool) {
     let f = fixture(&pool).await;
     let t = published(&f, &pool, limits()).await;
@@ -337,7 +337,7 @@ async fn a_template_that_no_longer_fits_changes_nothing(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn only_platform_admins_apply_and_records_are_immutable(pool: PgPool) {
     let f = fixture(&pool).await;
     let t = published(&f, &pool, Value::Null).await;
@@ -384,7 +384,7 @@ async fn only_platform_admins_apply_and_records_are_immutable(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn replays_and_ineligible_people_are_reported_precisely(pool: PgPool) {
     let f = fixture(&pool).await;
     let t = published(&f, &pool, Value::Null).await;
@@ -460,7 +460,7 @@ async fn replays_and_ineligible_people_are_reported_precisely(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn applications_are_bound_in_the_database_and_bodies_are_bounded(pool: PgPool) {
     let f = fixture(&pool).await;
     let t = published(&f, &pool, Value::Null).await;
@@ -545,7 +545,7 @@ async fn applications_are_bound_in_the_database_and_bodies_are_bounded(pool: PgP
         .unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn concurrent_applications_with_one_key_create_one_workspace(pool: PgPool) {
     let f = fixture(&pool).await;
     let t = published(&f, &pool, Value::Null).await;

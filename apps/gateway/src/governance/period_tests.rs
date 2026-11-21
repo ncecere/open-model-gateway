@@ -126,19 +126,19 @@ mod db {
         // The admitted hold itself now counts in the current window.
         assert_eq!(admit_once(&f).await, DENIED);
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn day_window_starts_at_utc_midnight(pool: PgPool) {
         boundary(pool, Day).await;
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn week_window_starts_monday_utc(pool: PgPool) {
         boundary(pool, Week).await;
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn month_window_starts_on_the_first_utc(pool: PgPool) {
         boundary(pool, Month).await;
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn sql_and_rust_windows_agree(pool: PgPool) {
         for t in [
             at(2026, 10, 11, 23, 59, 59),
@@ -159,7 +159,7 @@ mod db {
             }
         }
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn layers_with_different_periods_each_apply(pool: PgPool) {
         let f = fixture(pool).await;
         f.price(1_000_000).await;
@@ -210,7 +210,7 @@ mod db {
             Err(InferenceError::BudgetExceeded(LimitScope::ApiKey))
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn changing_a_period_never_resets_or_rewrites_consumption(pool: PgPool) {
         let f = fixture(pool).await;
         f.price(1_000_000).await;
@@ -260,7 +260,7 @@ mod db {
         );
     }
     /// Several budgets on one layer are each enforced over their own window.
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn stacked_budgets_on_one_layer_each_apply(pool: PgPool) {
         let f = fixture(pool).await;
         f.price(1_000_000).await; // each admission holds 110 micro-USD
@@ -305,7 +305,7 @@ mod db {
     }
     /// Override budgets apply only while the replacement header exists; type
     /// budgets only without one. There is no installation layer (0026).
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn platform_budget_layers_follow_the_replacement_header(pool: PgPool) {
         let f = fixture(pool).await;
         f.price(1_000_000).await;

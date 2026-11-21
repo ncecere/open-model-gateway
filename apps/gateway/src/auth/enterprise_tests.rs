@@ -21,7 +21,7 @@ async fn admission(store: &Store, principal: &Principal) -> Option<Uuid> {
     value
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn global_admin_still_requires_actual_shared_membership_and_live_entitlement(
     pool: sqlx::PgPool,
 ) {
@@ -95,7 +95,7 @@ async fn global_admin_still_requires_actual_shared_membership_and_live_entitleme
     assert_eq!(admission(&store, &principal).await, None);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn workspace_foreign_keys_and_personal_privacy_are_enforced(pool: sqlx::PgPool) {
     let store = Store::new(pool.clone());
     let owner = Uuid::new_v4();
@@ -197,7 +197,7 @@ async fn workspace_foreign_keys_and_personal_privacy_are_enforced(pool: sqlx::Pg
 /// #497 on real PostgreSQL: a key lookup with every pooled connection busy,
 /// or whose statement times out on a lock, is counted once at the
 /// `key_authentication` stage with its cause; a lookup that runs records nothing.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_failed_key_lookup_names_its_cause(pool: sqlx::PgPool) {
     use crate::db::{
         accounting_failure::tests::labels,

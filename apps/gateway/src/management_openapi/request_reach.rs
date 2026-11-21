@@ -19,7 +19,7 @@
 //! location are exempt too. Messages name schema paths, never instance values.
 use super::coverage::follow;
 use anyhow::{Result, ensure};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) const UNPROBED: &str = "x-omg-unprobed-location";
@@ -89,10 +89,7 @@ fn exempt(document: &Value, node: &Value) -> bool {
 }
 
 fn pattern_matches(pattern: &str, name: &str) -> Result<bool> {
-    Ok(
-        super::validation::compile_schema(&json!({"type":"string","pattern":pattern}))?
-            .is_valid(&Value::String(name.to_owned())),
-    )
+    Ok(super::validation::pattern_validator(pattern)?.is_valid(&Value::String(name.to_owned())))
 }
 
 #[allow(clippy::too_many_arguments)]

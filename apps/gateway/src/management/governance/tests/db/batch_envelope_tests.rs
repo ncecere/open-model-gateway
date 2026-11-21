@@ -30,7 +30,7 @@ pub(crate) async fn envelope(f: &Fixture, mode: &str, terminal: bool) -> Uuid {
     id
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn batch_envelope_no_lines_releases_only_envelope(pool: PgPool) {
     let f = fixture(pool).await;
     let admin = user(f.owner, true);
@@ -59,7 +59,7 @@ async fn batch_envelope_no_lines_releases_only_envelope(pool: PgPool) {
     assert_eq!(ledger, (0, None, None));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn batch_envelope_conserves_line_costs_holds_observations_and_history(pool: PgPool) {
     let f = fixture(pool).await;
     let job = envelope(&f, "gateway", true).await;
@@ -198,7 +198,7 @@ async fn batch_envelope_conserves_line_costs_holds_observations_and_history(pool
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn batch_envelope_refusals_concurrent_apply_and_lost_commit(pool: PgPool) {
     let f = fixture(pool).await;
     let native = envelope(&f, "native", true).await;
@@ -299,7 +299,7 @@ async fn batch_envelope_refusals_concurrent_apply_and_lost_commit(pool: PgPool) 
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn batch_envelope_rechecks_admin_after_authority_wait(pool: PgPool) {
     use crate::governance::locks::{self, Scope};
     let f = fixture(pool).await;
@@ -359,7 +359,7 @@ async fn batch_envelope_rechecks_admin_after_authority_wait(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn batch_envelope_serializes_job_and_line_settlement(pool: PgPool) {
     let f = fixture(pool).await;
     let job = envelope(&f, "gateway", true).await;
@@ -414,7 +414,7 @@ async fn batch_envelope_serializes_job_and_line_settlement(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn batch_envelope_large_bucket_and_ineligible_prefix_make_progress(pool: PgPool) {
     let f = fixture(pool).await;
     let seed = envelope(&f, "gateway", true).await;

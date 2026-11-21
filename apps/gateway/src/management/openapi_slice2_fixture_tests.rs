@@ -402,13 +402,28 @@ async fn unknown_cost_attempt(pool: &PgPool, ws: Uuid, key: Uuid, deployment: Uu
         .execute(pool).await.unwrap();
 }
 
+#[dbtest::test]
+async fn management_openapi_slice2_fixtures(pool: PgPool) {
+    let (failures, observed) = slice2_on_a_large_stack(pool, 0).await;
+    // The coverage gates last: they judge every positive and vector set above.
+    let gates = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        observed.finish(SLICE2_AREAS);
+    }));
+    slice2_verdict(failures, gates);
+}
+
+/// The slice 2 journey as shard `shard` of [`SLICE2_SHARDS`] parallel runs (see
+/// `PositiveFixtures::sharded`).
+///
 /// The fixture is one long async function: in a debug build its poll frame
 /// alone approaches the 2 MiB test-thread stack, which it outgrew (#84; boxing
 /// the future does not shrink a poll frame). It runs on its own thread with a
 /// larger stack and a current-thread runtime; a panic is re-raised here, so a
 /// failure is reported exactly as before.
-#[sqlx::test(migrations = "./enterprise_migrations")]
-async fn management_openapi_slice2_fixtures(pool: PgPool) {
+const SLICE2_SHARDS: usize = 1;
+async fn slice2_on_a_large_stack(pool: PgPool, shard: usize) -> (Vec<String>, PositiveFixtures) {
+    let in_range = shard < SLICE2_SHARDS;
+    assert!(in_range, "no such slice 2 shard");
     let (done, outcome) = tokio::sync::oneshot::channel();
     std::thread::Builder::new()
         .name("slice2-fixtures".into())
@@ -419,19 +434,18 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
                 .build()
                 .expect("fixture runtime");
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                runtime.block_on(slice2_fixtures(pool))
+                runtime.block_on(slice2_fixtures(pool, shard))
             }));
             let _ = done.send(result);
         })
         .expect("fixture thread");
-    let (mut failures, observed) = match outcome.await.expect("fixture thread finished") {
+    match outcome.await.expect("fixture thread finished") {
         Ok(result) => result,
         Err(panic) => std::panic::resume_unwind(panic),
-    };
-    // The coverage gates last: they judge every positive and vector set above.
-    let gates = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        observed.finish(SLICE2_AREAS);
-    }));
+    }
+}
+/// Fails with every fixture failure and, when the coverage gates panicked, their report.
+fn slice2_verdict(mut failures: Vec<String>, gates: std::thread::Result<()>) {
     if let Err(panic) = gates {
         failures.push(
             panic
@@ -446,7 +460,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
 
 /// Runs every fixture, returning the failures and what the handlers were seen
 /// to do; the runner judges coverage.
-async fn slice2_fixtures(pool: PgPool) -> (Vec<String>, PositiveFixtures) {
+async fn slice2_fixtures(pool: PgPool, shard: usize) -> (Vec<String>, PositiveFixtures) {
     let f = fixture(&pool).await;
     let admin = browser(&pool, &f.admin).await;
     let auditor = browser(&pool, &f.auditor).await;
@@ -475,7 +489,7 @@ async fn slice2_fixtures(pool: PgPool) -> (Vec<String>, PositiveFixtures) {
             .build()
             .unwrap(),
         base,
-        observed: tokio::sync::Mutex::new(PositiveFixtures::default()),
+        observed: tokio::sync::Mutex::new(PositiveFixtures::sharded(shard, SLICE2_SHARDS)),
         failures: RefCell::new(Vec::new()),
         pins: std::cell::Cell::new(0),
         domain_pins: std::cell::Cell::new(0),
@@ -635,6 +649,11 @@ async fn slice2_fixtures(pool: PgPool) -> (Vec<String>, PositiveFixtures) {
         Some(json!({"cost_center_id":cost_center})),
     )
     .await;
+    // Listed again with the allocations applied: the listing's cost-center
+    // branches are observed by the journey itself, not only by the shard that
+    // sends the vector that makes the same change.
+    c.ok(&auditor, "GET", "/api/v1/platform/workspaces", None)
+        .await;
     c.ok(
         &owner,
         "PATCH",
@@ -2691,6 +2710,16 @@ async fn slice2_fixtures(pool: PgPool) -> (Vec<String>, PositiveFixtures) {
         vector_platform.clone(),
         json!(["Vector renamed positional", false, cost_center])
     );
+    // The run's vectors flip `disabled`, and which of them comes last decides
+    // the state the rest of the journey meets: a shard that sends only some of
+    // them restores the workspace explicitly.
+    c.setup(
+        &admin,
+        "PATCH",
+        &vector_platform,
+        Some(json!({"disabled": false})),
+    )
+    .await;
     body!(
         "PATCH /workspaces/{ws} (visibility only)",
         "PATCH",

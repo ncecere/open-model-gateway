@@ -539,8 +539,27 @@ async fn fresh_waits(pool: &PgPool) {
         .unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn management_openapi_slice6_fixtures(pool: PgPool) {
+    let (observed, failed) = slice6_fixtures(pool, 0).await;
+    // Every vector and coverage gap is reported by one run (panic messages
+    // name only operations, kinds, pointers and statuses).
+    let coverage = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        observed.finish(openapi::responses::SLICE6_AREAS)
+    }));
+    slice6_verdict(&failed, coverage.is_ok());
+}
+fn slice6_verdict(failed: &[String], coverage_passed: bool) {
+    assert!(
+        failed.is_empty() && coverage_passed,
+        "slice 6 contract gaps: vectors failed for {failed:?}; coverage gate passed: {coverage_passed}"
+    );
+}
+/// The slice 6 journey as shard `shard` of [`SLICE6_SHARDS`] parallel runs (see
+/// `PositiveFixtures::sharded`): the observations and the operations whose
+/// vector run failed, for the calling test's gates.
+const SLICE6_SHARDS: usize = 1;
+async fn slice6_fixtures(pool: PgPool, shard: usize) -> (PositiveFixtures, Vec<String>) {
     let f = fixture(&pool).await;
     let owner = browser(&pool, &f.owner).await;
     let member = browser(&pool, &f.member).await;
@@ -626,7 +645,7 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
             .build()
             .unwrap(),
         base,
-        observed: PositiveFixtures::default(),
+        observed: PositiveFixtures::sharded(shard, SLICE6_SHARDS),
         failed: Vec::new(),
     };
     let ws = format!("/api/v1/workspaces/{}", f.team);
@@ -3208,15 +3227,5 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     )
     .await;
     w.status(&owner,"PUT",&format!("{keypath}/policy"),Some(json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":[{"period":"month","amount_microusd":"1","unknown":true}]})),StatusCode::UNPROCESSABLE_ENTITY).await;
-    // Every vector and coverage gap is reported by one run (panic messages
-    // name only operations, kinds, pointers and statuses).
-    let coverage = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        w.observed.finish(openapi::responses::SLICE6_AREAS)
-    }));
-    assert!(
-        w.failed.is_empty() && coverage.is_ok(),
-        "slice 6 contract gaps: vectors failed for {:?}; coverage gate passed: {}",
-        w.failed,
-        coverage.is_ok()
-    );
+    (w.observed, w.failed)
 }

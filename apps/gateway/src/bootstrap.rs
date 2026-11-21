@@ -137,7 +137,7 @@ pub async fn seed(store: &Store, environment: Environment) -> Result<Option<Deve
 #[cfg(all(test, feature = "integration-tests"))]
 mod tests {
     use super::*;
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn operator_grants_are_explicit_audited_idempotent_and_do_not_create_personal_workspaces(
         pool: sqlx::PgPool,
     ) {
@@ -179,7 +179,7 @@ mod tests {
                 .is_err()
         );
     }
-    #[sqlx::test(migrations = "./enterprise_migrations")]
+    #[dbtest::test]
     async fn dev_bootstrap_is_environment_gated_and_never_rotates_existing_credentials(
         pool: sqlx::PgPool,
     ) {

@@ -54,7 +54,7 @@ async fn live_grant(pool: &PgPool, ws: Uuid, user: Uuid) -> bool {
         .bind(ws).bind(user).fetch_one(pool).await.unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn an_owner_removes_a_member_through_the_membership_path(pool: PgPool) {
     let f = fixture(&pool).await;
     let (status, key) = key(&f, &f.member, f.team, Value::Null).await;
@@ -105,7 +105,7 @@ async fn an_owner_removes_a_member_through_the_membership_path(pool: PgPool) {
     assert_eq!(decisions(&pool, member_item).await, ["remove"]);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn removal_keeps_the_direct_routes_protections(pool: PgPool) {
     let f = fixture(&pool).await;
     // A Team admin who is not an owner, and a second owner.
@@ -175,7 +175,7 @@ async fn removal_keeps_the_direct_routes_protections(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn group_access_is_flagged_never_removed(pool: PgPool) {
     let f = fixture(&pool).await;
     sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source,mapping_id) VALUES($1,$2,'member','group',$3)")
@@ -193,7 +193,7 @@ async fn group_access_is_flagged_never_removed(pool: PgPool) {
     assert!(live_grant(&pool, f.project, f.outsider.user_id).await);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn platform_roles_are_removed_through_the_role_path(pool: PgPool) {
     let f = fixture(&pool).await;
     // The auditor also holds a manual User grant, so removing Auditor leaves them entitled.
@@ -231,7 +231,7 @@ async fn platform_roles_are_removed_through_the_role_path(pool: PgPool) {
     assert_eq!(reason.as_deref(), Some("entitlement_loss"));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn admins_review_each_other_and_never_themselves(pool: PgPool) {
     let f = fixture(&pool).await;
     let second = user(&pool, "second-admin", "admin").await;
@@ -267,7 +267,7 @@ async fn admins_review_each_other_and_never_themselves(pool: PgPool) {
     assert_eq!(admins, 1);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_remove_decision_is_never_recorded_without_the_removal(pool: PgPool) {
     let f = fixture(&pool).await;
     let c = campaign(&f).await;
@@ -306,7 +306,7 @@ async fn assign(f: &Fixture, campaign: &Value, item: Uuid, reviewer: Uuid) {
     assert_eq!(status, StatusCode::OK);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn someone_who_may_not_decide_takes_no_locks_and_gets_404(pool: PgPool) {
     let f = fixture(&pool).await;
     let c = campaign(&f).await;
@@ -369,7 +369,7 @@ async fn someone_who_may_not_decide_takes_no_locks_and_gets_404(pool: PgPool) {
     assert!(live_grant(&pool, f.team, f.member.user_id).await);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_membership_removal_keeps_group_access_and_other_workspaces_keys(pool: PgPool) {
     let f = fixture(&pool).await;
     sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source,mapping_id) VALUES($1,$2,'member','group',$3)")
@@ -401,7 +401,7 @@ async fn a_membership_removal_keeps_group_access_and_other_workspaces_keys(pool:
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_platform_role_removal_revokes_only_the_items_grant(pool: PgPool) {
     let f = fixture(&pool).await;
     let second = user(&pool, "second-admin", "admin").await;
@@ -476,7 +476,7 @@ async fn a_platform_role_removal_revokes_only_the_items_grant(pool: PgPool) {
     assert!(!disabled);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_refused_role_removal_records_nothing(pool: PgPool) {
     let f = fixture(&pool).await;
     // An Auditor with no other role who is the only owner of a Team: removing
@@ -503,7 +503,7 @@ async fn a_refused_role_removal_records_nothing(pool: PgPool) {
     assert!(live_grant(&pool, team, lone.user_id).await);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_platform_admin_assigned_removes_a_non_last_owner(pool: PgPool) {
     let f = fixture(&pool).await;
     let second_owner = user(&pool, "second-owner", "user").await;
@@ -516,7 +516,7 @@ async fn a_platform_admin_assigned_removes_a_non_last_owner(pool: PgPool) {
     assert!(!live_grant(&pool, f.team, second_owner.user_id).await);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn the_guard_refuses_removals_the_routes_would_refuse(pool: PgPool) {
     let f = fixture(&pool).await;
     member(&pool, f.team, f.outsider.user_id, "admin").await;
@@ -582,7 +582,7 @@ async fn the_guard_refuses_removals_the_routes_would_refuse(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn concurrent_removals_and_closing_serialize(pool: PgPool) {
     let f = fixture(&pool).await;
     member(&pool, f.team, f.outsider.user_id, "admin").await;

@@ -422,8 +422,41 @@ fn represented(r: &Captured, seen: &mut PositiveFixtures) -> Value {
     seen.observe(r);
     v
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
+    slice4_money_fixtures(pool, 0)
+        .await
+        .finish(openapi::responses::SLICE4_AREAS);
+}
+#[dbtest::test]
+async fn management_openapi_slice4_money_fixtures_shard_2(pool: PgPool) {
+    slice4_money_fixtures(pool, 1)
+        .await
+        .finish(openapi::responses::SLICE4_AREAS);
+}
+#[dbtest::test]
+async fn management_openapi_slice4_money_fixtures_shard_3(pool: PgPool) {
+    slice4_money_fixtures(pool, 2)
+        .await
+        .finish(openapi::responses::SLICE4_AREAS);
+}
+#[dbtest::test]
+async fn management_openapi_slice4_money_fixtures_shard_4(pool: PgPool) {
+    slice4_money_fixtures(pool, 3)
+        .await
+        .finish(openapi::responses::SLICE4_AREAS);
+}
+#[dbtest::test]
+async fn management_openapi_slice4_money_fixtures_shard_5(pool: PgPool) {
+    slice4_money_fixtures(pool, 4)
+        .await
+        .finish(openapi::responses::SLICE4_AREAS);
+}
+/// The slice 4 journey as shard `shard` of [`SLICE4_SHARDS`] parallel runs (see
+/// `PositiveFixtures::sharded`): the observations are returned for the coverage
+/// gate, which the calling test applies.
+const SLICE4_SHARDS: usize = 5;
+async fn slice4_money_fixtures(pool: PgPool, shard: usize) -> PositiveFixtures {
     let f = fixture(&pool).await;
     let admin = browser(&pool, &f.admin).await;
     let auditor = browser(&pool, &f.auditor).await;
@@ -507,7 +540,7 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap();
-    let mut seen = PositiveFixtures::default();
+    let mut seen = PositiveFixtures::sharded(shard, SLICE4_SHARDS);
     let now = gateway_datetime_compat::UtcInstant::now().date_naive();
     let start = (now - gateway_datetime_compat::SignedDuration::days(7)).to_string();
     let end = (now + gateway_datetime_compat::SignedDuration::days(1)).to_string();
@@ -2100,6 +2133,6 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
     )
     .await;
     assert_eq!(r.status, StatusCode::FORBIDDEN);
-    seen.finish(openapi::responses::SLICE4_AREAS);
     assert!(vx.failures.borrow().is_empty());
+    seen
 }

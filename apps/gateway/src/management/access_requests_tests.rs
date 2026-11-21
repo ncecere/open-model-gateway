@@ -5,7 +5,7 @@ mod review;
 
 /// The Admin workspace detail page reads the toggle it just set (#83 UI slice): GET
 /// /platform/workspaces/{ws} reports the live `discoverable` column, defaulting false.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn platform_workspace_detail_reports_discoverable(pool: PgPool) {
     let f = fixture(&pool).await;
     let (status, before) = call(
@@ -76,7 +76,7 @@ async fn decide(
     };
     call(&f.s, actor, "POST", &path, Value::Null).await
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_requests_privacy_idempotency_and_lifecycle(pool: PgPool) {
     let f = fixture(&pool).await;
     let (_, targets) = call(
@@ -192,7 +192,7 @@ async fn access_requests_privacy_idempotency_and_lifecycle(pool: PgPool) {
             .all(|(_, v)| !v.to_string().contains("Please"))
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_requests_live_authority_and_self_approval(pool: PgPool) {
     let f = fixture(&pool).await;
     discover(&pool, f.team).await;
@@ -264,7 +264,7 @@ async fn access_requests_live_authority_and_self_approval(pool: PgPool) {
         StatusCode::OK
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_requests_concurrent_decisions_and_stale_membership(pool: PgPool) {
     let f = fixture(&pool).await;
     discover(&pool, f.team).await;
@@ -318,7 +318,7 @@ async fn access_requests_concurrent_decisions_and_stale_membership(pool: PgPool)
         "admin"
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_requests_database_guards_and_expiry(pool: PgPool) {
     let f = fixture(&pool).await;
     discover(&pool, f.team).await;
@@ -365,7 +365,7 @@ async fn access_requests_database_guards_and_expiry(pool: PgPool) {
     assert_eq!(r["status"], "expired");
     assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM audit_events WHERE resource_id=$1 AND action='access_request.expired'").bind(id).fetch_one(&pool).await.unwrap(),1);
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_requests_submission_cap_is_replica_safe(pool: PgPool) {
     let f = fixture(&pool).await;
     let mut targets = Vec::new();
@@ -389,7 +389,7 @@ async fn access_requests_submission_cap_is_replica_safe(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_requests_pending_and_daily_caps(pool: PgPool) {
     let f = fixture(&pool).await;
     let mut targets = Vec::new();
@@ -425,7 +425,7 @@ async fn access_requests_pending_and_daily_caps(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_requests_reason_export_cleanup_and_holds(pool: PgPool) {
     let f = fixture(&pool).await;
     discover(&pool, f.team).await;
@@ -514,7 +514,7 @@ async fn access_requests_reason_export_cleanup_and_holds(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_requests_denial_withdrawal_and_discovery_revocation(pool: PgPool) {
     let f = fixture(&pool).await;
     discover(&pool, f.team).await;
@@ -595,7 +595,7 @@ async fn access_requests_denial_withdrawal_and_discovery_revocation(pool: PgPool
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_requests_membership_admins_and_maintenance(pool: PgPool) {
     let f = fixture(&pool).await;
     discover(&pool, f.team).await;
@@ -651,7 +651,7 @@ async fn access_requests_membership_admins_and_maintenance(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_requests_served_router_csrf_retry_after_and_token_denial(pool: PgPool) {
     use sha2::{Digest, Sha256};
     let f = fixture(&pool).await;
@@ -779,7 +779,7 @@ async fn access_requests_served_router_csrf_retry_after_and_token_denial(pool: P
 /// same approvers; the requester's own history never gets it. "My requests" shows the
 /// workspace name frozen at submission time, never a later rename, so history never discloses
 /// new workspace metadata.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_requests_queue_identity_and_frozen_workspace_name(pool: PgPool) {
     let f = fixture(&pool).await;
     discover(&pool, f.team).await;
@@ -904,7 +904,7 @@ async fn access_requests_queue_identity_and_frozen_workspace_name(pool: PgPool) 
 /// unconditionally would disclose *more* than that picker ever would once a requester loses
 /// entitlement after submitting. Both fields must redact to `null` the moment that happens,
 /// for every approver scope, not just at submission time.
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn access_requests_redacts_requester_identity_once_picker_ineligible(pool: PgPool) {
     let f = fixture(&pool).await;
     discover(&pool, f.team).await;

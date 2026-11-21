@@ -6,7 +6,7 @@ async fn count(pool: &PgPool, table: &str) -> i64 {
         .await
         .unwrap()
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn entry_refuses_non_dedicated_database_and_production(pool: PgPool) {
     let store = Store::new(pool.clone());
     assert!(seed(&store, Environment::Development).await.is_err());
@@ -14,7 +14,7 @@ async fn entry_refuses_non_dedicated_database_and_production(pool: PgPool) {
     assert_eq!(count(&pool, "users").await, 0);
     assert_eq!(count(&pool, "inference_executions").await, 0);
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn enterprise_demo_has_explicit_entitlement_and_no_fabricated_usage(pool: PgPool) {
     let store = Store::new(pool.clone());
     assert!(seed_data(&store).await.unwrap());
@@ -84,7 +84,7 @@ async fn enterprise_demo_has_explicit_entitlement_and_no_fabricated_usage(pool: 
         .unwrap()
     );
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn seed_repeat_preserves_edits_and_disabled_accounts(pool: PgPool) {
     let store = Store::new(pool.clone());
     assert!(seed_data(&store).await.unwrap());
@@ -116,7 +116,7 @@ async fn seed_repeat_preserves_edits_and_disabled_accounts(pool: PgPool) {
     );
     assert_eq!(count(&pool, "users").await, 4);
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn seed_never_adopts_existing_user_or_demo_email_collision(pool: PgPool) {
     let store = Store::new(pool.clone());
     sqlx::query("INSERT INTO users(id,email) VALUES($1,'operator@demo.invalid')")
@@ -130,7 +130,7 @@ async fn seed_never_adopts_existing_user_or_demo_email_collision(pool: PgPool) {
     assert_eq!(count(&pool, "oidc_group_mappings").await, 0);
     assert_eq!(count(&pool, "workspaces").await, 0);
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn concurrent_seeds_are_idempotent(pool: PgPool) {
     let store = Store::new(pool.clone());
     let (a, b) = tokio::join!(seed_data(&store), seed_data(&store));
@@ -140,7 +140,7 @@ async fn concurrent_seeds_are_idempotent(pool: PgPool) {
     assert_eq!(count(&pool, "configuration_changes").await, 4);
     assert_eq!(count(&pool, "audit_events").await, 5);
 }
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn failed_seed_rolls_back_entire_fixture(pool: PgPool) {
     let store = Store::new(pool.clone());
     sqlx::raw_sql("CREATE FUNCTION reject_demo_seed() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'test rejection'; END $$; CREATE TRIGGER reject_demo BEFORE INSERT ON catalogs FOR EACH ROW EXECUTE FUNCTION reject_demo_seed()")

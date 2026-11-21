@@ -139,7 +139,7 @@ async fn fair_dispatch_bucket_migration_resets_lock_timeout_before_concurrent_in
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn fair_dispatch_fresh_bucket_survives_many_backlogged_buckets_across_ticks(pool: PgPool) {
     let s = seed(pool).await;
     for _ in 0..30 {
@@ -162,7 +162,7 @@ async fn fair_dispatch_fresh_bucket_survives_many_backlogged_buckets_across_tick
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn fair_dispatch_short_ticks_rotate_backlogged_buckets(pool: PgPool) {
     let s = seed(pool).await;
     let mut buckets = Vec::new();
@@ -183,7 +183,7 @@ async fn fair_dispatch_short_ticks_rotate_backlogged_buckets(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn fair_dispatch_send_budget_rotates_buckets_after_slow_sends(pool: PgPool) {
     let s = seed(pool).await;
     let (port, mut rx, gate) = mock::serve_gated().await;
@@ -222,7 +222,7 @@ async fn fair_dispatch_send_budget_rotates_buckets_after_slow_sends(pool: PgPool
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn fair_dispatch_expired_backoff_prefix_has_bounded_plan_work(pool: PgPool) {
     let s = seed(pool).await;
     backlog(&s, Some(s.team), 30000, 90000).await;
@@ -273,7 +273,7 @@ async fn fair_dispatch_expired_backoff_prefix_has_bounded_plan_work(pool: PgPool
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn fair_dispatch_cancelled_claim_ends_tick_after_cleanup_but_other_errors_fail(pool: PgPool) {
     use std::io::Write;
     use tracing::instrument::WithSubscriber;
@@ -351,7 +351,7 @@ async fn fair_dispatch_cancelled_claim_ends_tick_after_cleanup_but_other_errors_
     assert!(!output.contains("alert outbox claim timed out"), "{output}");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn fair_dispatch_history_is_capped_and_evicts_oldest_not_refreshed_bucket(pool: PgPool) {
     let s = seed(pool).await;
     let old = std::time::Instant::now() - Duration::from_secs(10);
@@ -390,7 +390,7 @@ async fn workspace(s: &Seed) -> Uuid {
     id
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn fair_dispatch_quiet_workspaces_get_slots_in_first_tick(pool: PgPool) {
     let s = seed(pool).await;
     let (port, mut rx) = mock::serve(Behaviour::default()).await;
@@ -416,7 +416,7 @@ async fn fair_dispatch_quiet_workspaces_get_slots_in_first_tick(pool: PgPool) {
     assert_eq!(received, 25);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn fair_dispatch_forty_buckets_drain_oldest_first_in_two_ticks(pool: PgPool) {
     let s = seed(pool).await;
     let (port, _rx) = mock::serve(Behaviour::default()).await;
@@ -442,7 +442,7 @@ async fn fair_dispatch_forty_buckets_drain_oldest_first_in_two_ticks(pool: PgPoo
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn fair_dispatch_installation_bucket_and_legacy_insert(pool: PgPool) {
     let s = seed(pool).await;
     let (port, _rx) = mock::serve(Behaviour::default()).await;
@@ -463,7 +463,7 @@ async fn fair_dispatch_installation_bucket_and_legacy_insert(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn fair_dispatch_not_configured_steps_also_share_slots(pool: PgPool) {
     let s = seed(pool).await;
     let quiet = workspace(&s).await;
@@ -480,7 +480,7 @@ async fn fair_dispatch_not_configured_steps_also_share_slots(pool: PgPool) {
     assert!(quiet_done);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn fair_dispatch_locked_bucket_does_not_block_other_candidates(pool: PgPool) {
     let s = seed(pool).await;
     relay(&s, 25).await;
@@ -506,7 +506,7 @@ async fn fair_dispatch_locked_bucket_does_not_block_other_candidates(pool: PgPoo
     locked.rollback().await.unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn fair_dispatch_bucket_index_is_usable_for_large_backlog(pool: PgPool) {
     let s = seed(pool).await;
     backlog(&s, Some(s.team), 30000, 3600).await;
@@ -540,7 +540,7 @@ async fn fair_dispatch_bucket_index_is_usable_for_large_backlog(pool: PgPool) {
     assert!(!plan.contains("Seq Scan on alert_deliveries"), "{plan}");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn fair_dispatch_concurrent_claimers_never_duplicate_lease(pool: PgPool) {
     let s = seed(pool).await;
     relay(&s, 25).await;

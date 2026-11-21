@@ -1,7 +1,7 @@
 use super::*;
 use sqlx::PgPool;
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn lifetime_cutoffs_and_policy_failures(pool: PgPool) {
     let d = destination(&pool).await;
     let s = Store::new(pool.clone());
@@ -49,7 +49,7 @@ async fn lifetime_cutoffs_and_policy_failures(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn tls_and_connection_close_have_distinct_terminal_policy(pool: PgPool) {
     for (tls, expected) in [(false, Failure::Connection), (true, Failure::Tls)] {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -91,7 +91,7 @@ async fn tls_and_connection_close_have_distinct_terminal_policy(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn dispatch_is_bounded_before_claiming(pool: PgPool) {
     let d = destination(&pool).await;
     let s = Store::new(pool.clone());
@@ -142,7 +142,7 @@ async fn state(pool: &PgPool, id: Uuid) -> (String, i32, Option<String>) {
         .unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn concurrent_claimers_and_stale_completion(pool: PgPool) {
     let d = destination(&pool).await;
     let id = queue(&pool, d, false).await;
@@ -174,7 +174,7 @@ async fn concurrent_claimers_and_stale_completion(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn retry_backoffs_single_tests_and_terminal_audits(pool: PgPool) {
     let d = destination(&pool).await;
     let s = Store::new(pool.clone());
@@ -222,7 +222,7 @@ async fn retry_backoffs_single_tests_and_terminal_audits(pool: PgPool) {
     assert_eq!(audits, ["alert_webhook.exhausted", "alert_webhook.failed"]);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn late_generation_disabled_deleted_and_scrubbed_refused(pool: PgPool) {
     let d = destination(&pool).await;
     let s = Store::new(pool.clone());
@@ -263,7 +263,7 @@ async fn late_generation_disabled_deleted_and_scrubbed_refused(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn rule_notification_revocation_blocks_initial_claim_and_retry(pool: PgPool) {
     use axum::{Router, routing::post};
     use std::sync::{
@@ -348,7 +348,7 @@ async fn rule_notification_revocation_blocks_initial_claim_and_retry(pool: PgPoo
     server.abort();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn claim_share_serializes_management_without_blocking_enqueue(pool: PgPool) {
     let d = destination(&pool).await;
     let id = queue(&pool, d, false).await;
@@ -402,7 +402,7 @@ async fn claim_share_serializes_management_without_blocking_enqueue(pool: PgPool
     complete(&s, &c, Ok(())).await.unwrap();
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn claimed_http_path_signatures_retry_redirect_and_unbounded_body(pool: PgPool) {
     use axum::{
         Router, body::Bytes, extract::State, http::HeaderMap, response::IntoResponse, routing::post,

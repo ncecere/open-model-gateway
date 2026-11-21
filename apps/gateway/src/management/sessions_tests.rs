@@ -59,7 +59,7 @@ async fn audits(pool: &PgPool, action: &str) -> Vec<(Option<Uuid>, Value)> {
     .unwrap()
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_user_lists_only_their_own_live_sessions(pool: PgPool) {
     let f = fixture(&pool).await;
     let here = session(&pool, &f.owner, Some("Firefox on macOS")).await;
@@ -117,7 +117,7 @@ async fn a_user_lists_only_their_own_live_sessions(pool: PgPool) {
     assert!(!body.to_string().contains(&theirs.to_string()));
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn revoking_one_session_is_limited_to_your_own(pool: PgPool) {
     let f = fixture(&pool).await;
     let (here, laptop) = (
@@ -169,7 +169,7 @@ async fn revoking_one_session_is_limited_to_your_own(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn signing_out_other_sessions_keeps_this_one(pool: PgPool) {
     let f = fixture(&pool).await;
     let here = session(&pool, &f.owner, None).await;
@@ -204,7 +204,7 @@ async fn signing_out_other_sessions_keeps_this_one(pool: PgPool) {
     assert!(live(&pool, here).await);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn concurrent_revocations_do_not_conflict(pool: PgPool) {
     let f = fixture(&pool).await;
     let here = session(&pool, &f.owner, None).await;
@@ -246,7 +246,7 @@ async fn concurrent_revocations_do_not_conflict(pool: PgPool) {
     assert!(live(&pool, here).await);
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
+#[dbtest::test]
 async fn a_platform_admin_revokes_a_persons_sessions_and_sees_only_a_count(pool: PgPool) {
     let f = fixture(&pool).await;
     for _ in 0..2 {
