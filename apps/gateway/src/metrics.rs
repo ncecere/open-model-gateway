@@ -729,7 +729,9 @@ mod tests {
         let m = Metrics::new();
         let scrape = m.render(Some(&store)).await;
         assert!(
-            scrape.contains("gateway_alert_delivery_pending_buckets 2"),
+            scrape
+                .lines()
+                .any(|line| line == "gateway_alert_delivery_pending_buckets 2"),
             "{scrape}"
         );
         let age = scrape
