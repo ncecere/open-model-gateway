@@ -86,6 +86,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 
 [dev-dependencies]
+# Tokenize literal SQL for the UUID binding policy.
+regex = "1"
 # Offline OpenAPI 3.1/Draft 2020-12 gates only (#81); no fetchers or schema-generator macros.
 jsonschema = { version = "=0.61.2", default-features = false }
 # Deterministic paused-time coverage of the metrics worker's missed ticks.

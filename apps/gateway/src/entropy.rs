@@ -35,7 +35,9 @@
 //! claim fencing tokens compared in SQL, multipart boundaries and event ids.
 //! A value that must be unguessable to protect anything (a credential, a
 //! token that authorizes on its own, a key or a nonce) is drawn here, never
-//! from a UUID. This is policy, reviewed by hand; nothing enforces it.
+//! from a UUID. The source gate checks direct secret-named bindings; indirect flows require review
+//! (a UUID reaching the name through another binding, a `static`, a branch, closure,
+//! macro body or `format!`, and SQL through an implicit alias, a CTE or a function).
 //!
 //! The scan reads source text. A path assembled at run time is not seen:
 //! `Path::join`, `format!`, slices joined with `join("/")`, text read with
@@ -126,6 +128,8 @@ pub mod seam {
 
 #[cfg(test)]
 mod tests {
+    mod uuid_bindings;
+
     use std::collections::BTreeSet;
 
     use proc_macro2::{Delimiter, Literal, TokenStream, TokenTree};
@@ -433,6 +437,25 @@ mod tests {
         let mut found = BTreeSet::new();
         scan(source.parse().expect("Rust source"), true, &mut found);
         found.into_iter().collect()
+    }
+
+    #[test]
+    fn uuid_secret_bindings_are_reported() {
+        let fixtures = [
+            "fn f() { let session_secret = Uuid::new_v4().simple().to_string(); }",
+            "fn f() { Config { client_nonce: Uuid::now_v7() }; }",
+            "fn f() { let mut pkce_verifier: String = uuid::Uuid::new_v7(ts).to_string(); }",
+            r#"const Q: &str = "UPDATE sessions SET bearer_token=gen_random_uuid()";"#,
+            r#"const Q: &str = "CREATE TABLE t (auth_salt uuid DEFAULT gen_random_uuid())";"#,
+            r#"const Q: &str = "INSERT INTO t(id, signing_key) VALUES ($1, gen_random_uuid())";"#,
+        ];
+        let missed: Vec<_> = fixtures
+            .into_iter()
+            .filter(|source| {
+                uuid_bindings::rust("fixture.rs", &syn::parse_file(source).unwrap()).is_empty()
+            })
+            .collect();
+        assert!(missed.is_empty(), "unreported fixtures: {missed:#?}");
     }
 
     const DRAW: &str = "fn r() -> u8 { rand::random::<u8>() }\n";
@@ -985,11 +1008,14 @@ mod tests {
         let mut files = Vec::new();
         walk(&root, &mut files);
         files.sort();
+        let mut offenders = uuid_bindings::sql_files();
         let mut production: BTreeSet<String> = production_sources()
             .into_iter()
-            .map(|source| source.name)
+            .map(|source| {
+                offenders.extend(uuid_bindings::rust(&source.name, &source.ast));
+                source.name
+            })
             .collect();
-        let mut offenders = Vec::new();
         let mut scanned = 0;
         for path in files {
             let name = path
@@ -1023,7 +1049,7 @@ mod tests {
         );
         assert!(
             offenders.is_empty(),
-            "random number generators named outside entropy.rs (code, macros, attribute strings or doc comments): {offenders:#?}"
+            "entropy source policy violations: {offenders:#?}"
         );
     }
 }

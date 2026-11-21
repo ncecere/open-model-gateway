@@ -2,24 +2,23 @@
 
 A time-boxed experiment: a small TLA+ model of admission, settlement, cancellation, expired-lease
 reconciliation, operator evidence, failover, replica crashes, message loss and lease fencing.
-TLC checks the **model**; the comparison between model and code was done **by reading** and
-nothing mechanical ties the two together. Nothing here is wired into CI, `package.json` or the
-release gates. It describes the code at commit `1ec1bb23a6` (main after #633).
-
-Citations use symbol anchors (a function name or a quoted SQL fragment); a trailing `~N` is an
-approximate line at that commit, only a hint.
+TLC checks the **model**. The original comparison with the implementation was by inspection at
+`1ec1bb23a6`. The transition table and discussion below link current implementation guards by
+exact file and line. Use a single-line inline Markdown link for each source citation, with literal text from the cited line as its code label. Run `npm run test:rules`
+to verify the citations after moving or changing code. The approximate lines in section 5 refer to the original experiment commit.
 
 ```sh
 spec/formal/check.sh            # everything (about 9 minutes); or: safety wide live lease diag mutations assumptions witnesses
 TLA_WORK=/path spec/formal/check.sh safety   # where the jar and TLC state live (default ~/.cache/omg-formal)
 ```
 
-Needs `docker`, `curl` and `timeout`. TLC runs in `eclipse-temurin@sha256:18bb4a91...` (a JRE) with
+Needs `docker`, `curl` and `timeout`. TLC runs in
+`eclipse-temurin@sha256:18bb4a91a3dea3f03ee31d3755af34dfb40f904fc77ab56cdc2f092e32fff9c2` with
 `--network none`, `-m 3g`, `--pids-limit`, `--read-only`, `--cap-drop ALL`,
-`no-new-privileges`, a wall-clock `timeout` (`TLC_TIMEOUT`, default 20 minutes per run) and a
-read-only copy of the specs; only `$TLA_WORK/state` is writable. `TLA_WORK` must be an absolute
-path outside the repository without `:`. `tla2tools.jar` v1.7.4 (the latest stable release;
-v1.8.0 is a pre-release) is downloaded once through `.github/scripts/fetch-verified.sh` with
+`no-new-privileges`, a wall-clock `timeout` (`TLC_TIMEOUT`, default 20 minutes per run) and
+read-only mounts for specs and tools. TLC writes its state under `$TLA_WORK/state` and has a
+bounded writable `/tmp`. `TLA_WORK` must be an absolute path outside the repository without `:`.
+`tla2tools.jar` v1.7.4 is downloaded once through `.github/scripts/fetch-verified.sh` with
 SHA-256 `936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88`. That SHA-256 is
 **trust on first use**: the release publishes only a SHA-1, `bee4a54f3ee3d4afc347c3240ec2d9e93b075104`,
 which matches. The jar is never committed.
@@ -33,46 +32,50 @@ a `Mut` switch or a different invariant; `check.sh` generates their configs.
 
 One execution row (`inference_executions.state`: `started`, then `succeeded`/`failed`/`cancelled`)
 and one reservation row (`governance_reservations.state`: `pending`, `unknown`, `settled`) exist per
-upstream attempt (1:1 through the foreign key), with append-only ledger rows `hold`, `settlement`,
-`unknown`, `reconciliation` (`monetary_ledger_execution_kind_key`, `UNIQUE(execution_id,kind,admitted_at)`,
-0030). What a reservation contributes to `budget_totals` (0015, trigger-maintained): its hold while
-`pending` or `unknown`, its actual cost once `settled`.
+upstream attempt (reservation foreign key [`REFERENCES inference_executions(workspace_id,api_key_id,deployment_id,id,started_at)`](../../apps/gateway/enterprise_migrations/0030_partition_history.sql#L549)), with append-only ledger rows `hold`, `settlement`,
+`unknown`, `reconciliation` (`monetary_ledger_execution_kind_key`, [`UNIQUE(execution_id,kind,admitted_at)`](../../apps/gateway/enterprise_migrations/0030_partition_history.sql#L613),
+0030). The current budget totals trigger records the actual cost for settled rows
+([`WHEN r.state='settled' THEN coalesce(r.actual_microusd,0)`](../../apps/gateway/enterprise_migrations/0034_history_parent_checks.sql#L162))
+and the held amount for pending or unknown rows ([`ELSE coalesce(r.held_microusd,0)`](../../apps/gateway/enterprise_migrations/0034_history_parent_checks.sql#L163)).
 
 | Transition | Writer | Guard that makes it safe |
 |---|---|---|
-| (none) -> `pending`, execution `started`, ledger `hold` | `admit_unobserved`, the `WITH e AS (INSERT INTO inference_executions ...)` statement (`governance.rs` ~462); batch/line variants in `governance/batch.rs` | Shared catalog and authority locks, then the totals/counter rows (`authorize`, `lock_rows`); a failover is a new admission with a new execution id (`Engine::attempt`, `Uuid::now_v7()` for attempt > 0) |
-| `pending` -> `settled` (usage complete; or a free pre-processing rejection on a free price) / -> `unknown` (anything else, incl. cancelled, timeout, a rejection on a priced model, a 429) | `governance::finish` -> `finish_unobserved`, one statement (`settlement.rs` ~621) | Reservation row `FOR UPDATE` (`reservation(.., lock)`), read `r.state != "pending"` under it (~587); in the statement itself `UPDATE inference_executions ... AND state='started'` and the `(1,1,1)` row-count check (~630); ledger UNIQUE |
-| `pending` -> `unknown` (lease expired), execution -> `cancelled` | `reconcile_expired` / `reconcile_batch`, every replica every 5 s (`maintenance.rs` `reconcile_expired_leases`) | `SELECT ... WHERE state='pending' AND lease_expires_at<=clock_timestamp() ... FOR UPDATE SKIP LOCKED`; `UPDATE ... SET state='unknown' ... AND state='pending'`; `ids.len() != claimed.len()`; `UPDATE inference_executions ... AND state='started'` row count; the `state/actual` CHECK (0001) because the UPDATE does not clear `actual`; holds are not touched |
-| `unknown` -> `settled` (operator evidence) | `resolve_usage_once` (`reconcile.rs` ~244) | Admin authority re-checked in the tx; reservation `FOR UPDATE` (scoped) or the installation row (global); read `r.state != "unknown"` and execution terminal; the UPDATE itself has no state predicate |
-| `settled` -> anything | nobody | Every writer above refuses; the database does not (section 4.2, finding 4) |
-| `held` changed | settlement raises with `greatest(held, floor)`; the batch envelope transfer (`admit_line`, `SET held_microusd=held_microusd-$2`) moves hold into a line's own reservation; the **realtime** paths (`governance/realtime.rs`: window growth, and finalization `held = retained + actual`) can also change it | realtime is out of scope (section 2); `HoldNeverReleased` is stated for the request path |
-| lease extended | `accept_job` (`governance/jobs.rs`, video; a batch has its final lease from admission) | `state='pending'`, `greatest(...)` |
+| (none) -> `pending`, execution `started`, ledger `hold` | [`fn admit_unobserved`](../../apps/gateway/src/governance.rs#L282), one statement inserts the execution ([`WITH e AS (INSERT INTO inference_executions`](../../apps/gateway/src/governance.rs#L464)), reservation ([`INSERT INTO governance_reservations`](../../apps/gateway/src/governance.rs#L465)) and ledger hold ([`execution_id,'hold'`](../../apps/gateway/src/governance.rs#L466)); batch and line variants ([`INSERT INTO governance_reservations`](../../apps/gateway/src/governance/batch.rs#L361), [`INSERT INTO governance_reservations`](../../apps/gateway/src/governance/batch.rs#L591)) | Shared catalog and authority locks, then the totals/counter rows ([`authorize(store, &mut tx`](../../apps/gateway/src/governance.rs#L332), [`lock_rows(`](../../apps/gateway/src/governance.rs#L424)); a failover is a new admission with a new execution id (`Engine::attempt`, [`Uuid::now_v7()`](../../apps/gateway/src/inference/attempt.rs#L95) for attempt > 0) |
+| `pending` -> `settled` (usage complete; or a free pre-processing rejection on a free price) / -> `unknown` (anything else, incl. cancelled, timeout, a rejection on a priced model, a 429) | `governance::finish` -> [`fn finish_unobserved`](../../apps/gateway/src/governance/settlement.rs#L562) | Reservation row `FOR UPDATE` ([`WHERE r.execution_id=$1 FOR UPDATE OF r`](../../apps/gateway/src/governance/settlement.rs#L38)), read [`r.state != "pending"`](../../apps/gateway/src/governance/settlement.rs#L623); in the statement itself [`AND state='started' RETURNING 1`](../../apps/gateway/src/governance/settlement.rs#L657) and a row-count check [`(executions, reservations, entries) != (1, 1, 1)`](../../apps/gateway/src/governance/settlement.rs#L666); ledger UNIQUE |
+| `pending` -> `unknown` (lease expired), execution -> `cancelled` | `reconcile_expired` / [`fn reconcile_batch`](../../apps/gateway/src/governance/reconcile.rs#L29), every replica on the [`tokio::time::interval(Duration::from_secs(5))`](../../apps/gateway/src/maintenance.rs#L78) tick ([`reconcile_expired_leases(&store)`](../../apps/gateway/src/maintenance.rs#L87)) | [`WHERE state='pending' AND lease_expires_at<=clock_timestamp() ORDER BY lease_expires_at,execution_id LIMIT $1 FOR UPDATE SKIP LOCKED`](../../apps/gateway/src/governance/reconcile.rs#L33); [`SET state='unknown' WHERE execution_id=ANY($1) AND state='pending'`](../../apps/gateway/src/governance/reconcile.rs#L48); [`ids.len() != claimed.len()`](../../apps/gateway/src/governance/reconcile.rs#L53); [`WHERE id=ANY($1) AND state='started'`](../../apps/gateway/src/governance/reconcile.rs#L57) row count; [`state<>'settled' AND actual_microusd IS NULL`](../../apps/gateway/enterprise_migrations/0083_batch_envelope_resolution.sql#L10) because the UPDATE does not clear `actual`; holds are not touched |
+| `unknown` -> `settled` (operator evidence) | [`fn resolve_usage_once`](../../apps/gateway/src/governance/reconcile.rs#L140) | [`p.role='admin'`](../../apps/gateway/src/governance/reconcile.rs#L183) re-checked in the tx; [`reservation(&mut tx, execution, scoped(store))`](../../apps/gateway/src/governance/reconcile.rs#L177) or the installation row in global mode ([`lock(&mut tx).await?`](../../apps/gateway/src/governance/reconcile.rs#L163)); read [`r.state != "unknown"`](../../apps/gateway/src/governance/reconcile.rs#L230) and require a terminal execution ([`SELECT state<>'started' FROM inference_executions`](../../apps/gateway/src/governance/reconcile.rs#L204)); the UPDATE itself has no state predicate |
+| `settled` -> anything | nobody | Every writer above refuses; the database does not (section 4 assumption 2, finding 4) |
+| `held` changed | settlement raises with [`greatest(held_microusd,$20)`](../../apps/gateway/src/governance/settlement.rs#L658); the batch envelope transfer (`admit_line`, [`SET held_microusd=held_microusd-$2`](../../apps/gateway/src/governance/batch.rs#L605)) moves hold into a line's own reservation; the **realtime** paths (window growth [`SET held_microusd=held_microusd+$2`](../../apps/gateway/src/governance/realtime.rs#L306) and finalization [`r.checked_add(t.actual)`](../../apps/gateway/src/governance/realtime.rs#L598)) can also change it | realtime is out of scope (section 2); `HoldNeverReleased` is stated for the request path |
+| lease extended | [`fn accept_job`](../../apps/gateway/src/governance/jobs.rs#L23) for video (a batch has its final lease from admission) | [`SET lease_expires_at=greatest(lease_expires_at,$2) WHERE execution_id=$1 AND state='pending'`](../../apps/gateway/src/governance/jobs.rs#L47) |
 
-The request thread (`inference/attempt.rs`): `admit`, `call_upstream` under the request deadline,
-then the outcome is settled (`settle_complete`, `track_stream`). `ExecutionGuard::finish`
-sets `finished` and polls the 3 s settlement in the request (`settle_to_completion`,
-`inference/attempt.rs`); a request dropped mid-write hands the unfinished write to a spawned task, so a dropped request does not drop the write;
-`impl Drop for ExecutionGuard` queues a detached cancellation settlement only if `finished` is false. Failover
+The request thread awaits admission, then runs [`call_upstream(`](../../apps/gateway/src/inference/attempt.rs#L138) under the request deadline.
+It settles the outcome ([`settle_complete(`](../../apps/gateway/src/inference/attempt.rs#L169), [`track_stream(`](../../apps/gateway/src/inference/attempt.rs#L172)).
+`ExecutionGuard` marks settlement started ([`self.finished = true`](../../apps/gateway/src/inference/mod.rs#L452)) and calls
+[`fn settle_to_completion`](../../apps/gateway/src/inference/attempt.rs#L569) with
+[`SETTLEMENT_DEADLINE: Duration = Duration::from_secs(3)`](../../apps/gateway/src/inference/mod.rs#L366).
+The pending write uses [`HandOff::new(`](../../apps/gateway/src/inference/attempt.rs#L593), whose drop path spawns the unfinished future ([`runtime.spawn(async move`](../../apps/gateway/src/inference/hand_off.rs#L75)).
+[`impl Drop for ExecutionGuard`](../../apps/gateway/src/inference/mod.rs#L471) queues a detached cancellation settlement only if `finished` is false. Failover
 is decided only in the `Err(error)` arm of `Engine::attempt` (so structurally never after a
-stream was returned), only after the previous attempt's settlement returned `Ok`, and only for
+stream was returned), only after settlement succeeds ([`let failing_over = settled.is_ok()`](../../apps/gateway/src/inference/attempt.rs#L154)), and only for
 `Busy` or (with `allow_ambiguous_failover`) `UpstreamUnavailable`/`Overloaded`
-(`routing::may_failover`). A failed attempt with unknown usage settles `unknown` and keeps its
+([`crate::routing::may_failover(plan, error)`](../../apps/gateway/src/inference/attempt.rs#L157)). A failed attempt with unknown usage settles `unknown` and keeps its
 hold, so a failover leaves two live holds. For a **priced** model a provider rejection (4xx) also
 ends `unknown`: `free_rejection` settles it at zero only for `UpstreamRejected`/`ContextLength`
 with no usage, no stream returned and a pinned price that is entirely free or not applicable
-(`all_free_or_not_applicable`, `billing/v3.rs`).
+([`l.all_free_or_not_applicable()`](../../apps/gateway/src/governance/settlement.rs#L456)).
 
 Three different "leases" exist:
 
 * Reservation lease (`governance_reservations.lease_expires_at`): not a fencing token. It only says
-  when the reconciler may take a `pending` row. `lease = request_timeout + 5 s` (`Engine::admit`)
-  outlives the request deadline (`execute_protocol`).
+  when the reconciler may take a `pending` row. Admission converts [`.request_timeout`](../../apps/gateway/src/inference/attempt.rs#L47)
+  to whole seconds and adds five seconds of grace ([`+ 5,`](../../apps/gateway/src/inference/attempt.rs#L50)).
+  The request deadline uses [`started + self.limits.request_timeout`](../../apps/gateway/src/inference/mod.rs#L176).
 * Work leases (`work_leases`, 0029, `leases.rs`): singleton background jobs. Each job transaction
-  starts with `Fence::check` -> `omg_lease_fence` (epoch = fencing token); the `FOR SHARE` lives in
-  the 0029 SQL (`PERFORM 1 FROM work_leases ... FOR SHARE`) and is held until commit. The money
+  starts with `Fence::check` -> [`SELECT omg_lease_fence($1,$2,$3)`](../../apps/gateway/src/leases.rs#L107) (epoch = fencing token); the `FOR SHARE` lives in
+  the 0029 SQL ([`w.expires_at>clock_timestamp() FOR SHARE`](../../apps/gateway/enterprise_migrations/0029_work_leases.sql#L72)) and is held until commit. The money
   path itself uses none: reconciliation is a `SKIP LOCKED` queue on every replica.
 * A third: the gateway-run batch runner claim (`async_jobs.runner_id` / `runner_epoch` /
-  `runner_lease_until`, `store::claim_gateway`). It was unfenced when this model was written and
+  `runner_lease_until`, [`runner_epoch=runner_epoch+1`](../../apps/gateway/src/jobs/store.rs#L474)). It was unfenced when this model was written and
   is fenced since 0081 (#638): see finding 1.
 
 ## 2. What is modelled, and what is not
@@ -107,15 +110,15 @@ wide runs dominate).
 
 | # | Invariant (AGENTS.md sentence) | TLC name | Code that is meant to guarantee it |
 |---|---|---|---|
-| 1 | "Every actual upstream attempt needs its own durable reservation" | `OwnReservation` | `admit_unobserved` commits before `call_upstream`; new execution id per attempt |
+| 1 | "Every actual upstream attempt needs its own durable reservation" | `OwnReservation` | `admit_unobserved` commits ([`tx.commit().await`](../../apps/gateway/src/governance.rs#L475)) before `call_upstream`; new execution id per attempt |
 | 2 | "Never delete unknown reservations"; a hold is never released before settlement or reconciliation (request path) | `UnknownRetainsHold`, `HoldNeverReleased` (action) | `reconcile_batch` only flips state; the settlement UPDATE keeps or raises `held`; docs/governance.md "Cancellation, reconciliation and retention" |
 | 3 | Settlement exactly once; no un-settling | `SettleOnce`, `LedgerConsistent`, `SettledTerminal` (action) | row lock + the state reads/predicates in section 1; ledger UNIQUE; `finished` flag in `ExecutionGuard` |
-| 4 | "Never treat unknown usage as zero" | `SettledMatchesTruth` | `finish_unobserved` (`let actual = if Succeeded && input/output present ... else if free && !violated ...`), `free_rejection` |
-| 5 | A fenced runner never writes | `NoStaleCommit`, `NoReorder` (`LeaseFence`) | `omg_lease_fence` + `FOR SHARE` (0029 SQL, `Fence::check`); the batch runner had none when this was written; since 0081 it has the claim epoch checked under `FOR KEY SHARE` / `FOR NO KEY UPDATE` of the job row (#638) |
-| + | "Failover ... never after a stream is returned" | `NoFailoverAfterStream` | checks the model's own guard; in the code failover exists only in the `Err` arm of `Engine::attempt` |
-| + | Rows coherent (pending <=> execution started) | `ExecConsistent` | `reconcile_batch` aborts when it is not |
-| + | A pending reservation always leaves `pending` (settled or unknown), under fairness | `Resolves` (liveness) | reconciler on every replica, restart |
-| + | Dropped future still settles or stays unknown | covered by 2, 4 and `Resolves`: the cancel path ends `unknown` (never zero) or stays `pending` until the reconciler; whether upstream work is actually cancelled is **not** modelled | `impl Drop for ExecutionGuard` |
+| 4 | "Never treat unknown usage as zero" | `SettledMatchesTruth` | `finish_unobserved` ([`record.outcome == Outcome::Succeeded && input.is_some() && output.is_some()`](../../apps/gateway/src/governance/settlement.rs#L636)), `free_rejection` |
+| 5 | A fenced runner never writes | `NoStaleCommit`, `NoReorder` (`LeaseFence`) | `omg_lease_fence` + `FOR SHARE` (0029 SQL, `Fence::check`); the batch runner had none when this was written; since 0081 it has the claim epoch checked under [`runner_id=$2 AND runner_epoch=$3 FOR KEY SHARE`](../../apps/gateway/src/jobs/fence.rs#L97) / [`runner_id=$2 AND runner_epoch=$3 FOR NO KEY UPDATE`](../../apps/gateway/src/jobs/fence.rs#L100) of the job row (#638) |
+| + | "Failover ... never after a stream is returned" | `NoFailoverAfterStream` | checks the model's own guard; in the code [`return AttemptEnd::Failover(telemetry)`](../../apps/gateway/src/inference/attempt.rs#L159) exists only in the error arm |
+| + | Rows coherent (pending <=> execution started) | `ExecConsistent` | `reconcile_batch` aborts on [`changed != ids.len() as u64`](../../apps/gateway/src/governance/reconcile.rs#L58) |
+| + | A pending reservation always leaves `pending` (settled or unknown), under fairness | `Resolves` (liveness) | reconciler on every replica ([`crate::governance::reconcile_expired(store, 100)`](../../apps/gateway/src/maintenance.rs#L149)), restart |
+| + | Dropped future still settles or stays unknown | covered by 2, 4 and `Resolves`: the cancel path ends `unknown` (never zero) or stays `pending` until the reconciler; whether upstream work is actually cancelled is **not** modelled | [`self.record(Outcome::Cancelled, None)`](../../apps/gateway/src/inference/mod.rs#L477) in `ExecutionGuard::drop` |
 
 | Config | Result | Distinct states | Depth | Time |
 |---|---|---|---|---|
@@ -171,16 +174,16 @@ leaving `pending`.
 
 Assumptions of the model (some are also properties of the code):
 
-1. **Read-then-write under one lock is atomic.** `resolve_usage_once` (`reconcile.rs` ~244) and
-   the realtime finalization (`realtime.rs` ~619) write the reservation with no `state` predicate
+1. **Read-then-write under one lock is atomic.** Operator reconciliation [`SET state='settled',actual_microusd=$2`](../../apps/gateway/src/governance/reconcile.rs#L244) and
+   the realtime finalization [`SET state=$2,actual_microusd=$3`](../../apps/gateway/src/governance/realtime.rs#L619) write the reservation with no `state` predicate
    in the statement; the guard is the earlier read under `FOR UPDATE` in the same transaction
    (scoped mode) or the installation row (global mode). Settlement has an in-statement guard on the
    execution row (`state='started'`, `(1,1,1)` check), plus its locked read. True today.
 2. **The database does not enforce monotonic reservation state.** The runtime role may `UPDATE`
-   `state` and `held_microusd` (`deploy/staging/runtime-grants.sql`, `GRANT UPDATE(state,actual_microusd,...)`);
-   the only structural guards are the `state/actual` CHECK (0001) and the ledger UNIQUE. No trigger
-   forbids `settled`/`unknown` going backwards or a hold shrinking. Nine statements in five files
-   update the table (`governance/{batch,reconcile,settlement,realtime,jobs}.rs`); each is guarded in code.
+   `state` and `held_microusd` (`deploy/staging/runtime-grants.sql`, [`GRANT UPDATE(state,actual_microusd,`](../../deploy/staging/runtime-grants.sql#L160));
+   the state/actual CHECK and ledger UNIQUE constrain the modelled writes. No general trigger
+   enforces forward-only state transitions. The later explicit free-price and terminal batch
+   envelope resolution paths (0082/0083) are outside the model.
 3. **A1: the lease outlives the request thread.** The model passes without it, so it only decides
    whether a slow attempt ends `settled` or `unknown`. A process stalled between admission and
    dispatch can still send the request after the reconciler took the row (tokio's `timeout` polls
@@ -196,9 +199,10 @@ Assumptions of the model (some are also properties of the code):
 7. **The database clock alone judges lease expiry** (`clock_timestamp()`); there is no replica
    clock in the money path model. The batch/work-lease local trust (A2, `MARGIN`) is modelled only
    in `LeaseFence`; `InTx` does not need it, `Local` and the batch runner do and still fail.
-8. **Execution and reservation rows are 1:1** through the foreign key; `ExecConsistent` assumes
-   every writer moves both together.
-9. **`retry_deadlocks!` re-execution is safe** under the guards: a retried transaction re-reads
+8. **Admission inserts the execution and reservation together** (section 1). The foreign key requires every
+   reservation to reference its execution. The [`PRIMARY KEY(execution_id,admitted_at)`](../../apps/gateway/enterprise_migrations/0030_partition_history.sql#L538)
+   allows at most one reservation for that pair. `ExecConsistent` assumes every writer moves both together.
+9. **Deadlock retry** ([`macro_rules! retry_deadlocks`](../../apps/gateway/src/governance/locks.rs#L284)) **is safe** under the guards: a retried transaction re-reads
    the row state, so a lost deadlock race behaves like a late arrival. Not modelled.
 10. **Replicas only contribute `up`.** `SKIP LOCKED` claims and the lock order are database
     semantics, not checked; the model has one reconciler step that any alive replica may take.
@@ -210,7 +214,7 @@ the comparison was by reading. None of the code findings below is a way to lose 
 money.
 
 1. **The batch runner's lease was not a fencing token (#638): confirmed by reading; low-to-moderate,
-   no money impact. Fixed in 0081; the model was not re-run.** Since 0081 the claim bumps
+   no money impact. Fixed in 0081; the model was not re-run for that fix.** Since 0081 the claim bumps
    `async_jobs.runner_epoch` and every runner write checks `(runner_id, runner_epoch)` inside its own
    transaction while holding the job row `FOR KEY SHARE` (or `FOR NO KEY UPDATE`), with the takeover
    claim `FOR UPDATE SKIP LOCKED`: that is the `InTx` design (check in the write transaction plus the row lock),
@@ -251,7 +255,7 @@ money.
    marked `finished = true` before the write, so a client disconnect while the inline settlement was
    awaited (`settle_complete`, `track_stream`) dropped the write and `Drop` did nothing. A failed or
    timed-out write still leaves `pending`, by design (test
-   `diagnostic_settlement_timeout_is_not_cancellation_or_a_drop_retry` asserts no retry); the rest
+   [`fn diagnostic_settlement_timeout_is_not_cancellation_or_a_drop_retry`](../../apps/gateway/src/inference/tests.rs#L867) asserts no retry); the rest
    of this item describes that case and the original symptom. The reconciler then marks it
    `unknown`; the hold is kept (spend overstated) until an operator resolves it with evidence.
    `MoneyPathDiag` shows it (Receive usage, ClientCancel while `settling`, ExpireLease, Reconcile);
@@ -260,11 +264,11 @@ money.
    that landed but looked failed is the benign counterpart: the row is already `settled` and the
    invariants hold. A cost-accuracy gap, not a safety violation.
 3. **Batch and video envelopes are admitted with a 10-minute lease and extended in a second
-   transaction: confirmed by reading, low. Fixed in #640; the model was not re-run.** Since #640 a
-   batch's job row is written in its admission transaction, with the envelope's final lease (poll
+   transaction: confirmed by reading, low. Fixed in #640; the model was not re-run for that fix.** Since #640 a
+   batch's job row is written in its admission transaction ([`insert_batch(&mut tx, job`](../../apps/gateway/src/governance/batch.rs#L374)), with the envelope's final lease (poll
    deadline plus grace), and a video's lease extension and job row are one transaction. A gateway-run
    batch that an earlier release left with an `unknown` envelope now ends `failed` with
-   `hold_unavailable` instead of every line failing as a provider configuration error. The text
+   [`Some(Stop::HoldUnavailable) => Some("hold_unavailable")`](../../apps/gateway/src/jobs/runner.rs#L575) instead of every line failing as a provider configuration error. The text
    below is the finding as made. `admit_batch` used `ADMISSION_LEASE_SECONDS = 600`
    (`jobs/batch.rs`), then `insert_batch`, then `hold_until` -> `extend_lease`. If the process dies
    or the extension fails (it only logs) the reconciler marks the envelope `unknown` after 10
@@ -279,8 +283,8 @@ money.
 
 ## 6. Limits of the experiment
 
-* Time-boxed. The model is hand-written from reading the code; nothing checks it against the code.
-  A mismatch would show only on review. The anchors above are the only drift guard.
+* Time-boxed. The citation test detects moved or changed source text. Review is still needed to
+  decide whether the cited guard implements the model transition.
 * Finite: one request, at most 3 attempts, 2 replicas, at most 2 crashes. No symmetry reduction.
   State counts of violating runs vary between runs (parallel workers); passing runs are exact.
 * Amounts and pricing are abstract (section 4.6); the model cannot find arithmetic, valuation or
@@ -289,9 +293,9 @@ money.
   lock mechanics are out of scope.
 * No Java on the machine: TLC ran only in the pinned container.
 
-## 7. Recommendation
+## 7. CI decision
 
-**Keep as documentation and as a design-review tool; do not add it to CI now.**
+**Run the citation check in the existing CI rules suite. Keep full TLC runs for design review (#642).**
 
 * Value: it states invariants 1 to 5 precisely, ties each to a guard, shows which layers hold
   `settled` final (several independent ones; no single one is needed in the model), shows the
@@ -301,13 +305,13 @@ money.
   statement of the design and is most useful *before* changing settlement, reconciliation,
   cancellation or lease code.
 * Cost to maintain: two small modules (about 450 and 150 lines). Every change to the transitions in
-  section 1 needs a matching spec edit and a re-run (9 minutes). The weak point is drift; a cheap
-  mitigation is a test that checks every cited anchor still appears in its file.
-* To put it in CI, `check.sh` cannot run as is. CI downloads must go through
-  `.github/scripts/fetch-verified.sh` (docs/verification.md, "Run-time downloads go through one
-  script") with the URL and SHA-256 as literals in the workflow, in a read-only job (`contents:
-  read`, no third-party action); the JRE image must be pinned by digest as `check.sh` does and
-  pulled in that job; and the jar's SHA-256 would be trust-on-first-use (the release publishes only
-  a SHA-1, which matches). Run time about 9 minutes, 3 GB, image about 200 MB. Reconsider it if the
-  batch runner gets a fence, if realtime or async-job accounting is modelled, or if the money path
-  changes often enough that a regression could slip past the integration tests.
+  section 1 needs a matching spec edit and a re-run. The citation check needs only Node and the checkout.
+* TLC explores the same state graph after a Rust-only or SQL-only change. The two wide runs
+  alone explored 4,633,130 priced states in 169 seconds and 4,552,502 free-price states in
+  210 seconds on the #642 amd64 run. All 44 checks gave their expected result in 8 min 43 s
+  including setup. The pinned image occupies 116 MB on that host.
+* If the models start changing frequently, a dedicated CI job would need `contents: read`,
+  no write credentials, and a digest-pinned image. Setup needs network access to pull that
+  image and fetch the versioned jar through `.github/scripts/fetch-verified.sh`, with the URL
+  and SHA-256 literals in the workflow. Run TLC itself with `--network none`, read-only inputs
+  and the resource limits in `check.sh`.

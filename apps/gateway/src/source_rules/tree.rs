@@ -1,5 +1,5 @@
 //! The production module tree, read the way the compiler reads it: start at
-//! a crate root, follow every `mod x;` (with `#[path]`), drop what a test
+//! a crate root, follow module-scope `mod x;` declarations (with `#[path]`), drop what a test
 //! build alone compiles. Shared by the source rules in this directory.
 //!
 //! `cfg` predicates are three-valued. `test` is False (the production build
@@ -13,7 +13,7 @@
 //! `#[sqlx::test]` or `#[dbtest::test]` are dropped.
 //!
 //! Fails closed (panics, so the rule tests fail) on what it cannot read: a
-//! `mod x;` it cannot find, `include!`, a `mod` declared inside a macro
+//! block-local file module, a `mod x;` it cannot find, `include!`, a `mod` declared inside a macro
 //! body, and `#[cfg_attr(.., path = ..)]` on a module. Statement-level `cfg`
 //! is not pruned (rare; the rules over-report).
 use std::path::{Path, PathBuf};
@@ -24,6 +24,7 @@ use syn::{Attribute, ImplItem, Item, Meta, TraitItem, ext::IdentExt, visit::Visi
 /// One parsed production file; `path` is relative to `src/`, with `/`.
 pub(super) struct Source {
     pub path: String,
+    pub module: String,
     pub file: syn::File,
     /// Part of the binary crate (`main.rs` and below), not the library: the
     /// library cannot call into it.
@@ -48,15 +49,33 @@ pub(super) fn load_tree(
     bin: bool,
 ) -> Vec<Source> {
     let mut out = Vec::new();
-    load(read, Path::new(entry), bin, &mut out);
+    let entry = Path::new(entry);
+    let module = entry
+        .with_extension("")
+        .to_string_lossy()
+        .replace('/', "::");
+    load(read, entry, module, bin, &mut out);
     out
 }
 
-fn load(read: &dyn Fn(&Path) -> Option<String>, rel: &Path, bin: bool, out: &mut Vec<Source>) {
+fn load(
+    read: &dyn Fn(&Path) -> Option<String>,
+    rel: &Path,
+    module: String,
+    bin: bool,
+    out: &mut Vec<Source>,
+) {
     let text = read(rel).unwrap_or_else(|| panic!("{}: cannot read", rel.display()));
     let mut file = syn::parse_file(&text).unwrap_or_else(|e| panic!("{}: {e}", rel.display()));
+    if cfg_excludes(&file.attrs) {
+        return;
+    }
     prune(&mut file.items);
-    Unreadable { from: rel }.visit_file(&file);
+    Unreadable {
+        from: rel,
+        in_block: false,
+    }
+    .visit_file(&file);
     let name = rel.file_name().and_then(|n| n.to_str()).unwrap_or_default();
     let parent = rel.parent().unwrap_or(Path::new(""));
     let children = if matches!(name, "lib.rs" | "main.rs" | "mod.rs") {
@@ -65,23 +84,77 @@ fn load(read: &dyn Fn(&Path) -> Option<String>, rel: &Path, bin: bool, out: &mut
         parent.join(rel.file_stem().unwrap_or_default())
     };
     let mut files = Vec::new();
-    declared(&file.items, parent, &children, read, rel, &mut files);
+    declared(
+        &file.items,
+        parent,
+        &children,
+        &module,
+        read,
+        rel,
+        &mut files,
+    );
     out.push(Source {
         path: rel.to_string_lossy().replace('\\', "/"),
+        module,
         file,
         bin,
     });
-    for child in files {
-        load(read, &child, bin, out);
+    for (child, module) in files {
+        load(read, &child, module, bin, out);
     }
 }
 
 /// Constructs that add code the scan would not read.
 struct Unreadable<'a> {
     from: &'a Path,
+    in_block: bool,
 }
 
 impl<'ast> Visit<'ast> for Unreadable<'_> {
+    fn visit_block(&mut self, block: &'ast syn::Block) {
+        // File resolution only walks file and inline-module item lists.
+        // Keep the block context through inline modules and nested items.
+        syn::visit::visit_block(
+            &mut Self {
+                from: self.from,
+                in_block: true,
+            },
+            block,
+        );
+    }
+
+    fn visit_item(&mut self, item: &'ast Item) {
+        // prune() has already handled module-scope items. Within a block,
+        // only a built-in cfg predicate can establish this item is absent.
+        if !self.in_block || !cfg_excludes(item_attrs(item)) {
+            syn::visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_variant(&mut self, variant: &'ast syn::Variant) {
+        if !cfg_excludes(&variant.attrs) {
+            syn::visit::visit_variant(self, variant);
+        }
+    }
+
+    fn visit_field(&mut self, field: &'ast syn::Field) {
+        if !cfg_excludes(&field.attrs) {
+            syn::visit::visit_field(self, field);
+        }
+    }
+
+    fn visit_impl_item(&mut self, item: &'ast ImplItem) {
+        if !self.in_block || !cfg_excludes(impl_item_attrs(item)) {
+            syn::visit::visit_impl_item(self, item);
+        }
+    }
+
+    fn visit_trait_item(&mut self, item: &'ast TraitItem) {
+        if !self.in_block || !cfg_excludes(trait_item_attrs(item)) {
+            syn::visit::visit_trait_item(self, item);
+        }
+    }
+
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
         if mac
             .path
@@ -115,6 +188,13 @@ impl<'ast> Visit<'ast> for Unreadable<'_> {
     }
 
     fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+        if self.in_block && module.content.is_none() {
+            panic!(
+                "{}: block-local file module `{}` is unsupported by the source rules",
+                self.from.display(),
+                module.ident
+            );
+        }
         for attr in &module.attrs {
             if attr.path().is_ident("cfg_attr")
                 && let Meta::List(list) = &attr.meta
@@ -138,18 +218,21 @@ fn declared(
     items: &[Item],
     base: &Path,
     dir: &Path,
+    parent_module: &str,
     read: &dyn Fn(&Path) -> Option<String>,
     from: &Path,
-    out: &mut Vec<PathBuf>,
+    out: &mut Vec<(PathBuf, String)>,
 ) {
     for item in items {
         let Item::Mod(module) = item else { continue };
         let ident = module.ident.unraw().to_string();
+        let module_path = format!("{parent_module}::{ident}");
         if let Some((_, inner)) = &module.content {
             declared(
                 inner,
                 &base.join(&ident),
                 &dir.join(&ident),
+                &module_path,
                 read,
                 from,
                 out,
@@ -177,7 +260,7 @@ fn declared(
             .find(|candidate| read(candidate).is_some())
         };
         match found {
-            Some(path) if read(&path).is_some() => out.push(path),
+            Some(path) if read(&path).is_some() => out.push((path, module_path)),
             _ => panic!(
                 "{}: cannot resolve `mod {ident};` (the source rules fail closed)",
                 from.display()
@@ -232,7 +315,20 @@ fn cfg_holds(meta: &Meta) -> Tri {
     }
 }
 
-fn kept(attrs: &[Attribute]) -> bool {
+fn cfg_excludes(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("cfg")
+            && attr
+                .parse_args::<Meta>()
+                .is_ok_and(|meta| cfg_holds(&meta) == Tri::False)
+    })
+}
+
+pub(super) fn possible_in_production(predicate: &Meta) -> bool {
+    cfg_holds(predicate) != Tri::False
+}
+
+pub(super) fn kept(attrs: &[Attribute]) -> bool {
     attrs.iter().all(|attr| {
         let last = attr
             .path()
@@ -242,7 +338,7 @@ fn kept(attrs: &[Attribute]) -> bool {
         match (&attr.meta, last.as_deref()) {
             (Meta::List(list), Some("cfg")) => list
                 .parse_args::<Meta>()
-                .map(|m| cfg_holds(&m) != Tri::False)
+                .map(|m| possible_in_production(&m))
                 .unwrap_or(true),
             (_, Some("test")) => false,
             _ => true,
@@ -250,7 +346,7 @@ fn kept(attrs: &[Attribute]) -> bool {
     })
 }
 
-fn item_attrs(item: &Item) -> &[Attribute] {
+pub(super) fn item_attrs(item: &Item) -> &[Attribute] {
     match item {
         Item::Const(i) => &i.attrs,
         Item::Enum(i) => &i.attrs,
@@ -271,6 +367,26 @@ fn item_attrs(item: &Item) -> &[Attribute] {
     }
 }
 
+fn impl_item_attrs(item: &ImplItem) -> &[Attribute] {
+    match item {
+        ImplItem::Const(c) => &c.attrs,
+        ImplItem::Fn(f) => &f.attrs,
+        ImplItem::Type(t) => &t.attrs,
+        ImplItem::Macro(m) => &m.attrs,
+        _ => &[],
+    }
+}
+
+fn trait_item_attrs(item: &TraitItem) -> &[Attribute] {
+    match item {
+        TraitItem::Const(c) => &c.attrs,
+        TraitItem::Fn(f) => &f.attrs,
+        TraitItem::Type(t) => &t.attrs,
+        TraitItem::Macro(m) => &m.attrs,
+        _ => &[],
+    }
+}
+
 fn prune(items: &mut Vec<Item>) {
     items.retain(|item| kept(item_attrs(item)));
     for item in items.iter_mut() {
@@ -280,24 +396,8 @@ fn prune(items: &mut Vec<Item>) {
                     prune(inner);
                 }
             }
-            Item::Impl(imp) => imp.items.retain(|i| {
-                kept(match i {
-                    ImplItem::Const(c) => &c.attrs,
-                    ImplItem::Fn(f) => &f.attrs,
-                    ImplItem::Type(t) => &t.attrs,
-                    ImplItem::Macro(m) => &m.attrs,
-                    _ => &[],
-                })
-            }),
-            Item::Trait(tr) => tr.items.retain(|i| {
-                kept(match i {
-                    TraitItem::Const(c) => &c.attrs,
-                    TraitItem::Fn(f) => &f.attrs,
-                    TraitItem::Type(t) => &t.attrs,
-                    TraitItem::Macro(m) => &m.attrs,
-                    _ => &[],
-                })
-            }),
+            Item::Impl(imp) => imp.items.retain(|i| kept(impl_item_attrs(i))),
+            Item::Trait(tr) => tr.items.retain(|i| kept(trait_item_attrs(i))),
             _ => {}
         }
     }
@@ -330,28 +430,14 @@ pub(super) fn dropped_spans(file: &syn::File) -> Vec<SpanRange> {
                 }
                 Item::Impl(imp) => {
                     for i in &imp.items {
-                        let attrs = match i {
-                            ImplItem::Const(c) => &c.attrs,
-                            ImplItem::Fn(f) => &f.attrs,
-                            ImplItem::Type(t) => &t.attrs,
-                            ImplItem::Macro(m) => &m.attrs,
-                            _ => continue,
-                        };
-                        if !kept(attrs) {
+                        if !kept(impl_item_attrs(i)) {
                             out.push(span(i));
                         }
                     }
                 }
                 Item::Trait(tr) => {
                     for i in &tr.items {
-                        let attrs = match i {
-                            TraitItem::Const(c) => &c.attrs,
-                            TraitItem::Fn(f) => &f.attrs,
-                            TraitItem::Type(t) => &t.attrs,
-                            TraitItem::Macro(m) => &m.attrs,
-                            _ => continue,
-                        };
-                        if !kept(attrs) {
+                        if !kept(trait_item_attrs(i)) {
                             out.push(span(i));
                         }
                     }
@@ -362,6 +448,46 @@ pub(super) fn dropped_spans(file: &syn::File) -> Vec<SpanRange> {
     }
     let mut out = Vec::new();
     collect(&file.items, &mut out);
+    out
+}
+
+/// Match both interpretations of capital runs: APIkey contains "apikey",
+/// while clientAPIKey contains the adjacent words "api" and "key".
+pub(super) fn word_forms(ident: &str) -> impl Iterator<Item = Vec<String>> {
+    [false, true]
+        .into_iter()
+        .map(move |split_acronyms| words(ident, split_acronyms))
+}
+
+fn words(ident: &str, split_acronyms: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut word = String::new();
+    let mut chars = ident.chars().peekable();
+    let mut previous: Option<char> = None;
+    while let Some(c) = chars.next() {
+        if !c.is_alphanumeric() {
+            if !word.is_empty() {
+                out.push(std::mem::take(&mut word));
+            }
+            previous = None;
+            continue;
+        }
+        let starts_word = previous.is_some_and(|p| {
+            p.is_lowercase()
+                || p.is_ascii_digit()
+                || (split_acronyms
+                    && p.is_uppercase()
+                    && chars.peek().is_some_and(|next| next.is_lowercase()))
+        });
+        if c.is_uppercase() && starts_word {
+            out.push(std::mem::take(&mut word));
+        }
+        previous = Some(c);
+        word.extend(c.to_lowercase());
+    }
+    if !word.is_empty() {
+        out.push(word);
+    }
     out
 }
 
@@ -396,6 +522,8 @@ pub(super) fn type_name(ty: &syn::Type) -> String {
             .map(|s| s.ident.unraw().to_string())
             .unwrap_or_default(),
         syn::Type::Reference(r) => type_name(&r.elem),
+        syn::Type::Paren(p) => type_name(&p.elem),
+        syn::Type::Group(g) => type_name(&g.elem),
         _ => "<type>".to_owned(),
     }
 }
@@ -481,6 +609,7 @@ pub(super) fn parse_fixture(path: &str, source: &str) -> Source {
     let bin = path == "main.rs" || path == "commands.rs" || path.starts_with("commands/");
     Source {
         path: path.to_owned(),
+        module: path.trim_end_matches(".rs").replace('/', "::"),
         file,
         bin,
     }
@@ -540,6 +669,119 @@ mod tests {
                 "a.rs", "a/d.rs", "b/c.rs", "e/f.rs", "e/mod.rs", "lib.rs", "x/y.rs"
             ]
         );
+    }
+
+    fn assert_loader_refuses(
+        load: impl FnOnce() -> Vec<String> + std::panic::UnwindSafe,
+        expected: &str,
+    ) {
+        let refused = std::panic::catch_unwind(load).expect_err("expected loader refusal");
+        let message = refused.downcast_ref::<String>().expect("loader diagnostic");
+        assert!(message.contains(expected), "{message}");
+    }
+
+    #[test]
+    fn block_local_file_modules_fail_closed() {
+        for source in [
+            r#"fn f() { #[path = "other.rs"] mod child; }"#,
+            r#"impl S { fn f() { mod inner { #[path = "other.rs"] mod child; } } }"#,
+            r#"trait T { const C: () = { #[cfg(unix)] #[path = "other.rs"] mod child; }; }"#,
+        ] {
+            assert_loader_refuses(
+                || {
+                    tree(
+                        &[("lib.rs", source), ("other.rs", "const _: () = ();")],
+                        "lib.rs",
+                    )
+                },
+                "lib.rs: block-local file module `child`",
+            );
+        }
+    }
+
+    #[test]
+    fn block_local_inline_and_test_only_modules_are_allowed() {
+        let source = r#"
+            fn f() {
+                mod local { pub fn helper() {} }
+                #[cfg(all(test, unix))] #[path = "absent.rs"] mod child;
+            }
+            #[test] fn fixture() { #[path = "absent.rs"] mod child; }
+            impl S { #[cfg(test)] fn helper() { #[path = "absent.rs"] mod child; } }
+        "#;
+        assert_eq!(tree(&[("lib.rs", source)], "lib.rs"), ["lib.rs"]);
+    }
+
+    #[test]
+    fn local_associated_members_respect_their_cfg() {
+        for member in [
+            "impl S { CFG fn method() { MOD } }",
+            "impl S { CFG const C: () = { MOD }; }",
+            "trait T { CFG fn method() { MOD } }",
+            "trait T { CFG const C: () = { MOD }; }",
+        ] {
+            let local = format!("fn f() {{ struct S; {member} }}")
+                .replace("MOD", r#"#[path = "child.rs"] mod child;"#);
+            let load = |cfg| {
+                tree(
+                    &[("lib.rs", &local.replace("CFG", cfg)), ("child.rs", "")],
+                    "lib.rs",
+                )
+            };
+            assert_eq!(load("#[cfg(all(test, unix))]"), ["lib.rs"], "{member}");
+            for cfg in ["#[cfg(unix)]", "#[cfg(not(test))]"] {
+                assert_loader_refuses(|| load(cfg), "lib.rs: block-local file module `child`");
+            }
+        }
+    }
+
+    #[test]
+    fn variant_and_field_cfg_guard_const_blocks() {
+        for declaration in [
+            "enum E { A, CFG B = { MOD 1 } }",
+            "struct S { CFG a: [u8; { MOD 1 }] }",
+        ] {
+            let load = |cfg: &str| {
+                let source = declaration
+                    .replace("CFG", cfg)
+                    .replace("MOD", r#"#[path = "child.rs"] mod child;"#);
+                tree(&[("lib.rs", &source), ("child.rs", "")], "lib.rs")
+            };
+            assert_eq!(load("#[cfg(test)]"), ["lib.rs"]);
+            assert_loader_refuses(
+                || load("#[cfg(unix)]"),
+                "lib.rs: block-local file module `child`",
+            );
+        }
+    }
+
+    #[test]
+    fn crate_root_respects_its_inner_cfg() {
+        let load = |cfg: &str| {
+            let root = format!("#![cfg({cfg})] mod child;");
+            tree(&[("lib.rs", &root), ("child.rs", "")], "lib.rs")
+        };
+        assert!(load("test").is_empty());
+        assert_eq!(load("unix"), ["child.rs", "lib.rs"]);
+    }
+
+    #[test]
+    fn child_files_respect_their_inner_cfg() {
+        let load = |cfg| {
+            let child = format!(r#"#![cfg({cfg})] fn f() {{ #[path = "other.rs"] mod other; }}"#);
+            tree(
+                &[
+                    ("lib.rs", "mod child;"),
+                    ("child.rs", &child),
+                    ("other.rs", ""),
+                ],
+                "lib.rs",
+            )
+        };
+        assert_eq!(load("all(test, unix)"), ["lib.rs"]);
+        for cfg in ["unix", "not(test)"] {
+            assert_loader_refuses(|| load(cfg), "child.rs: block-local file module `other`");
+        }
     }
 
     #[test]

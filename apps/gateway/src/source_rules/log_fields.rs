@@ -142,30 +142,6 @@ const SPANS: &[&str] = &[
 ];
 const PRINTS: &[&str] = &["print", "println", "eprint", "eprintln", "dbg"];
 
-fn words(ident: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut word = String::new();
-    let mut previous_lower = false;
-    for c in ident.chars() {
-        if !c.is_alphanumeric() {
-            if !word.is_empty() {
-                out.push(std::mem::take(&mut word));
-            }
-            previous_lower = false;
-            continue;
-        }
-        if c.is_uppercase() && previous_lower && !word.is_empty() {
-            out.push(std::mem::take(&mut word));
-        }
-        previous_lower = c.is_lowercase() || c.is_ascii_digit();
-        word.extend(c.to_lowercase());
-    }
-    if !word.is_empty() {
-        out.push(word);
-    }
-    out
-}
-
 /// The text with the contents of double-quoted strings removed.
 fn without_literals(text: &str) -> String {
     let mut out = String::new();
@@ -205,14 +181,19 @@ fn denied_item(item: &str) -> BTreeSet<String> {
 
 /// Denied words in a stretch of token text (a name or an expression).
 fn denied(text: &str) -> BTreeSet<String> {
-    let all = words(text);
-    let mut out: BTreeSet<String> = all
-        .iter()
-        .filter(|w| DENIED_WORDS.contains(&w.as_str()))
-        .cloned()
-        .collect();
-    if all.windows(2).any(|p| p[0] == "api" && p[1] == "key") {
-        out.insert("api_key".to_owned());
+    let mut out = BTreeSet::new();
+    for words in super::tree::word_forms(text) {
+        if words
+            .windows(2)
+            .any(|pair| pair[0] == "api" && pair[1] == "key")
+        {
+            out.insert("api_key".to_owned());
+        }
+        out.extend(
+            words
+                .into_iter()
+                .filter(|word| DENIED_WORDS.contains(&word.as_str())),
+        );
     }
     out
 }
@@ -657,23 +638,7 @@ pub(super) fn denied_problems(entries: &[Entry], exempt: &[(&str, &str)]) -> Vec
 
 /// Differences between the scan and a snapshot, as `+`/`-` lines.
 pub(super) fn diff(entries: &[Entry], snapshot: &str) -> Vec<String> {
-    let have: Vec<String> = entries.iter().map(Entry::line).collect();
-    let want: Vec<String> = snapshot
-        .lines()
-        .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
-        .map(str::to_owned)
-        .collect();
-    let mut remaining = want.clone();
-    let mut out = Vec::new();
-    for line in &have {
-        if let Some(at) = remaining.iter().position(|w| w == line) {
-            remaining.remove(at);
-        } else {
-            out.push(format!("+ {line}"));
-        }
-    }
-    out.extend(remaining.into_iter().map(|l| format!("- {l}")));
-    out
+    super::snapshot_diff(entries.iter().map(Entry::line), snapshot)
 }
 
 #[cfg(test)]
@@ -799,6 +764,7 @@ mod tests {
             }"#,
         );
         let found = denied_problems(&entries, &[]);
+
         for word in [
             "body",
             "messages",
@@ -818,6 +784,23 @@ mod tests {
                 .any(|p| p.contains("execution_id") || p.contains("fixed text")),
             "{found:?}"
         );
+    }
+
+    #[test]
+    fn acronym_spellings_preserve_log_value_refusals() {
+        for (field, word) in [("APIkey", "apikey"), ("clientAPIKey", "api_key")] {
+            let (entries, _) = fixture(
+                "background.rs",
+                &format!(r#"fn f() {{ warn!(detail = %self.{field}, "ok"); }}"#),
+            );
+            let found = denied_problems(&entries, &[]);
+            assert!(
+                found
+                    .iter()
+                    .any(|p| p.ends_with(&format!("names `{word}`"))),
+                "{found:?}"
+            );
+        }
     }
 
     #[test]
