@@ -102,7 +102,11 @@ async fn webhook_metrics_exact_counts_generations_and_lease_visibility(pool: PgP
             "{empty}"
         );
     }
-    assert!(empty.contains("gateway_alert_webhook_oldest_waiting_seconds{} 0"));
+    assert!(
+        empty
+            .lines()
+            .any(|line| line == "gateway_alert_webhook_oldest_waiting_seconds 0")
+    );
     let dest = small_fixture(&pool).await;
     assert_counts(&pool).await;
     // A new collector bypasses only the normal 15s refresh cache, not the SQL.
@@ -133,16 +137,17 @@ async fn webhook_metrics_exact_counts_generations_and_lease_visibility(pool: PgP
         .clone()
         .with_leases(std::sync::Arc::new(crate::leases::Leases::new()));
     let scrape = m.render(Some(&unleased)).await;
-    assert!(
-        !scrape
-            .lines()
-            .any(|line| line.starts_with("gateway_alert_webhook_deliveries{"))
-    );
-    assert!(
-        !scrape
-            .lines()
-            .any(|line| line.starts_with("gateway_alert_webhook_oldest_waiting_seconds{"))
-    );
+    for family in [
+        "gateway_alert_webhook_deliveries",
+        "gateway_alert_webhook_oldest_waiting_seconds",
+    ] {
+        assert!(
+            !scrape
+                .lines()
+                .any(|line| line.split(['{', ' ']).next() == Some(family)),
+            "unleased collector exported {family}"
+        );
+    }
     // Losing the lease also invalidates the refresh cache.
     let scrape = m.render(Some(&store)).await;
     assert!(scrape.contains("gateway_alert_webhook_deliveries{state=\"waiting\"} 2"));
